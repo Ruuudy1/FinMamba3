@@ -1,0 +1,13 @@
+__pycache__/
+.vscode/
+*.lprof
+ckpt/
+runs/
+.ipynb_checkpoints
+wandb*/
+test/
+saved_models/
+backup/
+config.yaml
+checkpoints/
+*.tar.gz
