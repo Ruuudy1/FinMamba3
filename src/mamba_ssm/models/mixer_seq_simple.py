@@ -108,7 +108,7 @@ def _init_weights(
     if rescale_prenorm_residual:
         # Reinitialize selected weights subject to the OpenAI GPT-2 Paper Scheme:
         #   > A modified initialization which accounts for the accumulation on the residual path with model depth. Scale
-        #   > the weights of residual layers at initialization by a factor of 1/√N where N is the # of residual layers.
+        #   > the weights of residual layers at initialization by a factor of 1/sqrt(N) where N is the # of residual layers.
         #   >   -- GPT-2 :: https://openai.com/blog/better-language-models/
         #
         # Reference (Megatron-LM): https://github.com/NVIDIA/Megatron-LM/blob/main/megatron/model/gpt_model.py

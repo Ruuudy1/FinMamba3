@@ -11,3 +11,7 @@ backup/
 config.yaml
 checkpoints/
 *.tar.gz
+data/
+*.zip
+*.tar
+*.tar.zip

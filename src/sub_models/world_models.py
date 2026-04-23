@@ -15,6 +15,7 @@ from pytorch_warmup import LinearWarmup
 from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
+from sub_models.lob_encoder import LOBDecoder, LOBEncoder, LOBReconstructionLoss
 from mamba_ssm import MambaWrapperModel, MambaConfig, InferenceParams, update_graph_cache
 import agents
 from line_profiler import profile
@@ -255,20 +256,36 @@ class WorldModel(nn.Module):
         self.imagine_batch_length = -1
         self.device = device # Maybe it's not needed
         self.model = config.Models.WorldModel.Backbone
-        self.max_grad_norm = config.Models.WorldModel.Max_grad_norm  
-        max_seq_length = max(config.JointTrainAgent.BatchLength, 
-                             config.JointTrainAgent.ImagineContextLength + config.JointTrainAgent.ImagineBatchLength, 
+        self.encoder_type = getattr(config.Models.WorldModel.Encoder, 'Type', 'cnn')
+        self.max_grad_norm = config.Models.WorldModel.Max_grad_norm
+        max_seq_length = max(config.JointTrainAgent.BatchLength,
+                             config.JointTrainAgent.ImagineContextLength + config.JointTrainAgent.ImagineBatchLength,
                              config.JointTrainAgent.RealityContextLength)
-        self.encoder = Encoder(
-            depth=config.Models.WorldModel.Encoder.Depth,
-            mults=config.Models.WorldModel.Encoder.Mults, 
-            norm=config.Models.WorldModel.Encoder.Norm, 
-            act=config.Models.WorldModel.Act, 
-            kernel=config.Models.WorldModel.Encoder.Kernel,
-            padding=config.Models.WorldModel.Encoder.Padding,
-            input_size=config.Models.WorldModel.Encoder.InputSize,
-            dtype=config.Models.WorldModel.dtype, device=device
-        )
+        if self.encoder_type == 'lob':
+            enc_cfg = config.Models.WorldModel.Encoder
+            self.encoder = LOBEncoder(
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+                d_model=enc_cfg.DModel,
+                num_layers=enc_cfg.NumLayers,
+                num_heads=enc_cfg.NumHeads,
+                dim_feedforward=getattr(enc_cfg, 'DimFeedforward', enc_cfg.DModel * 2),
+                dropout=config.Models.WorldModel.Dropout,
+                output_flatten_dim=enc_cfg.OutputFlattenDim,
+                dtype=config.Models.WorldModel.dtype, device=device,
+            )
+        else:
+            self.encoder = Encoder(
+                depth=config.Models.WorldModel.Encoder.Depth,
+                mults=config.Models.WorldModel.Encoder.Mults,
+                norm=config.Models.WorldModel.Encoder.Norm,
+                act=config.Models.WorldModel.Act,
+                kernel=config.Models.WorldModel.Encoder.Kernel,
+                padding=config.Models.WorldModel.Encoder.Padding,
+                input_size=config.Models.WorldModel.Encoder.InputSize,
+                dtype=config.Models.WorldModel.dtype, device=device
+            )
         if self.model == 'Transformer':
             self.sequence_model = StochasticTransformerKVCache(
                 stoch_dim=self.stoch_flattened_dim,
@@ -317,20 +334,32 @@ class WorldModel(nn.Module):
             unimix_ratio=config.Models.WorldModel.Unimix_ratio,
             dtype=config.Models.WorldModel.dtype, device=device
         )      
-        self.image_decoder = Decoder(
-            stoch_dim=self.stoch_flattened_dim,
-            depth=config.Models.WorldModel.Decoder.Depth, 
-            mults=config.Models.WorldModel.Decoder.Mults, 
-            norm=config.Models.WorldModel.Decoder.Norm, 
-            act=config.Models.WorldModel.Act, 
-            kernel=config.Models.WorldModel.Decoder.Kernel, 
-            padding=config.Models.WorldModel.Decoder.Padding, 
-            first_stride=config.Models.WorldModel.Decoder.FirstStrideOne, 
-            last_output_dim=self.encoder.output_dim,
-            input_size=config.Models.WorldModel.Decoder.InputSize,
-            cnn_sigmoid=config.Models.WorldModel.Decoder.FinalLayerSigmoid,
-            dtype=config.Models.WorldModel.dtype, device=device
-        )
+        if self.encoder_type == 'lob':
+            enc_cfg = config.Models.WorldModel.Encoder
+            self.image_decoder = LOBDecoder(
+                stoch_dim=self.stoch_flattened_dim,
+                hidden_dim=getattr(config.Models.WorldModel.Decoder, 'HiddenDim', 512),
+                num_layers=getattr(config.Models.WorldModel.Decoder, 'NumLayers', 3),
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+                dtype=config.Models.WorldModel.dtype, device=device,
+            )
+        else:
+            self.image_decoder = Decoder(
+                stoch_dim=self.stoch_flattened_dim,
+                depth=config.Models.WorldModel.Decoder.Depth,
+                mults=config.Models.WorldModel.Decoder.Mults,
+                norm=config.Models.WorldModel.Decoder.Norm,
+                act=config.Models.WorldModel.Act,
+                kernel=config.Models.WorldModel.Decoder.Kernel,
+                padding=config.Models.WorldModel.Decoder.Padding,
+                first_stride=config.Models.WorldModel.Decoder.FirstStrideOne,
+                last_output_dim=self.encoder.output_dim,
+                input_size=config.Models.WorldModel.Decoder.InputSize,
+                cnn_sigmoid=config.Models.WorldModel.Decoder.FinalLayerSigmoid,
+                dtype=config.Models.WorldModel.dtype, device=device
+            )
         
         self.reward_decoder = RewardHead(
             num_classes=255,
@@ -351,6 +380,15 @@ class WorldModel(nn.Module):
         self.termination_decoder.apply(weight_init)
  
         self.mse_loss_func = MSELoss()
+        if self.encoder_type == 'lob':
+            enc_cfg = config.Models.WorldModel.Encoder
+            self.reconstruction_loss_func = LOBReconstructionLoss(
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+            )
+        else:
+            self.reconstruction_loss_func = self.mse_loss_func
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
@@ -497,10 +535,10 @@ class WorldModel(nn.Module):
             self.dist_feat_buffer[:, i+1:i+2] = last_dist_feat
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
-            if log_video:
+            if log_video and self.encoder_type == 'cnn':
                 obs_hat_list.append(last_obs_hat[::imagine_batch_size//4] * 255)  # uniform sample vec_env
 
-        if log_video:    
+        if log_video and self.encoder_type == 'cnn':
             img_frames = torch.clamp(torch.cat(obs_hat_list, dim=1), 0, 255)
             img_frames = img_frames.permute(1, 2, 3, 0, 4)
             img_frames = img_frames.reshape(imagine_batch_length, 3, 64, 64 * 4).cpu().float().detach().numpy().astype(np.uint8)
@@ -606,7 +644,7 @@ class WorldModel(nn.Module):
             self.termination_hat_buffer = termination_hat_tensor > 0
 
 
-            if log_video:
+            if log_video and self.encoder_type == 'cnn':
                 obs_hat = self.image_decoder(self.sample_buffer[::imagine_batch_size//4]) * 255
                 obs_hat = torch.clamp(obs_hat, 0, 255)
                 img_frames = obs_hat.permute(1, 2, 3, 0, 4)
@@ -642,7 +680,7 @@ class WorldModel(nn.Module):
             termination_hat = self.termination_decoder(dist_feat)
 
             # env loss
-            reconstruction_loss = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size])
+            reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
             reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
             termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
             # dyn-rep loss
@@ -660,7 +698,7 @@ class WorldModel(nn.Module):
         self.lr_scheduler.step()
         self.warmup_scheduler.dampen()
 
-        if (global_step + epoch_step) % self.save_every_steps == 0: # and global_step != 0:
+        if self.encoder_type == 'cnn' and (global_step + epoch_step) % self.save_every_steps == 0: # and global_step != 0:
             sample_obs = torch.clamp(obs[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)
             sample_obs_hat = torch.clamp(obs_hat[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)
 

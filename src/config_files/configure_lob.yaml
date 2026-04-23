@@ -1,0 +1,166 @@
+BasicSettings:
+  # In LOB mode the feature vector (not an image) is the observation.
+  # ImageSize / ImageChannel are kept only so any stray Atari-path code
+  # reading them doesn't crash; they're unused when ObsMode=features.
+  ImageSize: 64
+  ImageChannel: 3
+  ObsMode: features
+  FeatureDim: 94          # K(10) * F_level(8) + F_tick(14)
+  ReplayBufferOnGPU: True
+  Seed: 3710
+  Env_name: LOB
+  Device: cuda:0
+  Use_amp: True
+  Use_cg: False           # disables CUDA-graph caching in the Mamba decoding path
+  Compile: False          # torch.compile adds startup time; disable for short runs
+  SavePath: None
+
+Evaluate:
+  EpisodeNum: 10
+  NumEnvs: 1
+  DuringTraining: False
+  EverySteps: 1000
+
+JointTrainAgent:
+  SampleMaxSteps: 20000
+  BufferMaxLength: 50000
+  WorldModelWarmUp: 64
+  BehaviourWarmUp: 1000000   # effectively disables agent training
+  NumEnvs: 1
+  BatchSize: 32
+  BatchLength: 64
+  ImagineBatchSize: 64
+  ImagineContextLength: 8
+  ImagineBatchLength: 16
+  RealityContextLength: 16
+  TrainDynamicsEverySteps: 1
+  TrainDynamicsEpoch: 1
+  TrainAgentEverySteps: 1
+  FreezeWorldModelAfterSteps: 20000
+  FreezeBehaviourAfterSteps: 0
+  SaveEverySteps: 2000
+  SaveModels: True
+  Tau: 10
+  ImaginationTau: 10
+  Alpha: 1.0
+  Beta: 1.0
+
+Models:
+  WorldModel:
+    dtype: float32
+    Backbone: Mamba2
+    InChannels: 3
+    Act: SiLU
+    CategoricalDim: 32
+    ClassDim: 32
+    HiddenStateDim: 512
+    Optimiser: Laprop
+    LatentDiscreteType: naive
+    Max_grad_norm: 1000
+    Warmup_steps: 500
+    Dropout: 0.1
+    Unimix_ratio: 0.01
+    Weight_decay: 1.0e-4
+    Adam:
+      LearningRate: 1.0e-4
+    Laprop:
+      LearningRate: 4.0e-5
+      Epsilon: 1.0e-20
+    Encoder:
+      Type: lob
+      K: 10
+      FeatureDimLevel: 8
+      FeatureDimTick: 14
+      DModel: 128
+      NumLayers: 2
+      NumHeads: 4
+      DimFeedforward: 256
+      OutputFlattenDim: 1024
+      # CNN fields kept so argparse registration doesn't break; unused here.
+      Depth: 16
+      Mults: [1, 2, 3, 4, 4]
+      Norm: rms
+      Kernel: 5
+      Padding: same
+      InputSize: [3, 64, 64]
+    Decoder:
+      HiddenDim: 512
+      NumLayers: 3
+      # CNN fields kept for arg-registration compatibility; unused.
+      Depth: 16
+      Mults: [1, 2, 3, 4, 4]
+      Norm: rms
+      Kernel: 5
+      Padding: same
+      FirstStrideOne: True
+      InputSize: [3, 64, 64]
+      FinalLayerSigmoid: True
+    Reward:
+      HiddenUnits: 256
+      LayerNum: 1
+    Termination:
+      HiddenUnits: 256
+      LayerNum: 1
+    Transformer:
+      FinalFeatureWidth: 4
+      NumLayers: 2
+      NumHeads: 8
+    Mamba:
+      n_layer: 2
+      d_intermediate: 0
+      ssm_cfg:
+        d_state: 16
+
+  Agent:
+    dtype: float32
+    Policy: AC
+    Unimix_ratio: 0
+    AC:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EntropyCoef: 3.e-4
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.0e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+    PPO:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EpsilonClip: 0.2
+      K_epochs: 3
+      Minibatch: 16384
+      CriticCoef: 1
+      EntropyCoef: 3.e-4
+      KL_threshold: 0.01
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+
+Wandb:
+  Init:
+    Mode: offline
+    Project: Drama_LOB_pretrain
+n: lob

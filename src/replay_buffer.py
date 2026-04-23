@@ -11,18 +11,26 @@ class ReplayBuffer():
     def __init__(self, config, device="cuda") -> None:
         self.store_on_gpu = config.BasicSettings.ReplayBufferOnGPU
         max_length = config.JointTrainAgent.BufferMaxLength
-        obs_shape = (config.BasicSettings.ImageSize, config.BasicSettings.ImageSize, config.BasicSettings.ImageChannel)
+        self.obs_mode = getattr(config.BasicSettings, 'ObsMode', 'image')
+        if self.obs_mode == 'features':
+            obs_shape = (config.BasicSettings.FeatureDim,)
+            obs_np_dtype = np.float32
+            obs_torch_dtype = torch.float32
+        else:
+            obs_shape = (config.BasicSettings.ImageSize, config.BasicSettings.ImageSize, config.BasicSettings.ImageChannel)
+            obs_np_dtype = np.uint8
+            obs_torch_dtype = torch.uint8
         self.device = device
 
         if self.store_on_gpu:
-            self.obs_buffer = torch.empty((max_length, *obs_shape), dtype=torch.uint8, device=device, requires_grad=False)
+            self.obs_buffer = torch.empty((max_length, *obs_shape), dtype=obs_torch_dtype, device=device, requires_grad=False)
             self.action_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
         else:
-            self.obs_buffer = np.empty((max_length, *obs_shape), dtype=np.uint8)
+            self.obs_buffer = np.empty((max_length, *obs_shape), dtype=obs_np_dtype)
             self.action_buffer = np.empty((max_length), dtype=np.float32)
             self.reward_buffer = np.empty((max_length), dtype=np.float32)
             self.termination_buffer = np.empty((max_length), dtype=np.float32)
@@ -73,8 +81,11 @@ class ReplayBuffer():
             reward_list.append(self.reward_buffer[indexes])
             termination_list.append(self.termination_buffer[indexes])
 
-            obs = torch.cat(obs_list, dim=0).float() / 255
-            obs = rearrange(obs, "B T H W C -> B T C H W")
+            if self.obs_mode == 'features':
+                obs = torch.cat(obs_list, dim=0).float()
+            else:
+                obs = torch.cat(obs_list, dim=0).float() / 255
+                obs = rearrange(obs, "B T H W C -> B T C H W")
             action = torch.cat(action_list, dim=0)
             reward = torch.cat(reward_list, dim=0)
             termination = torch.cat(termination_list, dim=0)
@@ -110,8 +121,11 @@ class ReplayBuffer():
                 reward_seq = self.reward_buffer[indexes]
                 termination_seq = self.termination_buffer[indexes]
 
-                obs_seq = torch.from_numpy(obs_seq).float().to(self.device) / 255
-                obs_seq = rearrange(obs_seq, "B T H W C -> B T C H W")
+                if self.obs_mode == 'features':
+                    obs_seq = torch.from_numpy(obs_seq).float().to(self.device)
+                else:
+                    obs_seq = torch.from_numpy(obs_seq).float().to(self.device) / 255
+                    obs_seq = rearrange(obs_seq, "B T H W C -> B T C H W")
                 action_seq = torch.from_numpy(action_seq).to(self.device)
                 reward_seq = torch.from_numpy(reward_seq).to(self.device)
                 termination_seq = torch.from_numpy(termination_seq).to(self.device)

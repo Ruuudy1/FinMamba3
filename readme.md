@@ -1,8 +1,8 @@
-# Drama: Mamba-Enabled Model-Based Reinforcement Learning Is Sample and Parameter Efficient
+# FinDrama: Drama Adapted for Polymarket Limit Order Books
 
-This repository provides an implementation of [Drama](https://openreview.net/forum?id=7XIkRgYjK3&nesting=2&sort=date-desc): a Mamba/Mamba2 powered model based reinforcement learning agent.
+Fork of [Drama](https://openreview.net/forum?id=7XIkRgYjK3) (a Mamba/Mamba-2 model-based RL agent) adapted to Polymarket limit-order-book (LOB) data. The image CNN is swapped for a Transformer over depth-curve tokens, and features are HFT-style aggregate statistics (order-flow imbalance, microprice, depth shares) rather than raw top-K prices.
 
-If you find Drama useful, please reference in your paper:
+Upstream citation:
 ```
 @inproceedings{
     wang2025drama,
@@ -14,87 +14,109 @@ If you find Drama useful, please reference in your paper:
 }
 ```
 
+## Repo layout
 
-## Training and Evaluating Instructions
-### Requirements
+```
+src/
+  config_files/
+    configure.yaml          Atari (unchanged upstream path)
+    configure_lob.yaml      Polymarket LOB pretraining
+  envs/
+    my_atari.py             Atari env wrapper
+    my_memory_maze.py       MemoryMaze env wrapper
+    lob_features.py         Per-tick LOB feature engineering (K=10 depth tokens + 14 aggregate scalars)
+  lob/backtester/           Vendored Polymarket data loader (build_timeline -> TickData)
+  sub_models/
+    world_models.py         WorldModel (CNN or LOB encoder via Encoder.Type flag)
+    lob_encoder.py          Transformer encoder + MLP decoder for LOB features
+    ...
+  replay_buffer.py          ObsMode={image, features}
+  train.py                  Atari training entry point
+  train_lob.py              LOB world-model pretraining entry point
+  eval.py                   Atari evaluation
+data/                       (gitignored) extracted LOB data
+notebooks/
+  lob_pretrain_check.ipynb  Diagnostic plots for LOB pretraining
+drama_colab_A100_Train.ipynb  Atari training on Colab
+drama_colab_A100_Eval.ipynb   Atari evaluation on Colab
+drama_colab_A100_LOB.ipynb    LOB pretraining on Colab
+```
 
-- **Python**: 3.10
-- **Operating System**: Ubuntu 22.04 recommended (for Windows, use Docker)
+## LOB pretraining (primary path)
 
-### Setup Instructions
+### Quick start on Google Colab
 
-1. Create and activate a Conda environment:
+1. Open `drama_colab_A100_LOB.ipynb` in Colab.
+2. Runtime -> Change runtime type -> A100 GPU (requires Colab Pro).
+3. Keep the data zip (`drive-download-20260423T214219Z-3-001.zip`) anywhere under `/content/drive/MyDrive/`. Cell 2 auto-discovers it.
+4. Push your branch to your fork and update `BRANCH` in cell 3.
+5. Run cells 1-9 in order. Checkpoints + imagined rollouts land in `src/saved_models/lob/LOB/<run_id>/`; run cell 10 in a second tab to back them up to Drive every 10 minutes.
+6. Open `notebooks/lob_pretrain_check.ipynb` to render diagnostic plots against a saved checkpoint.
+
+### Data
+
+Polymarket LOB bundle (train + validation tars) expected at `data/train/` and `data/validation/` with the layout
+```
+data/<split>/
+  polymarket.db                 SQLite of market_prices / rtds_prices / market_outcomes
+  polymarket_books/orderbooks.csv
+  binance_lob/{btc,eth,sol}usdt.parquet
+```
+The Colab notebook handles extraction from the shared zip automatically.
+
+### Local training
+
+```
+cd src
+python train_lob.py \
+    --data-train ../data/train \
+    --data-val   ../data/validation \
+    --hours-train 6 --hours-val 1
+```
+
+Feature dimensions are fixed by `src/envs/lob_features.py`:
+- `K_LEVELS = 10` depth-curve tokens per tick
+- `F_LEVEL = 8` per-token features (relative price offset, log size, cumulative depth, vol share, gap, level index, side flag, book staleness)
+- `F_TICK = 14` per-tick scalars (mid, spread, log-spread, imbalance, microprice, weighted-mid displacement, log bid/ask volumes, delta mid/spread/imbalance, top OFI, trade intensity, rolling vol)
+
+Total flat observation dim: `K*F_level + F_tick = 94`.
+
+## Atari path (upstream)
+
+Original Drama behaviour is preserved. With `Encoder.Type: cnn` (the default in `configure.yaml`) the existing CNN encoder, image decoder, and joint-train loop work unchanged.
+
+### Colab evaluation of a pretrained Atari checkpoint
+
+Pretrained Pong weights are available at [drama_checkpoints](https://drive.google.com/drive/folders/1jeoY7pMU8brPPiYDHzu3TOzhXSMdkAJy?usp=sharing). Upload `world_model.pth` and `agent.pth` to `MyDrive/drama_checkpoints/`, then open `drama_colab_A100_Eval.ipynb` on a GPU runtime and run cells 1-8.
+
+### Colab training from scratch
+
+`drama_colab_A100_Train.ipynb` on an A100 runtime. ~16 hours for 100k steps on `ALE/Pong-v5`.
+
+### Local
+
 ```
 conda create --name drama python=3.10
 conda activate drama
-```
-2. Note that because `mamba-ssm` in _requirements.txt_ requires `pytorch`, so one should install `pytorch` before _requirements.txt_.
-```
 pip install torch==2.2.1
 pip install -r requirements.txt
-```
-### Docker Instructions
----
-
-1. Build the Docker image
-```
-docker build -f Dockerfile -t drama .
-```
-2. Run the container with GPU support
-```
-docker run --gpus all -it --rm drama
-```
-The container starts inside `src/` automatically. Run `python train.py` or `python eval.py` directly.
-
-_Note: Running via Docker may result in slower performance. Please refer [here](https://forums.docker.com/t/docker-extremely-slow-on-linux-and-windows/129752), it is recommended to reproduce the result in ubuntu OS._
-
-### Google Colab Instructions
----
-
-Two ready-to-run notebooks are provided. Both require a GPU runtime (T4 or higher).
-
-#### Option A: Evaluate a pretrained checkpoint (recommended for getting started)
-
-Pretrained weights trained on ALE/Pong-v5 for 100k steps are available here:
-[Google Drive - drama_checkpoints](https://drive.google.com/drive/folders/1jeoY7pMU8brPPiYDHzu3TOzhXSMdkAJy?usp=sharing)
-
-1. Download `world_model.pth` and `agent.pth` from the Drive folder above
-2. Upload them to your Google Drive under `My Drive/drama_checkpoints/`
-3. Open `drama_colab_A100_Eval.ipynb` in Google Colab
-4. Select `Runtime -> Change runtime type -> GPU`
-5. Run cells 1-8 in order
-
-The notebook will clone the repository, install all dependencies, apply compatibility patches, restore the checkpoints from your Drive, and run evaluation.
-
-#### Option B: Train from scratch
-
-1. Open `drama_colab_A100_Train.ipynb` in Google Colab
-2. Select `Runtime -> Change runtime type -> A100 GPU` (requires Colab Pro)
-3. Run cells 1-8 in order
-4. Once training starts (cell 8), open a second browser tab connected to the same runtime and run cell 9 to back up checkpoints to Google Drive every 10 minutes
-
-Training takes approximately 16 hours on an A100 for 100k steps on ALE/Pong-v5.
-
-_Note: The install cells compile CUDA extensions for `causal-conv1d` and `mamba-ssm`. Do not skip them and do not change the install order._
-
-### Training Instructions
----
-All source code lives in the `src/` directory. Train with the default hyperparameters (the configuration file can be found at `src/config_files/configure.yaml`):
-```
 cd src
 python train.py
 ```
-If one wants to change the hyperparameter there are two ways:
 
-1. Edit the configuration file `src/config_files/configure.yaml`.
-2. Run `train.py` with parameters corresponding to the config. e.g., `python train.py --Models.WorldModel.Backbone Mamba`.
+Configuration overrides via CLI: `python train.py --Models.WorldModel.Backbone Mamba`. The same `--Group.Key value` pattern works for `train_lob.py`.
 
-### Important parameters:
-Drama supports three different dynamic models: _Transformer_, _Mamba_ and _Mamba-2_. It supports two type of behaviour models: _Actor-critic_ and _PPO_.
+## Docker
 
+```
+docker build -f Dockerfile -t drama .
+docker run --gpus all -it --rm drama
+```
+Container starts inside `src/`. See the upstream Drama issue on Docker performance under WSL2.
 
 ## Code references
-We've referenced several other projects during the development of this code:
-- [Mamba/Mamba-2](https://github.com/state-spaces/mamba)
-- [STORM](https://github.com/weipu-zhang/STORM) 
+
+- [Mamba / Mamba-2](https://github.com/state-spaces/mamba)
+- [STORM](https://github.com/weipu-zhang/STORM)
 - [DreamerV3](https://github.com/danijar/dreamerv3)
+- [DATAHACKS2026 backtester](https://github.com/Ruuudy1/DATAHACKS2026) (vendored data loader under `src/lob/backtester/`)
