@@ -62,7 +62,17 @@ def _build_sequences(
 ) -> tuple[LOBSequence, str]:
     bt = build_timeline(data_dir=data_dir, hours=hours)
     slug = market_slug or pick_longest_market(bt)
-    seq = extract_features(bt.timeline, slug)
+    try:
+        seq = extract_features(bt.timeline, slug)
+    except RuntimeError:
+        # Requested slug has no usable ticks in this split; fall back to the
+        # longest market available in this split.
+        slug = pick_longest_market(bt)
+        logger.warning(
+            f"Market {market_slug!r} has no usable ticks in {data_dir}; "
+            f"falling back to {slug!r}"
+        )
+        seq = extract_features(bt.timeline, slug)
     if fit_stats:
         stats = fit_normalization(seq)
         save_normalization(stats, norm_path)
