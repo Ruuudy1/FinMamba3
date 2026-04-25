@@ -111,7 +111,6 @@ def _imagine_and_log(
         inference_params = InferenceParams(
             max_seqlen=context_len + horizon,
             max_batch_size=1,
-            key_value_dtype=torch.bfloat16 if world_model.use_amp else None,
         )
         ctx_feat = world_model.sequence_model(ctx_latent, action, inference_params)
         inference_params.seqlen_offset += ctx_feat.shape[1]
