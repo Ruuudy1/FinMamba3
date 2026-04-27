@@ -11,6 +11,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import subprocess
+import threading
+import time
 import warnings
 from pathlib import Path
 
@@ -103,7 +106,7 @@ def _imagine_and_log(
         return
     start = 0
     ctx = val_seq.to_flat()[start : start + context_len]
-    obs = torch.from_numpy(ctx).float().to(device).unsqueeze(0)
+    obs = torch.from_numpy(ctx).float().to(device, non_blocking=True).unsqueeze(0)
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
 
     with torch.no_grad():
@@ -160,7 +163,7 @@ def _validation_loss(
     rng = np.random.default_rng(0)
     starts = rng.integers(0, T - batch_length, size=batch_size)
     windows = np.stack([flat[s : s + batch_length] for s in starts], axis=0)
-    obs = torch.from_numpy(windows).float().to(device)
+    obs = torch.from_numpy(windows).float().to(device, non_blocking=True)
     action = torch.zeros((batch_size, batch_length), dtype=torch.float32, device=device)
     with torch.no_grad(), torch.autocast(
         device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
@@ -172,6 +175,19 @@ def _validation_loss(
         obs_hat = world_model.image_decoder(flattened_sample)
         loss = world_model.reconstruction_loss_func(obs_hat, obs)
     return float(loss.item())
+
+
+def _gpu_monitor(interval: int = 30) -> None:
+    while True:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            util, mem_used, mem_total = result.stdout.strip().split(", ")
+            logger.info(f"[GPU] util={util}%  mem={mem_used}/{mem_total} MiB")
+        time.sleep(interval)
 
 
 def main() -> None:
@@ -248,6 +264,9 @@ def main() -> None:
 
     from train import train_world_model_step
 
+    threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
+
+    accum_steps = getattr(config.JointTrainAgent, 'AccumSteps', 1)
     max_steps = config.JointTrainAgent.SampleMaxSteps
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
@@ -263,6 +282,7 @@ def main() -> None:
             logger=wlogger,
             epoch=config.JointTrainAgent.TrainDynamicsEpoch,
             global_step=step,
+            accum_steps=accum_steps,
         )
         if step > 0 and step % val_every == 0:
             vloss = _validation_loss(
@@ -275,9 +295,17 @@ def main() -> None:
         if step > 0 and step % imagine_every == 0:
             _imagine_and_log(world_model, val_seq, wlogger, step)
         if step > 0 and step % save_every == 0:
-            torch.save(world_model.state_dict(), f"{logdir}/ckpt/world_model.pth")
+            torch.save(
+                {"step": step, "world_model": world_model.state_dict(),
+                 "optimizer": world_model.optimizer.state_dict()},
+                f"{logdir}/ckpt/world_model.pth",
+            )
 
-    torch.save(world_model.state_dict(), f"{logdir}/ckpt/world_model.pth")
+    torch.save(
+        {"step": max_steps, "world_model": world_model.state_dict(),
+         "optimizer": world_model.optimizer.state_dict()},
+        f"{logdir}/ckpt/world_model.pth",
+    )
     logger.info(f"final checkpoint written to {logdir}/ckpt/world_model.pth")
     wlogger.close()
 

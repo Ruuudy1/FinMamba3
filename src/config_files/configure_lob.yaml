@@ -27,7 +27,8 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
-  BatchSize: 32
+  BatchSize: 64
+  AccumSteps: 2        # effective batch = BatchSize * AccumSteps = 128
   BatchLength: 64
   ImagineBatchSize: 64
   ImagineContextLength: 8

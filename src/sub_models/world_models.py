@@ -654,7 +654,8 @@ class WorldModel(nn.Module):
 
 
     @profile
-    def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None):
+    def update(self, obs, action, reward, termination, global_step, epoch_step,
+               logger=None, accum_steps: int = 1, is_last_accum: bool = True):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -689,14 +690,15 @@ class WorldModel(nn.Module):
             total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
 
         # gradient descent
-        self.scaler.scale(total_loss).backward()
-        self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self.optimizer.zero_grad(set_to_none=True)
-        self.lr_scheduler.step()
-        self.warmup_scheduler.dampen()
+        self.scaler.scale(total_loss / accum_steps).backward()
+        if is_last_accum:
+            self.scaler.unscale_(self.optimizer)  # for clip grad
+            torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.lr_scheduler.step()
+            self.warmup_scheduler.dampen()
 
         if self.encoder_type == 'cnn' and (global_step + epoch_step) % self.save_every_steps == 0: # and global_step != 0:
             sample_obs = torch.clamp(obs[:3, 0, :]*255, 0, 255).permute(0, 2, 3, 1).cpu().detach().float().numpy().astype(np.uint8)

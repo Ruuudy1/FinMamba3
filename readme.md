@@ -81,6 +81,27 @@ Feature dimensions are fixed by `src/envs/lob_features.py`:
 
 Total flat observation dim: `K*F_level + F_tick = 94`.
 
+### GPU optimization
+
+Key knobs in `configure_lob.yaml`:
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `BatchSize` | 64 | Mini-batch per accumulation step. Increase until OOM. |
+| `AccumSteps` | 2 | Gradient accumulation steps; effective batch = `BatchSize × AccumSteps`. |
+| `Use_amp` | True | bfloat16 mixed precision (always on; GradScaler disabled for bfloat16). |
+| `Compile` | False | Set to `True` on Colab/Linux for 10–20% extra throughput (gated `os.name != 'nt'`). |
+
+GPU utilization is logged every 30 s via `nvidia-smi` (`[GPU] util=…%  mem=…/… MiB`).
+
+**Loading a checkpoint** (new dict format):
+```python
+ckpt = torch.load("saved_models/lob/LOB/<run_id>/ckpt/world_model.pth", weights_only=False)
+world_model.load_state_dict(ckpt["world_model"])
+world_model.optimizer.load_state_dict(ckpt["optimizer"])
+# resume from ckpt["step"]
+```
+
 ## Atari path (upstream)
 
 Original Drama behaviour is preserved. With `Encoder.Type: cnn` (the default in `configure.yaml`) the existing CNN encoder, image decoder, and joint-train loop work unchanged.

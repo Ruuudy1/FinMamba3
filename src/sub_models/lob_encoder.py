@@ -162,7 +162,7 @@ class LOBReconstructionLoss(nn.Module):
         self.register_buffer("feature_weight", weight, persistent=False)
 
     def forward(self, obs_hat: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
-        w = self.feature_weight.to(obs.device, obs.dtype)
+        w = self.feature_weight.to(dtype=obs.dtype)
         sq = (obs_hat - obs) ** 2 * w
         loss = reduce(sq, "B L F -> B L", "sum")
         return loss.mean()

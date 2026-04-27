@@ -24,7 +24,7 @@ import ast
 
 
 @profile
-def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, batch_length, logger, epoch, global_step):
+def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, batch_length, logger, epoch, global_step, accum_steps: int = 1):
     epoch_reconstruction_loss_list = []
     epoch_reward_loss_list = []
     epoch_termination_loss_list = []
@@ -34,10 +34,19 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_representation_real_kl_div_list = []
     epoch_total_loss_list = []
     for e in range(epoch):
-        obs, action, reward, termination = replay_buffer.sample(batch_size, batch_length, imagine=False)
-        reconstruction_loss, reward_loss, termination_loss, \
-        dynamics_loss, dynamics_real_kl_div, representation_loss, \
-        representation_real_kl_div, total_loss = world_model.update(obs, action, reward, termination, global_step=global_step, epoch_step=e, logger=logger)
+        accum_losses = [[], [], [], [], [], [], [], []]
+        for a in range(accum_steps):
+            obs, action, reward, termination = replay_buffer.sample(batch_size, batch_length, imagine=False)
+            losses = world_model.update(
+                obs, action, reward, termination,
+                global_step=global_step, epoch_step=e, logger=logger,
+                accum_steps=accum_steps, is_last_accum=(a == accum_steps - 1),
+            )
+            for i, v in enumerate(losses):
+                accum_losses[i].append(v)
+        reconstruction_loss, reward_loss, termination_loss, dynamics_loss, \
+            dynamics_real_kl_div, representation_loss, representation_real_kl_div, total_loss = \
+            [np.mean(vals) for vals in accum_losses]
 
         epoch_reconstruction_loss_list.append(reconstruction_loss)
         epoch_reward_loss_list.append(reward_loss)
