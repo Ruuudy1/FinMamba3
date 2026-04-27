@@ -33,6 +33,51 @@ K_LEVELS = 10
 F_LEVEL = 8
 F_TICK = 14
 FEATURE_DIM_FLAT = K_LEVELS * F_LEVEL + F_TICK
+LEVEL_FEATURE_NAMES = (
+    "rel_price",
+    "log_size",
+    "log_cum_depth",
+    "vol_share",
+    "price_gap",
+    "level_index",
+    "side",
+    "log_staleness",
+)
+TICK_FEATURE_NAMES = (
+    "mid",
+    "spread",
+    "log_spread",
+    "imbalance",
+    "microprice",
+    "weighted_mid_disp",
+    "log_bid_vol",
+    "log_ask_vol",
+    "dmid",
+    "dspread",
+    "dimbalance",
+    "ofi_top",
+    "trade_intensity",
+    "rolling_vol",
+)
+FLAT_FEATURE_NAMES = tuple(
+    f"level{k}.{name}"
+    for k in range(K_LEVELS)
+    for name in LEVEL_FEATURE_NAMES
+) + tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES)
+
+LEVEL_DETERMINISTIC_INDICES = (5, 6)
+DEFAULT_NORM_CLIP = 8.0
+DEFAULT_LEVEL_STD_FLOOR = np.asarray(
+    [1e-4, 5e-2, 5e-2, 2e-2, 1e-4, 1.0, 1.0, 1e-1],
+    dtype=np.float32,
+)
+DEFAULT_TICK_STD_FLOOR = np.asarray(
+    [
+        1e-2, 5e-3, 5e-3, 2e-2, 1e-2, 1e-4, 5e-2,
+        5e-2, 1e-3, 1e-3, 1e-2, 1.0, 1.0, 1e-3,
+    ],
+    dtype=np.float32,
+)
 
 
 @dataclass
@@ -42,6 +87,7 @@ class LOBSequence:
     per_tick: np.ndarray   # (T, F_TICK) float32
     midprice: np.ndarray   # (T,) float32, raw unnormalized mid
     ts_sec: np.ndarray     # (T,) int64
+    yes_outcome: np.ndarray | None = None  # (T,) float32 in {0, 1}, or nan if unknown
 
     def to_flat(self) -> np.ndarray:
         T = self.per_level.shape[0]
@@ -82,9 +128,9 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
         out[k, 2] = math.log1p(max(cum_depth, 0.0))
         out[k, 3] = vol_share
         out[k, 4] = gap
-        out[k, 5] = float(k)
+        out[k, 5] = (2.0 * float(k) / max(K_LEVELS - 1, 1)) - 1.0
         out[k, 6] = float(side)
-        # out[k, 7] filled in by extract_features with book staleness
+        # out[k, 7] filled in by extract_features with log book staleness
     return out
 
 
@@ -92,6 +138,7 @@ def extract_features(
     timeline: list[TickData],
     market_slug: str,
     vol_window: int = 20,
+    yes_outcome: float | None = None,
 ) -> LOBSequence:
     """Per-tick feature tensors for a single market. Skips ticks with no
     2-sided YES book.
@@ -136,8 +183,8 @@ def extract_features(
 
         lvl_tokens = _encode_levels(book, mid)
         book_ts = int(tick.book_timestamps.get(market_slug, tick.ts_sec))
-        staleness = float(tick.ts_sec - book_ts)
-        lvl_tokens[:, 7] = staleness
+        staleness = max(float(tick.ts_sec - book_ts), 0.0)
+        lvl_tokens[:, 7] = math.log1p(staleness)
 
         dmid = (mid - prev_mid) if prev_mid is not None else 0.0
         dspread = (spread - prev_spread) if prev_spread is not None else 0.0
@@ -195,6 +242,11 @@ def extract_features(
         per_tick=np.stack(per_tick_rows, axis=0),
         midprice=np.asarray(mids, dtype=np.float32),
         ts_sec=np.asarray(ts_list, dtype=np.int64),
+        yes_outcome=(
+            np.full(len(ts_list), float(yes_outcome), dtype=np.float32)
+            if yes_outcome is not None
+            else None
+        ),
     )
 
 
@@ -218,6 +270,7 @@ class NormalizationStats:
     per_level_std: np.ndarray
     per_tick_mean: np.ndarray
     per_tick_std: np.ndarray
+    clip_value: float = DEFAULT_NORM_CLIP
 
     def to_json(self) -> dict:
         return {
@@ -225,39 +278,123 @@ class NormalizationStats:
             "per_level_std":  self.per_level_std.tolist(),
             "per_tick_mean":  self.per_tick_mean.tolist(),
             "per_tick_std":   self.per_tick_std.tolist(),
+            "clip_value": self.clip_value,
+            "level_feature_names": list(LEVEL_FEATURE_NAMES),
+            "tick_feature_names": list(TICK_FEATURE_NAMES),
+            "level_std_floor": DEFAULT_LEVEL_STD_FLOOR.tolist(),
+            "tick_std_floor": DEFAULT_TICK_STD_FLOOR.tolist(),
+            "deterministic_level_indices": list(LEVEL_DETERMINISTIC_INDICES),
         }
 
     @classmethod
     def from_json(cls, d: dict) -> "NormalizationStats":
+        per_level_mean = np.asarray(d["per_level_mean"], dtype=np.float32)
+        per_level_std = np.maximum(
+            np.asarray(d["per_level_std"], dtype=np.float32),
+            DEFAULT_LEVEL_STD_FLOOR,
+        )
+        for idx in LEVEL_DETERMINISTIC_INDICES:
+            per_level_mean[idx] = 0.0
+            per_level_std[idx] = 1.0
         return cls(
-            per_level_mean=np.asarray(d["per_level_mean"], dtype=np.float32),
-            per_level_std=np.asarray(d["per_level_std"], dtype=np.float32),
+            per_level_mean=per_level_mean,
+            per_level_std=per_level_std,
             per_tick_mean=np.asarray(d["per_tick_mean"], dtype=np.float32),
-            per_tick_std=np.asarray(d["per_tick_std"], dtype=np.float32),
+            per_tick_std=np.maximum(
+                np.asarray(d["per_tick_std"], dtype=np.float32),
+                DEFAULT_TICK_STD_FLOOR,
+            ),
+            clip_value=float(d.get("clip_value", DEFAULT_NORM_CLIP)),
         )
 
 
-def fit_normalization(seq: LOBSequence, eps: float = 1e-6) -> NormalizationStats:
+def fit_normalization(
+    seq: LOBSequence,
+    eps: float = 1e-6,
+    clip_value: float = DEFAULT_NORM_CLIP,
+) -> NormalizationStats:
     pl = seq.per_level.reshape(-1, F_LEVEL)
     pt = seq.per_tick
+    pl_mean = pl.mean(axis=0).astype(np.float32)
+    pt_mean = pt.mean(axis=0).astype(np.float32)
+    pl_std = np.maximum(pl.std(axis=0), DEFAULT_LEVEL_STD_FLOOR).astype(np.float32)
+    pt_std = np.maximum(pt.std(axis=0), DEFAULT_TICK_STD_FLOOR).astype(np.float32)
+
+    # Level index and side are deterministic token metadata. Keep their
+    # bounded encodings directly instead of turning tiny distribution shifts
+    # into large z-scores.
+    for idx in LEVEL_DETERMINISTIC_INDICES:
+        pl_mean[idx] = 0.0
+        pl_std[idx] = 1.0
+
     return NormalizationStats(
-        per_level_mean=pl.mean(axis=0).astype(np.float32),
-        per_level_std=(pl.std(axis=0) + eps).astype(np.float32),
-        per_tick_mean=pt.mean(axis=0).astype(np.float32),
-        per_tick_std=(pt.std(axis=0) + eps).astype(np.float32),
+        per_level_mean=pl_mean,
+        per_level_std=np.maximum(pl_std, eps).astype(np.float32),
+        per_tick_mean=pt_mean,
+        per_tick_std=np.maximum(pt_std, eps).astype(np.float32),
+        clip_value=float(clip_value),
     )
 
 
 def apply_normalization(seq: LOBSequence, stats: NormalizationStats) -> LOBSequence:
     pl = (seq.per_level - stats.per_level_mean) / stats.per_level_std
     pt = (seq.per_tick - stats.per_tick_mean) / stats.per_tick_std
+    pl = np.clip(pl, -stats.clip_value, stats.clip_value)
+    pt = np.clip(pt, -stats.clip_value, stats.clip_value)
+    if not np.isfinite(pl).all() or not np.isfinite(pt).all():
+        raise ValueError(f"Non-finite normalized features for market {seq.market_slug}")
     return LOBSequence(
         market_slug=seq.market_slug,
         per_level=pl.astype(np.float32),
         per_tick=pt.astype(np.float32),
         midprice=seq.midprice,
         ts_sec=seq.ts_sec,
+        yes_outcome=seq.yes_outcome,
     )
+
+
+def make_aggregate_only(seq: LOBSequence) -> LOBSequence:
+    """Zero depth tokens while preserving tick-level aggregate features."""
+    return LOBSequence(
+        market_slug=seq.market_slug,
+        per_level=np.zeros_like(seq.per_level, dtype=np.float32),
+        per_tick=seq.per_tick.astype(np.float32),
+        midprice=seq.midprice,
+        ts_sec=seq.ts_sec,
+        yes_outcome=seq.yes_outcome,
+    )
+
+
+def normalized_feature_diagnostics(seq: LOBSequence, clip_value: float | None = None) -> dict:
+    flat = seq.to_flat()
+    abs_flat = np.abs(flat)
+    finite = bool(np.isfinite(flat).all())
+    max_abs = float(abs_flat.max()) if flat.size else 0.0
+    feature_max_abs = abs_flat.max(axis=0) if flat.size else np.zeros(FEATURE_DIM_FLAT)
+    top_idx = np.argsort(feature_max_abs)[-5:][::-1]
+    cap = DEFAULT_NORM_CLIP if clip_value is None else float(clip_value)
+    return {
+        "finite": finite,
+        "max_abs": max_abs,
+        "clip_value": cap,
+        "within_clip": bool(finite and max_abs <= cap + 1e-5),
+        "top_features": [
+            (FLAT_FEATURE_NAMES[int(i)], float(feature_max_abs[int(i)]))
+            for i in top_idx
+        ],
+    }
+
+
+def denormalize_flat(flat: np.ndarray, stats: NormalizationStats) -> np.ndarray:
+    arr = np.asarray(flat, dtype=np.float32).copy()
+    level_dim = K_LEVELS * F_LEVEL
+    levels = arr[..., :level_dim].reshape(*arr.shape[:-1], K_LEVELS, F_LEVEL)
+    ticks = arr[..., level_dim:]
+    levels *= stats.per_level_std
+    levels += stats.per_level_mean
+    ticks *= stats.per_tick_std
+    ticks += stats.per_tick_mean
+    return arr
 
 
 def save_normalization(stats: NormalizationStats, path: Path) -> None:
@@ -278,6 +415,7 @@ def _cli(argv: list[str] | None = None) -> None:
     p.add_argument("--market", type=str, default=None)
     p.add_argument("--hours", type=float, default=6.0)
     p.add_argument("--norm-out", type=Path, default=None)
+    p.add_argument("--norm-clip", type=float, default=DEFAULT_NORM_CLIP)
     args = p.parse_args(argv)
 
     logging.basicConfig(level=logging.WARNING)
@@ -296,9 +434,15 @@ def _cli(argv: list[str] | None = None) -> None:
               f"std={seq.per_tick[:, i].std():.4f}")
 
     if args.norm_out:
-        stats = fit_normalization(seq)
+        stats = fit_normalization(seq, clip_value=args.norm_clip)
         save_normalization(stats, args.norm_out)
         print(f"normalization saved to {args.norm_out}")
+        seq_norm = apply_normalization(seq, stats)
+        diag = normalized_feature_diagnostics(seq_norm, stats.clip_value)
+        print(f"normalized max_abs={diag['max_abs']:.4f}, finite={diag['finite']}")
+        print("top normalized feature magnitudes:")
+        for name, value in diag["top_features"]:
+            print(f"  {name}: {value:.4f}")
 
 
 if __name__ == "__main__":

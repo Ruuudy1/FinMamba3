@@ -25,22 +25,28 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 from envs.lob_features import (
+    FLAT_FEATURE_NAMES,
     FEATURE_DIM_FLAT,
+    F_LEVEL,
+    K_LEVELS,
     LOBSequence,
     apply_normalization,
+    denormalize_flat,
     extract_features,
     fit_normalization,
     load_normalization,
+    make_aggregate_only,
+    normalized_feature_diagnostics,
     pick_longest_market,
     save_normalization,
 )
+from config_utils import DotDict, parse_args_and_update_config
 from lob.backtester import build_timeline
 from replay_buffer import ReplayBuffer
-from sub_models.world_models import WorldModel
-from train import DotDict, parse_args_and_update_config
-from utils import WandbLogger, seed_np_torch
+from training_steps import train_world_model_step
 
 logger = logging.getLogger(__name__)
+SRC_DIR = Path(__file__).resolve().parent
 
 
 def _populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
@@ -62,28 +68,47 @@ def _build_sequences(
     hours: float,
     norm_path: Path,
     fit_stats: bool,
-) -> tuple[LOBSequence, str]:
+    norm_clip: float,
+    aggregate_only: bool,
+) -> tuple[LOBSequence, str, object]:
     bt = build_timeline(data_dir=data_dir, hours=hours)
     slug = market_slug or pick_longest_market(bt)
+    settlement = bt.settlements.get(slug)
+    yes_outcome = _settlement_yes_outcome(settlement)
     try:
-        seq = extract_features(bt.timeline, slug)
+        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome)
     except RuntimeError:
         # Requested slug has no usable ticks in this split; fall back to the
         # longest market available in this split.
         slug = pick_longest_market(bt)
+        settlement = bt.settlements.get(slug)
+        yes_outcome = _settlement_yes_outcome(settlement)
         logger.warning(
             f"Market {market_slug!r} has no usable ticks in {data_dir}; "
             f"falling back to {slug!r}"
         )
-        seq = extract_features(bt.timeline, slug)
+        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome)
     if fit_stats:
-        stats = fit_normalization(seq)
+        stats = fit_normalization(seq, clip_value=norm_clip)
         save_normalization(stats, norm_path)
         logger.info(f"normalization fit on {slug}, saved to {norm_path}")
     else:
         stats = load_normalization(norm_path)
     seq_norm = apply_normalization(seq, stats)
-    return seq_norm, slug
+    if aggregate_only:
+        seq_norm = make_aggregate_only(seq_norm)
+    return seq_norm, slug, stats
+
+
+def _settlement_yes_outcome(settlement) -> float | None:
+    if settlement is None:
+        return None
+    outcome = getattr(settlement.outcome, "value", settlement.outcome)
+    if outcome == "YES":
+        return 1.0
+    if outcome == "NO":
+        return 0.0
+    return None
 
 
 def _imagine_and_log(
@@ -148,18 +173,19 @@ def _imagine_and_log(
     np.save(ckpt_dir / f"rollout_step_{global_step}.npy", decoded)
 
 
-def _validation_loss(
+def _validation_metrics(
     world_model: WorldModel,
     val_seq: LOBSequence,
+    stats,
     batch_size: int,
     batch_length: int,
-) -> float:
+) -> tuple[dict[str, float], list[tuple[str, float]]]:
     world_model.eval()
     device = world_model.device
     flat = val_seq.to_flat()
     T = flat.shape[0]
     if T < batch_length + 1:
-        return float("nan")
+        return {"Val/reconstruction_loss": float("nan")}, []
     rng = np.random.default_rng(0)
     starts = rng.integers(0, T - batch_length, size=batch_size)
     windows = np.stack([flat[s : s + batch_length] for s in starts], axis=0)
@@ -173,8 +199,84 @@ def _validation_loss(
         sample = world_model.stright_throught_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
         obs_hat = world_model.image_decoder(flattened_sample)
-        loss = world_model.reconstruction_loss_func(obs_hat, obs)
-    return float(loss.item())
+        reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
+
+        if world_model.model == "Transformer":
+            from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+
+            temporal_mask = get_subsequent_mask_with_batch_length(
+                batch_length, flattened_sample.device
+            )
+            dist_feat = world_model.sequence_model(flattened_sample, action, temporal_mask)
+        else:
+            dist_feat = world_model.sequence_model(flattened_sample, action)
+        prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
+        prior_sample = world_model.stright_throught_gradient(prior_logits, sample_mode="probs")
+        prior_flat = world_model.flatten_sample(prior_sample)
+        next_hat = world_model.image_decoder(prior_flat)
+
+    target_next = obs[:, 1:].detach().float()
+    pred_next = next_hat.detach().float()
+    diff = pred_next - target_next
+    feature_mse = (diff ** 2).mean(dim=(0, 1)).cpu().numpy()
+
+    pred_np = pred_next.cpu().numpy()
+    target_np = target_next.cpu().numpy()
+    prev_np = obs[:, :-1].detach().float().cpu().numpy()
+    pred_raw = denormalize_flat(pred_np, stats)
+    target_raw = denormalize_flat(target_np, stats)
+    prev_raw = denormalize_flat(prev_np, stats)
+
+    level_flat = K_LEVELS * F_LEVEL
+    mid_idx = level_flat + 0
+    spread_idx = level_flat + 1
+    imbalance_idx = level_flat + 3
+
+    true_delta = target_raw[..., mid_idx] - prev_raw[..., mid_idx]
+    pred_delta = pred_raw[..., mid_idx] - prev_raw[..., mid_idx]
+    nonzero = np.abs(true_delta) > 1e-7
+    if nonzero.any():
+        mid_direction_accuracy = float(
+            (np.sign(true_delta[nonzero]) == np.sign(pred_delta[nonzero])).mean()
+        )
+    else:
+        mid_direction_accuracy = float("nan")
+
+    spread_mae = float(np.abs(pred_raw[..., spread_idx] - target_raw[..., spread_idx]).mean())
+    imbalance_mae = float(
+        np.abs(pred_raw[..., imbalance_idx] - target_raw[..., imbalance_idx]).mean()
+    )
+
+    pred_yes = np.clip(pred_raw[..., mid_idx], 1e-6, 1.0 - 1e-6)
+    outcome = val_seq.yes_outcome
+    brier = float("nan")
+    log_loss = float("nan")
+    if outcome is not None and np.isfinite(outcome).any():
+        labels = []
+        for s in starts:
+            labels.append(outcome[s + 1 : s + batch_length])
+        y = np.stack(labels, axis=0).astype(np.float32)
+        mask = np.isfinite(y)
+        if mask.any():
+            p = pred_yes[mask]
+            yy = y[mask]
+            brier = float(np.mean((p - yy) ** 2))
+            log_loss = float(-np.mean(yy * np.log(p) + (1.0 - yy) * np.log(1.0 - p)))
+
+    max_abs_norm = float(np.abs(flat).max()) if flat.size else 0.0
+    metrics = {
+        "Val/reconstruction_loss": float(reconstruction_loss.item()),
+        "Val/normalized_next_mse": float(feature_mse.mean()),
+        "Val/max_abs_normalized_feature": max_abs_norm,
+        "Val/mid_direction_accuracy": mid_direction_accuracy,
+        "Val/yes_brier": brier,
+        "Val/yes_log_loss": log_loss,
+        "Val/spread_mae": spread_mae,
+        "Val/imbalance_mae": imbalance_mae,
+    }
+    top_idx = np.argsort(feature_mse)[-5:][::-1]
+    top_features = [(FLAT_FEATURE_NAMES[int(i)], float(feature_mse[int(i)])) for i in top_idx]
+    return metrics, top_features
 
 
 def _gpu_monitor(interval: int = 30) -> None:
@@ -194,26 +296,21 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--config", default="config_files/configure_lob.yaml")
+    pre_parser.add_argument("--config", default=SRC_DIR / "config_files" / "configure_lob.yaml")
     pre_parser.add_argument("--data-train", type=Path,
-                            default=Path(r"C:\Users\ruuud\algoverse\Drama\data\train"))
+                            default=SRC_DIR.parent / "data" / "train")
     pre_parser.add_argument("--data-val", type=Path,
-                            default=Path(r"C:\Users\ruuud\algoverse\Drama\data\validation"))
+                            default=SRC_DIR.parent / "data" / "validation")
     pre_parser.add_argument("--market-slug", default=None)
     pre_parser.add_argument("--hours-train", type=float, default=6.0)
     pre_parser.add_argument("--hours-val", type=float, default=1.0)
     pre_parser.add_argument("--norm-path", type=Path,
-                            default=Path(r"C:\Users\ruuud\algoverse\Drama\data\normalization.json"))
+                            default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     pre_args, remaining = pre_parser.parse_known_args()
-
-    # parse_args_and_update_config reads sys.argv; swap in the remaining args
-    # so --Group.Key overrides still work.
-    import sys as _sys
-    _sys.argv = [_sys.argv[0]] + remaining
 
     with open(pre_args.config, "r") as f:
         config = yaml.safe_load(f)
-    config = parse_args_and_update_config(config)
+    config = parse_args_and_update_config(config, argv=remaining)
     config = DotDict(config)
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -221,24 +318,45 @@ def main() -> None:
     torch.backends.cudnn.benchmark = True
 
     device = torch.device(config.BasicSettings.Device)
+    from utils import WandbLogger, seed_np_torch
+
     seed_np_torch(seed=config.BasicSettings.Seed)
 
     logger.info(f"building train features from {pre_args.data_train}")
-    train_seq, slug = _build_sequences(
+    norm_clip = getattr(config.BasicSettings, "NormClip", 8.0)
+    aggregate_only = getattr(config.Models.WorldModel.Encoder, "AggregateOnly", False)
+    train_seq, slug, stats = _build_sequences(
         pre_args.data_train,
         pre_args.market_slug,
         pre_args.hours_train,
         pre_args.norm_path,
         fit_stats=True,
+        norm_clip=norm_clip,
+        aggregate_only=aggregate_only,
     )
     logger.info(f"building val features from {pre_args.data_val}")
-    val_seq, _ = _build_sequences(
+    val_seq, _, _ = _build_sequences(
         pre_args.data_val,
         slug,
         pre_args.hours_val,
         pre_args.norm_path,
         fit_stats=False,
+        norm_clip=norm_clip,
+        aggregate_only=aggregate_only,
     )
+
+    for split_name, seq in (("train", train_seq), ("val", val_seq)):
+        diag = normalized_feature_diagnostics(seq, stats.clip_value)
+        top = ", ".join(f"{name}={value:.3f}" for name, value in diag["top_features"])
+        logger.info(
+            f"{split_name} normalized max_abs={diag['max_abs']:.3f}, "
+            f"finite={diag['finite']}, top=[{top}]"
+        )
+        if not diag["within_clip"]:
+            raise RuntimeError(
+                f"{split_name} normalized features exceed clip "
+                f"{diag['clip_value']}: max_abs={diag['max_abs']}"
+            )
 
     assert train_seq.to_flat().shape[1] == FEATURE_DIM_FLAT
     assert train_seq.to_flat().shape[1] == config.BasicSettings.FeatureDim, (
@@ -247,6 +365,8 @@ def main() -> None:
     )
 
     action_dim = 1
+    from sub_models.world_models import WorldModel
+
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
@@ -261,8 +381,6 @@ def main() -> None:
     )
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{wlogger.run.id}"
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
-
-    from train import train_world_model_step
 
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
 
@@ -285,13 +403,25 @@ def main() -> None:
             accum_steps=accum_steps,
         )
         if step > 0 and step % val_every == 0:
-            vloss = _validation_loss(
-                world_model, val_seq,
+            val_metrics, top_mse = _validation_metrics(
+                world_model, val_seq, stats,
                 config.JointTrainAgent.BatchSize,
                 config.JointTrainAgent.BatchLength,
             )
-            wlogger.log("Val/reconstruction_loss", vloss, global_step=step)
-            pbar.set_postfix(val_loss=f"{vloss:.4f}")
+            for key, value in val_metrics.items():
+                if np.isfinite(value):
+                    wlogger.log(key, value, global_step=step)
+            for name, value in top_mse:
+                safe_name = name.replace(".", "/")
+                wlogger.log(f"Val/feature_mse/{safe_name}", value, global_step=step)
+            if top_mse:
+                logger.info(
+                    "validation top feature MSE: "
+                    + ", ".join(f"{name}={value:.4g}" for name, value in top_mse)
+                )
+            pbar.set_postfix(
+                val_loss=f"{val_metrics.get('Val/reconstruction_loss', float('nan')):.4f}"
+            )
         if step > 0 and step % imagine_every == 0:
             _imagine_and_log(world_model, val_seq, wlogger, step)
         if step > 0 and step % save_every == 0:

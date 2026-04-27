@@ -1,13 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.init as init
 import torch.nn.functional as F
 import torch.distributions as distributions
 from mamba_ssm.ops.triton.layer_norm import RMSNorm
-from einops import rearrange, repeat
-from einops.layers.torch import Rearrange
 import copy
-from torch.cuda.amp import autocast
 import numpy as np
 from sub_models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
@@ -15,7 +11,6 @@ from pytorch_warmup import LinearWarmup
 
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
-from line_profiler import profile
 from tools import layer_init
 
 def percentile(x, percentage):
@@ -24,7 +19,6 @@ def percentile(x, percentage):
     per = torch.kthvalue(flat_x, kth).values
     return per
 
-@profile
 def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=torch.float32):
     # Invert termination to have 0 if the episode ended and 1 otherwise
     inv_termination = (termination * -1) + 1
@@ -166,7 +160,7 @@ class ActorCriticAgent(nn.Module):
         # self.optimizer = AGC(self.parameters(), self.optimizer)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
@@ -218,7 +212,6 @@ class ActorCriticAgent(nn.Module):
     def sample_as_env_action(self, latent, greedy=False):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
-    @profile
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
         '''
         Update policy and value model
@@ -351,8 +344,7 @@ class PPOAgent(nn.Module):
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.PPO.Optimiser}")
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.PPO.Warmup_steps)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
-    @profile
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
     def get_logp_val_entr(self, latent, action, longer_value=True):
         if longer_value:
             logits = self.actor(latent[:, :-1])
@@ -378,7 +370,6 @@ class PPOAgent(nn.Module):
     def sample_as_env_action(self, latent, greedy=False):
             action, _ = self.sample(latent, greedy)
             return action.detach().cpu().squeeze(-1).numpy()    
-    @profile
     def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return):
 
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
@@ -402,7 +393,6 @@ class PPOAgent(nn.Module):
         return actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx 
 
 
-    @profile
     def calc_gae_and_reward_to_go(self, rewards, values, termination):
         # Invert termination to have 0 if the episode ended and 1 otherwise
         inv_termination = (termination * -1) + 1
@@ -450,7 +440,6 @@ class PPOAgent(nn.Module):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
 
 
-    @profile
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):

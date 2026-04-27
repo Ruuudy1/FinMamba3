@@ -1,9 +1,4 @@
 BasicSettings:
-  # In LOB mode the feature vector (not an image) is the observation.
-  # ImageSize / ImageChannel are kept only so any stray Atari-path code
-  # reading them doesn't crash; they're unused when ObsMode=features.
-  ImageSize: 64
-  ImageChannel: 3
   ObsMode: features
   FeatureDim: 94          # K(10) * F_level(8) + F_tick(14)
   ReplayBufferOnGPU: True
@@ -11,6 +6,7 @@ BasicSettings:
   Env_name: LOB
   Device: cuda:0
   Use_amp: True
+  NormClip: 8.0
   Use_cg: False           # disables CUDA-graph caching in the Mamba decoding path
   Compile: False          # torch.compile adds startup time; disable for short runs
   SavePath: None
@@ -77,25 +73,10 @@ Models:
       NumHeads: 4
       DimFeedforward: 256
       OutputFlattenDim: 1024
-      # CNN fields kept so argparse registration doesn't break; unused here.
-      Depth: 16
-      Mults: [1, 2, 3, 4, 4]
-      Norm: rms
-      Kernel: 5
-      Padding: same
-      InputSize: [3, 64, 64]
+      AggregateOnly: False
     Decoder:
       HiddenDim: 512
       NumLayers: 3
-      # CNN fields kept for arg-registration compatibility; unused.
-      Depth: 16
-      Mults: [1, 2, 3, 4, 4]
-      Norm: rms
-      Kernel: 5
-      Padding: same
-      FirstStrideOne: True
-      InputSize: [3, 64, 64]
-      FinalLayerSigmoid: True
     Reward:
       HiddenUnits: 256
       LayerNum: 1
@@ -111,6 +92,14 @@ Models:
       d_intermediate: 0
       ssm_cfg:
         d_state: 16
+    Regime:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+    EpisodicMemory:
+      Enabled: False
+      Capacity: 50000
+      TopK: 4
 
   Agent:
     dtype: float32

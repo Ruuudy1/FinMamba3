@@ -1,6 +1,5 @@
 import numpy as np
 from torch import nn
-from torchtune.modules import RMSNorm
 
 
 def layer_init(layer, std=np.sqrt(2)):
@@ -37,7 +36,7 @@ def weight_init(m):
         m.weight.data.fill_(1.0)
         if hasattr(m.bias, "data"):
             m.bias.data.fill_(0.0)
-    elif isinstance(m, RMSNorm):
+    elif isinstance(m, nn.RMSNorm):
         pass
 
 
@@ -66,7 +65,7 @@ def uniform_weight_init(given_scale):
             m.weight.data.fill_(1.0)
             if hasattr(m.bias, "data"):
                 m.bias.data.fill_(0.0)
-        elif isinstance(m, RMSNorm):
+        elif isinstance(m, nn.RMSNorm):
             pass
 
     return f

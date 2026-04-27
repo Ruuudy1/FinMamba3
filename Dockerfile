@@ -57,7 +57,7 @@ RUN pip install -r requirements.txt
 # Add your code to the container
 COPY . .
 
-# Source code lives in src/; run train.py and eval.py from there
+# Source code lives in src/; run train_lob.py from the repository root or src/.
 WORKDIR /app/src
 
 # Expose ports (if needed, for example for tensorboard)

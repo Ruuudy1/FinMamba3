@@ -34,6 +34,7 @@ class LOBEncoder(nn.Module):
         dim_feedforward: int = 256,
         dropout: float = 0.1,
         output_flatten_dim: int = 1024,
+        aggregate_only: bool = False,
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
@@ -43,6 +44,7 @@ class LOBEncoder(nn.Module):
         self.f_tick = f_tick
         self.d_model = d_model
         self.output_flatten_dim = output_flatten_dim
+        self.aggregate_only = aggregate_only
 
         factory = {"dtype": dtype, "device": device}
 
@@ -83,6 +85,8 @@ class LOBEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         levels, tick = self._split_input(x)
+        if self.aggregate_only:
+            levels = torch.zeros_like(levels)
         B, L = levels.shape[:2]
         tok = self.level_proj(levels) + self.level_pos
         tok = rearrange(tok, "b l k d -> (b l) k d")

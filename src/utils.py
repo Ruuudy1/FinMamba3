@@ -2,8 +2,11 @@ import torch
 import os
 import numpy as np
 import random
-from tensorboardX import SummaryWriter
-import wandb
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 def seed_np_torch(seed=20001118):
@@ -18,27 +21,6 @@ def seed_np_torch(seed=20001118):
     torch.backends.cudnn.benchmark = False
 
 
-class Logger():
-    def __init__(self, path) -> None:
-        self.writer = SummaryWriter(logdir=path, flush_secs=1)
-        self.tag_step = {}
-
-    def log(self, tag, value):
-        if tag not in self.tag_step:
-            self.tag_step[tag] = 0
-        else:
-            self.tag_step[tag] += 1
-        if "video" in tag:
-            self.writer.add_video(tag, value, self.tag_step[tag], fps=15)
-        elif "images" in tag:
-            self.writer.add_images(tag, value, self.tag_step[tag])
-        elif "hist" in tag:
-            self.writer.add_histogram(tag, value, self.tag_step[tag])
-        else:
-            self.writer.add_scalar(tag, value, self.tag_step[tag])
-
-
-
 class WandbLogger():
     def __init__(self, config, project=None, mode='online'):
         """
@@ -51,8 +33,15 @@ class WandbLogger():
         # Initialize a W&B run with the given project and path as the run name
         pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
         run_name = f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
-        self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
-        self.run.name = f"{self.run.name}_{self.run.id}"
+        if wandb is None:
+            self.run = type(
+                "NoOpWandbRun",
+                (),
+                {"id": "no-wandb", "name": run_name, "dir": os.getcwd()},
+            )()
+        else:
+            self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
+            self.run.name = f"{self.run.name}_{self.run.id}"
         self.tag_step = {}
 
 
@@ -65,6 +54,8 @@ class WandbLogger():
             value: The data to be logged. It can be a scalar, image, histogram, or video.
         """
         # Log data based on the type
+        if wandb is None:
+            return
         if "video" in tag:
             # Log video
             wandb.log({tag: wandb.Video(value, fps=1, format='gif')}, step=global_step)
@@ -87,14 +78,16 @@ class WandbLogger():
             update_dict (dict): A dictionary containing scalar parameter information to update in the configuration.
         """
         # Update the configuration using wandb.config.update
-        wandb.config.update(update_dict)
+        if wandb is not None:
+            wandb.config.update(update_dict)
 
     def close(self):
         """
         Finalize and close the W&B run.
         """
         # Finish the run
-        wandb.finish()
+        if wandb is not None:
+            wandb.finish()
 
 
 

@@ -11,7 +11,6 @@ from collections import namedtuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchtune.modules import RMSNorm as _RMSNorm
 from einops import repeat
 
 from mamba_ssm.models.config_mamba import MambaConfig
