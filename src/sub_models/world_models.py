@@ -317,6 +317,10 @@ class WorldModel(nn.Module):
             "cuda",
             enabled=self.use_amp and config.Models.WorldModel.dtype is not torch.bfloat16,
         )
+        # Watch for selective_scan/Mamba3 instability under bf16 autocast for the
+        # first NaNGuardSteps updates. After that we trust the run.
+        self.nan_guard_steps = int(getattr(config.Models.WorldModel, 'NaNGuardSteps', 50))
+        self._nan_skip_count = 0
 
     def condition_dist_feat(self, dist_feat):
         if not self.use_regime:
@@ -560,6 +564,22 @@ class WorldModel(nn.Module):
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
             total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
+
+        # Catch bf16 selective_scan blowups during early training. Skipping the
+        # backward + step here keeps the rest of the run salvageable instead of
+        # propagating NaN parameters everywhere.
+        if global_step < self.nan_guard_steps and not torch.isfinite(total_loss):
+            self._nan_skip_count += 1
+            if self._nan_skip_count >= 5:
+                raise RuntimeError(
+                    f"WorldModel.update produced non-finite loss for "
+                    f"{self._nan_skip_count} consecutive steps under bf16 autocast; "
+                    "consider setting BasicSettings.Use_amp=false to debug."
+                )
+            self.optimizer.zero_grad(set_to_none=True)
+            zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
+            return (zero, zero, zero, zero, zero, zero, zero, zero)
+        self._nan_skip_count = 0
 
         # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()

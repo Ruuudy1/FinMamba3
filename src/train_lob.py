@@ -370,6 +370,33 @@ def main() -> None:
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
 
+    # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows
+    # up before a 6-hour training run instead of after.
+    try:
+        with torch.no_grad():
+            probe_obs = torch.zeros(
+                (1, 4, config.BasicSettings.FeatureDim), device=device, dtype=torch.float32
+            )
+            probe_action = torch.zeros((1, 4), device=device, dtype=torch.float32)
+            with torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
+            ):
+                emb = world_model.encoder(probe_obs)
+                seq = world_model.sequence_model(
+                    torch.zeros(
+                        (1, 4, world_model.stoch_flattened_dim),
+                        device=device,
+                        dtype=emb.dtype,
+                    ),
+                    probe_action,
+                )
+            logger.info(
+                f"dtype probe: encoder->{emb.dtype}, sequence_model->{seq.dtype} "
+                f"(use_amp={world_model.use_amp})"
+            )
+    except Exception as exc:
+        logger.warning(f"dtype probe failed: {exc}")
+
     # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
     # kernels; torch.compile would fight them and risks recompilations every
     # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
