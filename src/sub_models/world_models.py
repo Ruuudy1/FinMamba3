@@ -153,6 +153,7 @@ class WorldModel(nn.Module):
             dropout=config.Models.WorldModel.Dropout,
             output_flatten_dim=enc_cfg.OutputFlattenDim,
             aggregate_only=getattr(enc_cfg, 'AggregateOnly', False),
+            gradient_checkpointing=getattr(enc_cfg, 'GradientCheckpointing', False),
             dtype=config.Models.WorldModel.dtype, device=device,
         )
         if self.model == 'Transformer':

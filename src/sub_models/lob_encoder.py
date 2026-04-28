@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+import torch.utils.checkpoint as checkpoint_utils
 from einops import rearrange, reduce
 
 from envs.lob_features import F_LEVEL, F_TICK, K_LEVELS
@@ -35,6 +36,7 @@ class LOBEncoder(nn.Module):
         dropout: float = 0.1,
         output_flatten_dim: int = 1024,
         aggregate_only: bool = False,
+        gradient_checkpointing: bool = False,
         dtype: torch.dtype | None = None,
         device: torch.device | str | None = None,
     ) -> None:
@@ -45,6 +47,7 @@ class LOBEncoder(nn.Module):
         self.d_model = d_model
         self.output_flatten_dim = output_flatten_dim
         self.aggregate_only = aggregate_only
+        self.gradient_checkpointing = gradient_checkpointing
 
         factory = {"dtype": dtype, "device": device}
 
@@ -96,7 +99,11 @@ class LOBEncoder(nn.Module):
         cls = cls + tick_emb
         seq = torch.cat([cls, tok], dim=1)
 
-        seq = self.transformer(seq)
+        if self.gradient_checkpointing and self.training:
+            for layer in self.transformer.layers:
+                seq = checkpoint_utils.checkpoint(layer, seq, use_reentrant=False)
+        else:
+            seq = self.transformer(seq)
         cls_out = self.norm(seq[:, 0])
         out = self.out_proj(cls_out)
         return rearrange(out, "(b l) d -> b l d", b=B, l=L)

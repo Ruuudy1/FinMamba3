@@ -75,6 +75,7 @@ Models:
       DimFeedforward: 256
       OutputFlattenDim: 1024
       AggregateOnly: False
+      GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
       HiddenDim: 512
       NumLayers: 3
@@ -97,10 +98,14 @@ Models:
         d_state: 16
     Mamba3:
       Enabled: true
-      n_layer: 2
+      n_layer: 4              # 2 was Drama-Atari default; 4 gives the world model real depth
+                              # over the LOB tick stream. Activation checkpointing on the
+                              # encoder is available if VRAM is tight.
       is_mimo: true
       mimo_rank: 4
-      d_state: 128
+      d_state: 128            # Mamba-3 paper (arXiv:2603.15569) shows d_state=64 matches
+                              # Mamba-2 d_state=128 at the same perplexity; 128 is over-
+                              # provisioned but kept until empirical validation.
       headdim: 64
       chunk_size: 16
       is_outproj_norm: false
