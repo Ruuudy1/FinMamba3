@@ -45,7 +45,7 @@ JointTrainAgent:
 Models:
   WorldModel:
     dtype: float32
-    Backbone: Mamba2
+    Backbone: Mamba3
     InChannels: 3
     Act: SiLU
     CategoricalDim: 32
@@ -92,6 +92,16 @@ Models:
       d_intermediate: 0
       ssm_cfg:
         d_state: 16
+    Mamba3:
+      Enabled: true
+      n_layer: 2
+      is_mimo: true
+      mimo_rank: 4
+      d_state: 128
+      headdim: 64
+      chunk_size: 16
+      is_outproj_norm: false
+      rope_fraction: 0.5
     Regime:
       Enabled: False
       NumRegimes: 8

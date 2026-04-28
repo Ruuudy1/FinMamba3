@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mamba_ssm.ops.triton.layer_norm import RMSNorm
 from torch.distributions import OneHotCategorical
 from einops import rearrange, reduce
 from sub_models.laprop import LaProp
@@ -11,11 +10,13 @@ from pytorch_warmup import LinearWarmup
 from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
+from sub_models.fin_mamba import FinMambaSequenceModel
 from sub_models.lob_auxiliary import RegimeConditioner, RegimeHead
 from sub_models.lob_encoder import LOBDecoder, LOBEncoder, LOBReconstructionLoss
-from mamba_ssm import MambaWrapperModel, MambaConfig, InferenceParams, update_graph_cache
 import agents
 from tools import weight_init
+
+RMSNorm = nn.RMSNorm
 
     
 class DistHead(nn.Module):
@@ -165,31 +166,61 @@ class WorldModel(nn.Module):
                 dropout=config.Models.WorldModel.Dropout
             )
         elif self.model == 'Mamba':
-            mamba_config = MambaConfig(
-                d_model=self.hidden_state_dim, 
-                d_intermediate=config.Models.WorldModel.Mamba.d_intermediate,
-                n_layer=config.Models.WorldModel.Mamba.n_layer,
+            self.sequence_model = FinMambaSequenceModel(
                 stoch_dim=self.stoch_flattened_dim,
                 action_dim=action_dim,
+                d_model=self.hidden_state_dim,
+                n_layer=config.Models.WorldModel.Mamba.n_layer,
+                block_type='Mamba',
                 dropout_p=config.Models.WorldModel.Dropout,
                 ssm_cfg={
                     'd_state': config.Models.WorldModel.Mamba.ssm_cfg.d_state,
-                    }
-                )                                
-            self.sequence_model = MambaWrapperModel(mamba_config)
+                },
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
         elif self.model == 'Mamba2':
-            mamba_config = MambaConfig(
-                d_model=self.hidden_state_dim, 
-                d_intermediate=config.Models.WorldModel.Mamba.d_intermediate,
-                n_layer=config.Models.WorldModel.Mamba.n_layer,
+            self.sequence_model = FinMambaSequenceModel(
                 stoch_dim=self.stoch_flattened_dim,
                 action_dim=action_dim,
+                d_model=self.hidden_state_dim,
+                n_layer=config.Models.WorldModel.Mamba.n_layer,
+                block_type='Mamba2',
                 dropout_p=config.Models.WorldModel.Dropout,
                 ssm_cfg={
-                    'd_state': config.Models.WorldModel.Mamba.ssm_cfg.d_state, 
-                    'layer': 'Mamba2'}
+                    'd_state': config.Models.WorldModel.Mamba.ssm_cfg.d_state,
+                },
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
+        elif self.model == 'Mamba3':
+            mamba3_cfg = config.Models.WorldModel.Mamba3
+            if self.hidden_state_dim % mamba3_cfg.headdim != 0:
+                raise ValueError(
+                    "Models.WorldModel.HiddenStateDim must be divisible by "
+                    "Models.WorldModel.Mamba3.headdim"
                 )
-            self.sequence_model = MambaWrapperModel(mamba_config)                      
+            if not getattr(mamba3_cfg, 'Enabled', True):
+                raise ValueError("Backbone is Mamba3 but Models.WorldModel.Mamba3.Enabled is false")
+            self.sequence_model = FinMambaSequenceModel(
+                stoch_dim=self.stoch_flattened_dim,
+                action_dim=action_dim,
+                d_model=self.hidden_state_dim,
+                n_layer=getattr(mamba3_cfg, 'n_layer', config.Models.WorldModel.Mamba.n_layer),
+                block_type='Mamba3',
+                dropout_p=config.Models.WorldModel.Dropout,
+                ssm_cfg={
+                    'd_state': mamba3_cfg.d_state,
+                    'headdim': mamba3_cfg.headdim,
+                    'is_mimo': mamba3_cfg.is_mimo,
+                    'mimo_rank': mamba3_cfg.mimo_rank,
+                    'chunk_size': mamba3_cfg.chunk_size,
+                    'is_outproj_norm': mamba3_cfg.is_outproj_norm,
+                    'rope_fraction': mamba3_cfg.rope_fraction,
+                },
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
         else:
             raise ValueError(f"Unknown dynamics model: {self.model}")               
         
@@ -371,8 +402,65 @@ class WorldModel(nn.Module):
             self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
+
+    def _imagine_data_full_prefix(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
+                                  imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
+        self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
+        context_latent = self.encode_obs(sample_obs)
+
+        generated_samples = []
+        generated_actions = []
+        old_logits_list = []
+
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+            context_dist_feat = self.sequence_model(context_latent, sample_action)
+            conditioned_context_dist_feat = self.condition_dist_feat(context_dist_feat)
+            context_prior_logits = self.dist_head.forward_prior(conditioned_context_dist_feat)
+            context_prior_sample = self.stright_throught_gradient(context_prior_logits)
+            context_flattened_sample = self.flatten_sample(context_prior_sample)
+
+            current_sample = context_flattened_sample[:, -1:]
+            current_dist_feat = conditioned_context_dist_feat[:, -1:]
+            generated_samples.append(current_sample)
+            self.sample_buffer[:, 0:1] = current_sample
+            self.dist_feat_buffer[:, 0:1] = current_dist_feat
+
+            for i in range(imagine_batch_length):
+                action, logits = agent.sample(torch.cat([current_sample, current_dist_feat], dim=-1))
+                action_for_model = action.to(dtype=sample_action.dtype)
+                generated_actions.append(action_for_model)
+                old_logits_list.append(logits)
+                self.action_buffer[:, i:i+1] = action_for_model
+
+                prefix_samples = torch.cat([context_latent] + generated_samples, dim=1)
+                prefix_actions = torch.cat([sample_action] + generated_actions, dim=1)
+                dist_feat = self.sequence_model(prefix_samples, prefix_actions)[:, -1:]
+                current_dist_feat = self.condition_dist_feat(dist_feat)
+                self.dist_feat_buffer[:, i+1:i+2] = current_dist_feat
+
+                prior_logits = self.dist_head.forward_prior(current_dist_feat)
+                prior_sample = self.stright_throught_gradient(prior_logits)
+                current_sample = self.flatten_sample(prior_sample)
+                generated_samples.append(current_sample)
+                self.sample_buffer[:, i+1:i+2] = current_sample
+
+            old_logits_tensor = torch.cat(old_logits_list, dim=1) if old_logits_list else None
+            reward_hat_tensor = self.reward_decoder(self.dist_feat_buffer[:, :-1])
+            self.reward_hat_buffer = self.symlog_twohot_loss_func.decode(reward_hat_tensor)
+            termination_hat_tensor = self.termination_decoder(self.dist_feat_buffer[:, :-1])
+            self.termination_hat_buffer = termination_hat_tensor > 0
+
+        context_out = torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1)
+        imagined_out = torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1)
+        return imagined_out, self.action_buffer, old_logits_tensor, context_out, self.reward_hat_buffer, self.termination_hat_buffer
+
     def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
+        if self.model != 'Transformer':
+            return self._imagine_data_full_prefix(
+                agent, sample_obs, sample_action,
+                imagine_batch_size, imagine_batch_length, log_video, logger, global_step
+            )
 
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         self.sequence_model.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
@@ -405,106 +493,10 @@ class WorldModel(nn.Module):
 
     def imagine_data2(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
-        self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
-        # context
-        context_latent = self.encode_obs(sample_obs)
-        batch_size, seqlen_og, embedding_dim = context_latent.shape
-        max_length = imagine_batch_length + seqlen_og
-        
-        if self.use_cg:
-            if not hasattr(self.sequence_model, "_decoding_cache"):
-                self.sequence_model._decoding_cache = None
-            self.sequence_model._decoding_cache = update_graph_cache(
-                self.sequence_model,
-                self.sequence_model._decoding_cache,
-                imagine_batch_size,
-                seqlen_og,
-                max_length,
-                embedding_dim,
-            )
-            inference_params = self.sequence_model._decoding_cache.inference_params
-            inference_params.reset(max_length, imagine_batch_size)
-        else:
-            inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=imagine_batch_size, key_value_dtype=torch.bfloat16 if self.use_amp else None)
-
-        
-        def get_hidden_state(samples, action, inference_params):
-            decoding = inference_params.seqlen_offset > 0
-
-            if not self.use_cg or not decoding:
-                hidden_state = self.sequence_model(
-                    samples, action,
-                    inference_params=inference_params,
-                    # num_last_tokens=1,
-                # ).logits.squeeze(dim=1)
-                )
-            else:
-                hidden_state = self.sequence_model._decoding_cache.run(
-                    samples, action, inference_params.seqlen_offset
-                )
-            return hidden_state        
-
-        def should_stop(current_token, inference_params):
-            if inference_params.seqlen_offset == 0:
-                return False
-            # if eos_token_id is not None and (current_token == eos_token_id).all():
-            #     return True
-            if inference_params.seqlen_offset >= max_length:
-                return True
-            return False
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp and not self.use_cg):
-            context_dist_feat = get_hidden_state(context_latent, sample_action, inference_params)
-            inference_params.seqlen_offset += context_dist_feat.shape[1]
-            conditioned_context_dist_feat = self.condition_dist_feat(context_dist_feat)
-            context_prior_logits = self.dist_head.forward_prior(conditioned_context_dist_feat)
-            context_prior_sample = self.stright_throught_gradient(context_prior_logits)
-            context_flattened_sample = self.flatten_sample(context_prior_sample)
-
-            dist_feat_list, sample_list = [
-                conditioned_context_dist_feat[:, -1:]
-            ], [context_flattened_sample[:, -1:]]
-            self.sample_buffer[:, 0:1] = context_flattened_sample[:, -1:]
-            self.dist_feat_buffer[:, 0:1] = conditioned_context_dist_feat[:, -1:]
-            action_list, old_logits_list = [], []
-            i = 0
-            while not should_stop(sample_list[-1], inference_params):
-                action, logits = agent.sample(torch.cat([self.sample_buffer[:, i:i+1], self.dist_feat_buffer[:, i:i+1]], dim=-1))
-                action_list.append(action)
-                self.action_buffer[:, i:i+1] = action
-                old_logits_list.append(logits)
-                dist_feat = get_hidden_state(sample_list[-1], action_list[-1], inference_params)
-                conditioned_dist_feat = self.condition_dist_feat(dist_feat)
-                dist_feat_list.append(conditioned_dist_feat)
-                self.dist_feat_buffer[:, i+1:i+2] = conditioned_dist_feat
-                inference_params.seqlen_offset += sample_list[-1].shape[1]
-                # if repetition_penalty == 1.0:
-                #     sampled_tokens = sample_tokens(scores[-1], inference_params)
-                # else:
-                #     logits = modify_logit_for_repetition_penalty(
-                #         scores[-1].clone(), sequences_cat, repetition_penalty
-                #     )
-                #     sampled_tokens = sample_tokens(logits, inference_params)
-                #     sequences_cat = torch.cat([sequences_cat, sampled_tokens], dim=1)
-                prior_logits = self.dist_head.forward_prior(dist_feat_list[-1])
-                prior_sample = self.stright_throught_gradient(prior_logits)
-                prior_flattened_sample = self.flatten_sample(prior_sample)
-                sample_list.append(prior_flattened_sample)
-                self.sample_buffer[:, i+1:i+2] = prior_flattened_sample
-                i += 1
-                    
-                        
-            # sample_tensor = torch.cat(sample_list, dim=1)
-            # dist_feat_tensor = torch.cat(dist_feat_list, dim=1)
-            # action_tensor = torch.cat(action_list, dim=1)
-            old_logits_tensor = torch.cat(old_logits_list, dim=1)
-
-            reward_hat_tensor = self.reward_decoder(self.dist_feat_buffer[:,:-1])
-            self.reward_hat_buffer = self.symlog_twohot_loss_func.decode(reward_hat_tensor)
-            termination_hat_tensor = self.termination_decoder(self.dist_feat_buffer[:,:-1])
-            self.termination_hat_buffer = termination_hat_tensor > 0
-
-
-        return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, old_logits_tensor, torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1), self.reward_hat_buffer, self.termination_hat_buffer
+        return self._imagine_data_full_prefix(
+            agent, sample_obs, sample_action,
+            imagine_batch_size, imagine_batch_length, log_video, logger, global_step
+        )
 
 
     def update(self, obs, action, reward, termination, global_step, epoch_step,

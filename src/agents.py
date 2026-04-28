@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as distributions
-from mamba_ssm.ops.triton.layer_norm import RMSNorm
 import copy
 import numpy as np
 from sub_models.laprop import LaProp
@@ -12,6 +11,8 @@ from pytorch_warmup import LinearWarmup
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
 from tools import layer_init
+
+RMSNorm = nn.RMSNorm
 
 def percentile(x, percentage):
     flat_x = torch.flatten(x)

@@ -122,8 +122,6 @@ def _imagine_and_log(
     """Encode a short validation context, autoregressively roll forward,
     save decoded feature tensors for diagnostic plots.
     """
-    from mamba_ssm import InferenceParams
-
     world_model.eval()
     device = world_model.device
     T = val_seq.per_tick.shape[0]
@@ -136,27 +134,28 @@ def _imagine_and_log(
 
     with torch.no_grad():
         ctx_latent = world_model.encode_obs(obs)
-        inference_params = InferenceParams(
-            max_seqlen=context_len + horizon,
-            max_batch_size=1,
-        )
-        ctx_feat = world_model.sequence_model(ctx_latent, action, inference_params)
-        inference_params.seqlen_offset += ctx_feat.shape[1]
+        prefix_latent = ctx_latent
+        prefix_action = action
+        decoded = []
+        for step in range(horizon):
+            if world_model.model == "Transformer":
+                from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
 
-        prior_logits = world_model.dist_head.forward_prior(ctx_feat[:, -1:])
-        prior_sample = world_model.stright_throught_gradient(prior_logits)
-        prior_flat = world_model.flatten_sample(prior_sample)
-
-        decoded = [world_model.image_decoder(prior_flat).cpu().numpy()[0, 0]]
-        last_sample = prior_flat
-        last_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
-        for _ in range(horizon - 1):
-            feat = world_model.sequence_model(last_sample, last_action, inference_params)
-            inference_params.seqlen_offset += 1
+                temporal_mask = get_subsequent_mask_with_batch_length(
+                    prefix_latent.shape[1], prefix_latent.device
+                )
+                feat = world_model.sequence_model(prefix_latent, prefix_action, temporal_mask)
+            else:
+                feat = world_model.sequence_model(prefix_latent, prefix_action)
+            feat = world_model.condition_dist_feat(feat[:, -1:])
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.stright_throught_gradient(prior_logits)
-            last_sample = world_model.flatten_sample(prior_sample)
-            decoded.append(world_model.image_decoder(last_sample).cpu().numpy()[0, 0])
+            prior_flat = world_model.flatten_sample(prior_sample)
+            decoded.append(world_model.image_decoder(prior_flat).cpu().numpy()[0, 0])
+            if step != horizon - 1:
+                next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
+                prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
+                prefix_action = torch.cat([prefix_action, next_action], dim=1)
 
     decoded = np.stack(decoded, axis=0)
     LEVEL_FLAT = 10 * 8
