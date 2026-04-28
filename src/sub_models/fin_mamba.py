@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+logger = logging.getLogger(__name__)
+_LOGGED_MAMBA_CLASSES: set[str] = set()
 
 
 def _repo_src_dir() -> Path:
@@ -70,6 +75,28 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
                 )
         except ValueError:
             pass
+    # Log resolved class once per process so a fallback path is obvious in logs.
+    cache_key = f"{module_name}:{class_name}"
+    if cache_key not in _LOGGED_MAMBA_CLASSES:
+        _LOGGED_MAMBA_CLASSES.add(cache_key)
+        logger.info(
+            "[mamba] resolved %s.%s from %s",
+            module_name, class_name, module_file or "<unknown>",
+        )
+        if module_name.endswith("mamba3") and module_file is not None:
+            try:
+                tilelang_mod = importlib.import_module(
+                    "mamba_ssm.ops.tilelang.mamba3.mamba3_mimo"
+                )
+                logger.info(
+                    "[mamba] TileLang Mamba3 MIMO kernel available at %s",
+                    getattr(tilelang_mod, "__file__", "<unknown>"),
+                )
+            except ImportError:
+                logger.warning(
+                    "[mamba] TileLang Mamba3 MIMO kernel NOT available; "
+                    "MIMO will use the slower Python reference path."
+                )
     return getattr(module, class_name)
 
 

@@ -370,6 +370,21 @@ def main() -> None:
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
 
+    # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
+    # kernels; torch.compile would fight them and risks recompilations every
+    # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
+    if getattr(config.BasicSettings, "Compile", False):
+        try:
+            world_model.encoder = torch.compile(
+                world_model.encoder, mode="reduce-overhead", dynamic=False
+            )
+            world_model.obs_decoder = torch.compile(
+                world_model.obs_decoder, mode="reduce-overhead", dynamic=False
+            )
+            logger.info("torch.compile enabled for encoder + obs_decoder")
+        except Exception as exc:
+            logger.warning(f"torch.compile unavailable, running eager: {exc}")
+
     replay_buffer = ReplayBuffer(config, device=device)
     _populate_buffer(replay_buffer, train_seq)
 
