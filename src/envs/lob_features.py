@@ -130,7 +130,7 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
         out[k, 4] = gap
         out[k, 5] = (2.0 * float(k) / max(K_LEVELS - 1, 1)) - 1.0
         out[k, 6] = float(side)
-        # out[k, 7] filled in by extract_features with log book staleness
+        # Index 7 is filled in by extract_features() with log book staleness.
     return out
 
 
@@ -261,7 +261,7 @@ def pick_longest_market(data: BacktestData) -> str:
     return max(counts.items(), key=lambda kv: kv[1])[0]
 
 
-# --- Normalization ---------------------------------------------------------
+# Normalization.
 
 
 @dataclass
@@ -406,7 +406,7 @@ def load_normalization(path: Path) -> NormalizationStats:
     return NormalizationStats.from_json(json.loads(path.read_text()))
 
 
-# --- CLI entry point -------------------------------------------------------
+# CLI entry point.
 
 
 def _cli(argv: list[str] | None = None) -> None:

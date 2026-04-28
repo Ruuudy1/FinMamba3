@@ -5,7 +5,6 @@ from torch.distributions import OneHotCategorical
 from einops import rearrange, reduce
 from sub_models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-# from nfnets import AGC
 
 from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
@@ -18,11 +17,9 @@ from tools import weight_init
 
 RMSNorm = nn.RMSNorm
 
-    
+
 class DistHead(nn.Module):
-    '''
-    Dist: abbreviation of distribution
-    '''
+    """Distribution head for posterior and prior categorical logits."""
     def __init__(self, image_feat_dim, hidden_state_dim, categorical_dim, class_dim, unimix_ratio=0.01, dtype=None, device=None) -> None:
         super().__init__()
         self.stoch_dim = categorical_dim
@@ -33,7 +30,7 @@ class DistHead(nn.Module):
         self.device=device
 
     def unimix(self, logits, mixing_ratio=0.01):
-        # uniform noise mixing
+        # Mix logits with uniform noise for uniform-prior regularization.
         if mixing_ratio > 0:
             probs = F.softmax(logits, dim=-1)
             mixed_probs = mixing_ratio * torch.ones_like(probs, dtype=self.dtype, device=self.device) / self.stoch_dim + (1-mixing_ratio) * probs
@@ -61,7 +58,7 @@ class RewardHead(nn.Module):
         super().__init__()
         act = getattr(nn, act)
 
-        # Create the backbone with dynamic number of layers
+        # Build backbone layers dynamically.
         layers = []
         for _ in range(layer_num):
             layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
@@ -84,7 +81,7 @@ class TerminationHead(nn.Module):
         super().__init__()
         act = getattr(nn, act)
 
-        # Create the backbone with dynamic number of layers
+        # Build backbone layers dynamically.
         layers = []
         for _ in range(layer_num):
             layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
@@ -97,7 +94,7 @@ class TerminationHead(nn.Module):
     def forward(self, feat):
         feat = self.backbone(feat)
         termination = self.head(feat)
-        termination = termination.squeeze(-1)  # remove last 1 dim
+        termination = termination.squeeze(-1)  # Remove the trailing singleton dimension.
         return termination
 
 class CategoricalKLDivLossWithFreeBits(nn.Module):
@@ -130,7 +127,7 @@ class WorldModel(nn.Module):
         self.save_every_steps = config.JointTrainAgent.SaveEverySteps
         self.imagine_batch_size = -1
         self.imagine_batch_length = -1
-        self.device = device # Maybe it's not needed
+        self.device = device  # Stored for device placement in buffer init.
         self.model = config.Models.WorldModel.Backbone
         self.encoder_type = getattr(config.Models.WorldModel.Encoder, 'Type', 'lob')
         if self.encoder_type != 'lob':
@@ -293,7 +290,6 @@ class WorldModel(nn.Module):
             self.optimizer = torch.optim.AdamW(self.parameters(), lr=config.Models.WorldModel.Adam.LearningRate, weight_decay=config.Models.WorldModel.Weight_decay)
         else:
             raise ValueError(f"Unknown optimiser: {config.Models.WorldModel.Optimiser}")
-        # self.optimizer = AGC(self.parameters(), self.optimizer)
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=config.Models.WorldModel.Warmup_steps)
         self.scaler = torch.amp.GradScaler(
@@ -349,14 +345,14 @@ class WorldModel(nn.Module):
             post_flattened_sample = self.flatten_sample(post_sample)            
 
         return post_flattened_sample, post_feat    
-    # only called when using Transformer
+    # Called only when using the Transformer backbone (requires KV cache).
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             dist_feat = self.sequence_model.forward_with_kv_cache(last_flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
 
-            # decoding
+            # Decode prior sample into observation.
             prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
             prior_flattened_sample = self.flatten_sample(prior_sample)
             if log_video:
@@ -373,10 +369,8 @@ class WorldModel(nn.Module):
         dist = OneHotCategorical(logits=logits)
         if sample_mode == "random_sample":
             sample = dist.sample() + dist.probs - dist.probs.detach()
-            # sample = dist.sample()
         elif sample_mode == "mode":
             sample = dist.mode
-            # sample = dist.mode()
         elif sample_mode == "probs":
             sample = dist.probs
         return sample
@@ -386,10 +380,7 @@ class WorldModel(nn.Module):
         return rearrange(sample, "B L K C -> B L (K C)")
 
     def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype, device):
-        '''
-        This can slightly improve the efficiency of imagine_data
-        But may vary across different machines
-        '''
+        """Pre-allocate imagination buffers to avoid per-step allocation overhead."""
         if self.imagine_batch_size != imagine_batch_size or self.imagine_batch_length != imagine_batch_length:
             print(f"init_imagine_buffer: {imagine_batch_size}x{imagine_batch_length}@{dtype}")
             self.imagine_batch_size = imagine_batch_size
@@ -465,10 +456,10 @@ class WorldModel(nn.Module):
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         self.sequence_model.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
 
-        # context
+        # Encode context observations.
         context_latent = self.encode_obs(sample_obs)
 
-        for i in range(sample_obs.shape[1]):  # context_length is sample_obs.shape[1]
+        for i in range(sample_obs.shape[1]):
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
                 context_latent[:, i:i+1],
                 sample_action[:, i:i+1],
@@ -477,7 +468,7 @@ class WorldModel(nn.Module):
         self.sample_buffer[:, 0:1] = last_latent
         self.dist_feat_buffer[:, 0:1] = last_dist_feat
 
-        # imagine
+        # Autoregressively imagine future latents.
         for i in range(imagine_batch_length):
             action, _ = agent.sample(torch.cat([self.sample_buffer[:, i:i+1], self.dist_feat_buffer[:, i:i+1]], dim=-1))
             self.action_buffer[:, i:i+1] = action
@@ -504,16 +495,14 @@ class WorldModel(nn.Module):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            # encoding
+            # Encode observations into posterior samples.
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
-
-            # decoding image
+            # Reconstruct observations from samples.
             obs_hat = self.image_decoder(flattened_sample)
-
-            # dynamics models
+            # Compute sequence-model hidden states.
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
                 dist_feat = self.sequence_model(flattened_sample, action, temporal_mask)
@@ -521,24 +510,22 @@ class WorldModel(nn.Module):
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
-
-            # decoding reward and termination with dist_feat
+            # Predict reward and termination from the prior hidden state.
             reward_hat = self.reward_decoder(conditioned_dist_feat)
             termination_hat = self.termination_decoder(conditioned_dist_feat)
-
-            # env loss
+            # Compute observation, reward, and termination losses.
             reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
             reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
             termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
-            # dyn-rep loss
+            # Compute dynamics and representation KL losses.
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
             total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
 
-        # gradient descent
+        # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()
         if is_last_accum:
-            self.scaler.unscale_(self.optimizer)  # for clip grad
+            self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
             torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
             self.scaler.step(self.optimizer)
             self.scaler.update()

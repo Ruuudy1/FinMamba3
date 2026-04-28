@@ -42,20 +42,20 @@ class LaProp(Optimizer):
 
                 state = self.state[p]
 
-                # State initialization
+                # State initialization.
                 if len(state) == 0:
                     state['step'] = 0
-                    # Exponential moving average of gradient values
+                    # Exponential moving average of gradient values.
                     state['exp_avg'] = torch.zeros_like(p.data)
-                    # Exponential moving average of learning rates
+                    # Exponential moving average of learning rates.
                     state['exp_avg_lr_1'] = 0.; state['exp_avg_lr_2'] = 0.
-                    # Exponential moving average of squared gradient values
+                    # Exponential moving average of squared gradient values.
                     state['exp_avg_sq'] = torch.zeros_like(p.data)
                     if centered:
-                        # Exponential moving average of gradient values as calculated by beta2
+                        # Exponential moving average of gradient values as calculated by beta2.
                         state['exp_mean_avg_beta2'] = torch.zeros_like(p.data)
                     if amsgrad:
-                        # Maintains max of all exp. moving avg. of sq. grad. values
+                        # Maintains max of all exp. moving avg. of sq. grad. values.
                         state['max_exp_avg_sq'] = torch.zeros_like(p.data)
 
                 exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
@@ -67,13 +67,13 @@ class LaProp(Optimizer):
 
                 state['step'] += 1
 
-                # Decay the first and second moment running average coefficient
+                # Decay the first and second moment running average coefficient.
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
 
                 state['exp_avg_lr_1'] = state['exp_avg_lr_1'] * beta1 + (1 - beta1) * group['lr']
                 state['exp_avg_lr_2'] = state['exp_avg_lr_2'] * beta2 + (1 - beta2)
 
-                bias_correction1 = state['exp_avg_lr_1'] / group['lr'] if group['lr'] != 0. else 1. # 1 - beta1 ** state['step']
+                bias_correction1 = state['exp_avg_lr_1'] / group['lr'] if group['lr'] != 0. else 1.  # Equivalent to 1 - beta1 ** step.
                 step_size = 1 / bias_correction1
 
                 bias_correction2 = state['exp_avg_lr_2']
@@ -87,9 +87,9 @@ class LaProp(Optimizer):
 
                 if amsgrad:
                     if not (centered and state['step'] <= self.steps_before_using_centered): 
-                        # Maintains the maximum of all (centered) 2nd moment running avg. till now
+                        # Maintains the maximum of all (centered) 2nd moment running avg. till now.
                         torch.max(max_exp_avg_sq, denom, out=max_exp_avg_sq)
-                        # Use the max. for normalizing running avg. of gradient
+                        # Use the max for normalizing running avg. of gradient.
                         denom = max_exp_avg_sq
 
                 denom = denom.div(bias_correction2).sqrt_().add_(group['eps'])

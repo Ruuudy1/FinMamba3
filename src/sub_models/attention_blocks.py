@@ -6,7 +6,7 @@ from einops import rearrange, repeat
 
 
 def get_subsequent_mask(seq):
-    ''' For masking out the subsequent info. '''
+    """Return a lower-triangular causal mask that hides future positions."""
     batch_size, batch_length = seq.shape[:2]
     subsequent_mask = (1 - torch.triu(
         torch.ones((1, batch_length, batch_length), device=seq.device), diagonal=1)).bool()
@@ -14,19 +14,18 @@ def get_subsequent_mask(seq):
 
 
 def get_subsequent_mask_with_batch_length(batch_length, device):
-    ''' For masking out the subsequent info. '''
+    """Return a lower-triangular causal mask of shape (1, L, L) for a given batch length."""
     subsequent_mask = (1 - torch.triu(torch.ones((1, batch_length, batch_length), device=device), diagonal=1)).bool()
     return subsequent_mask
 
 
 def get_vector_mask(batch_length, device):
     mask = torch.ones((1, 1, batch_length), device=device).bool()
-    # mask = torch.ones((1, batch_length, 1), device=device).bool()
     return mask
 
 
 class ScaledDotProductAttention(nn.Module):
-    ''' Scaled Dot-Product Attention '''
+    """Scaled Dot-Product Attention."""
 
     def __init__(self, temperature, attn_dropout=0.1):
         super().__init__()
@@ -46,7 +45,7 @@ class ScaledDotProductAttention(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    ''' Multi-Head Attention module '''
+    """Multi-Head Attention module."""
 
     def __init__(self, n_head, d_model, d_k, d_v, dropout=0.1):
         super().__init__()
@@ -71,13 +70,13 @@ class MultiHeadAttention(nn.Module):
 
         residual = q
 
-        # Pass through the pre-attention projection: b x lq x (n*dv)
-        # Separate different heads: b x lq x n x dv
+        # Project to queries, keys, and values: b x lq x (n*dv).
+        # Separate into heads: b x lq x n x dv.
         q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
         k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
         v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
 
-        # Transpose for attention dot product: b x n x lq x dv
+        # Transpose for attention dot product: b x n x lq x dv.
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
 
         if mask is not None:
@@ -85,8 +84,8 @@ class MultiHeadAttention(nn.Module):
 
         q, attn = self.attention(q, k, v, mask=mask)
 
-        # Transpose to move the head dimension back: b x lq x n x dv
-        # Combine the last two dimensions to concatenate all the heads together: b x lq x (n*dv)
+        # Transpose head dimension back: b x lq x n x dv.
+        # Concatenate all heads: b x lq x (n*dv).
         q = q.transpose(1, 2).contiguous().view(sz_b, len_q, -1)
         q = self.dropout(self.fc(q))
         q += residual
@@ -97,12 +96,12 @@ class MultiHeadAttention(nn.Module):
 
 
 class PositionwiseFeedForward(nn.Module):
-    ''' A two-feed-forward-layer module '''
+    """Position-wise two-layer feed-forward module."""
 
     def __init__(self, d_in, d_hid, dropout=0.1):
         super().__init__()
-        self.w_1 = nn.Linear(d_in, d_hid)  # position-wise
-        self.w_2 = nn.Linear(d_hid, d_in)  # position-wise
+        self.w_1 = nn.Linear(d_in, d_hid)
+        self.w_2 = nn.Linear(d_hid, d_in)
         self.layer_norm = nn.LayerNorm(d_in, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
 
