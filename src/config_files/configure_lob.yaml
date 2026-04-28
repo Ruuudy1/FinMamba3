@@ -47,8 +47,14 @@ Models:
     dtype: float32
     Backbone: Mamba3
     Act: SiLU
-    CategoricalDim: 32
-    ClassDim: 32
+    # DreamerV3 (Hafner et al. 2023) uses 32x32 = 1024 across every domain. We
+    # shrink to 16x16 = 256 because the LOB-aggregate input is only 94 dims:
+    # 32x32 latent is a 10x EXPANSION over the input and stops acting as a
+    # bottleneck. 16x16 is still 2.7x expansion, preserving capacity while
+    # restoring some regularization pressure. Revert to 32 if reconstruction
+    # collapses or KL stays pinned at the free-bits floor.
+    CategoricalDim: 16
+    ClassDim: 16
     HiddenStateDim: 512
     Optimiser: Laprop
     LatentDiscreteType: naive
