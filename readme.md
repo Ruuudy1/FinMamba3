@@ -49,6 +49,21 @@ later runtimes on the same Python/Torch/CUDA/GPU combination reuse the cached
 the first notebook cell after changing the dependency stack or if a cached
 wheel becomes stale.
 
+## Data
+
+The pretraining dataset is hosted on Google Drive:
+
+[drive.google.com/drive/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz](https://drive.google.com/drive/u/0/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz)
+
+Download `train.tar.zip` and `validation.tar.zip` into the same Drive folder, then
+set `DATA_ZIP` in the notebook's first cell:
+
+```python
+DATA_ZIP = "/content/drive/MyDrive/FinDrama/data/train.tar.zip"
+```
+
+The notebook extracts both splits automatically.
+
 ## Local Smoke Test
 
 Install a CUDA PyTorch build first, then install the project dependencies:
