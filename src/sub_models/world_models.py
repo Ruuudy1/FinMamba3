@@ -98,6 +98,9 @@ class TerminationHead(nn.Module):
         return termination
 
 class CategoricalKLDivLossWithFreeBits(nn.Module):
+    """KL with a per-step free-bits floor. DreamerV3 uses 1.0 nat (Hafner et al. 2023);
+    the floor prevents degenerate posterior=prior solutions where the latent carries no
+    information about the input."""
     def __init__(self, free_bits) -> None:
         super().__init__()
         self.free_bits = free_bits
@@ -298,7 +301,17 @@ class WorldModel(nn.Module):
             self.optimizer = torch.optim.AdamW(self.parameters(), lr=config.Models.WorldModel.Adam.LearningRate, weight_decay=config.Models.WorldModel.Weight_decay)
         else:
             raise ValueError(f"Unknown optimiser: {config.Models.WorldModel.Optimiser}")
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
+        lr_schedule = getattr(config.Models.WorldModel, 'LRSchedule', 'constant')
+        if lr_schedule == 'cosine':
+            # Cosine + warmup is the standard recipe for Mamba pretraining.
+            t_max = max(int(config.JointTrainAgent.SampleMaxSteps), 1)
+            eta_min_ratio = float(getattr(config.Models.WorldModel, 'LRMinRatio', 0.1))
+            base_lr = self.optimizer.param_groups[0]['lr']
+            self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer, T_max=t_max, eta_min=base_lr * eta_min_ratio
+            )
+        else:
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=config.Models.WorldModel.Warmup_steps)
         self.scaler = torch.amp.GradScaler(
             "cuda",
@@ -559,6 +572,10 @@ class WorldModel(nn.Module):
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
 
-        return  reconstruction_loss.item(), reward_loss.item(), termination_loss.item(), \
-                dynamics_loss.item(), dynamics_real_kl_div.item(), representation_loss.item(), \
-                representation_real_kl_div.item(), total_loss.item()
+        # Return detached tensors so the caller can stack and sync once per log step
+        # instead of paying 8 GPU-CPU syncs per call to update().
+        return (
+            reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
+            dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
+            representation_real_kl_div.detach(), total_loss.detach(),
+        )
