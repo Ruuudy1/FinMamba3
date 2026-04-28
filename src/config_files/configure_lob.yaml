@@ -46,7 +46,6 @@ Models:
   WorldModel:
     dtype: float32
     Backbone: Mamba3
-    InChannels: 3
     Act: SiLU
     CategoricalDim: 32
     ClassDim: 32
@@ -78,9 +77,11 @@ Models:
       HiddenDim: 512
       NumLayers: 3
     Reward:
+      Enabled: false        # Phase A pretraining has no reward signal; gate the head off.
       HiddenUnits: 256
       LayerNum: 1
     Termination:
+      Enabled: false        # Phase A has no episode boundaries; gate the head off.
       HiddenUnits: 256
       LayerNum: 1
     Transformer:

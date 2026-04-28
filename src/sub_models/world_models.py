@@ -230,7 +230,7 @@ class WorldModel(nn.Module):
             unimix_ratio=config.Models.WorldModel.Unimix_ratio,
             dtype=config.Models.WorldModel.dtype, device=device
         )      
-        self.image_decoder = LOBDecoder(
+        self.obs_decoder = LOBDecoder(
             stoch_dim=self.stoch_flattened_dim,
             hidden_dim=getattr(config.Models.WorldModel.Decoder, 'HiddenDim', 512),
             num_layers=getattr(config.Models.WorldModel.Decoder, 'NumLayers', 3),
@@ -239,24 +239,32 @@ class WorldModel(nn.Module):
             f_tick=enc_cfg.FeatureDimTick,
             dtype=config.Models.WorldModel.dtype, device=device,
         )
-        
-        self.reward_decoder = RewardHead(
-            num_classes=255,
-            inp_dim=self.hidden_state_dim,
-            hidden_units=config.Models.WorldModel.Reward.HiddenUnits,
-            act=config.Models.WorldModel.Act,
-            layer_num=config.Models.WorldModel.Reward.LayerNum,
-            dtype=config.Models.WorldModel.dtype, device=device
-        )
-        self.reward_decoder.apply(weight_init)
-        self.termination_decoder = TerminationHead(
-            inp_dim=self.hidden_state_dim,
-            hidden_units=config.Models.WorldModel.Termination.HiddenUnits,
-            act=config.Models.WorldModel.Act,
-            layer_num=config.Models.WorldModel.Termination.LayerNum,
-            dtype=config.Models.WorldModel.dtype, device=device
-        )
-        self.termination_decoder.apply(weight_init)
+
+        self.use_reward_head = bool(getattr(config.Models.WorldModel.Reward, 'Enabled', True))
+        self.use_termination_head = bool(getattr(config.Models.WorldModel.Termination, 'Enabled', True))
+        if self.use_reward_head:
+            self.reward_decoder = RewardHead(
+                num_classes=255,
+                inp_dim=self.hidden_state_dim,
+                hidden_units=config.Models.WorldModel.Reward.HiddenUnits,
+                act=config.Models.WorldModel.Act,
+                layer_num=config.Models.WorldModel.Reward.LayerNum,
+                dtype=config.Models.WorldModel.dtype, device=device
+            )
+            self.reward_decoder.apply(weight_init)
+        else:
+            self.reward_decoder = None
+        if self.use_termination_head:
+            self.termination_decoder = TerminationHead(
+                inp_dim=self.hidden_state_dim,
+                hidden_units=config.Models.WorldModel.Termination.HiddenUnits,
+                act=config.Models.WorldModel.Act,
+                layer_num=config.Models.WorldModel.Termination.LayerNum,
+                dtype=config.Models.WorldModel.dtype, device=device
+            )
+            self.termination_decoder.apply(weight_init)
+        else:
+            self.termination_decoder = None
         if self.use_regime:
             self.regime_head = RegimeHead(
                 hidden_dim=self.hidden_state_dim,
@@ -356,13 +364,19 @@ class WorldModel(nn.Module):
             prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
             prior_flattened_sample = self.flatten_sample(prior_sample)
             if log_video:
-                obs_hat = self.image_decoder(prior_flattened_sample)
+                obs_hat = self.obs_decoder(prior_flattened_sample)
             else:
                 obs_hat = None
-            reward_hat = self.reward_decoder(conditioned_dist_feat)
-            reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
-            termination_hat = self.termination_decoder(conditioned_dist_feat)
-            termination_hat = termination_hat > 0
+            if self.use_reward_head:
+                reward_hat = self.reward_decoder(conditioned_dist_feat)
+                reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
+            else:
+                reward_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=conditioned_dist_feat.dtype)
+            if self.use_termination_head:
+                termination_hat = self.termination_decoder(conditioned_dist_feat)
+                termination_hat = termination_hat > 0
+            else:
+                termination_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=torch.bool)
 
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, conditioned_dist_feat
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
@@ -436,10 +450,16 @@ class WorldModel(nn.Module):
                 self.sample_buffer[:, i+1:i+2] = current_sample
 
             old_logits_tensor = torch.cat(old_logits_list, dim=1) if old_logits_list else None
-            reward_hat_tensor = self.reward_decoder(self.dist_feat_buffer[:, :-1])
-            self.reward_hat_buffer = self.symlog_twohot_loss_func.decode(reward_hat_tensor)
-            termination_hat_tensor = self.termination_decoder(self.dist_feat_buffer[:, :-1])
-            self.termination_hat_buffer = termination_hat_tensor > 0
+            if self.use_reward_head:
+                reward_hat_tensor = self.reward_decoder(self.dist_feat_buffer[:, :-1])
+                self.reward_hat_buffer = self.symlog_twohot_loss_func.decode(reward_hat_tensor)
+            else:
+                self.reward_hat_buffer.zero_()
+            if self.use_termination_head:
+                termination_hat_tensor = self.termination_decoder(self.dist_feat_buffer[:, :-1])
+                self.termination_hat_buffer = termination_hat_tensor > 0
+            else:
+                self.termination_hat_buffer = torch.zeros_like(self.termination_hat_buffer, dtype=torch.bool)
 
         context_out = torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1)
         imagined_out = torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1)
@@ -501,7 +521,7 @@ class WorldModel(nn.Module):
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
             # Reconstruct observations from samples.
-            obs_hat = self.image_decoder(flattened_sample)
+            obs_hat = self.obs_decoder(flattened_sample)
             # Compute sequence-model hidden states.
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
@@ -510,13 +530,19 @@ class WorldModel(nn.Module):
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
-            # Predict reward and termination from the prior hidden state.
-            reward_hat = self.reward_decoder(conditioned_dist_feat)
-            termination_hat = self.termination_decoder(conditioned_dist_feat)
-            # Compute observation, reward, and termination losses.
+            # Compute observation loss.
             reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
-            reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
-            termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
+            # Predict reward and termination from the prior hidden state when their heads are enabled.
+            if self.use_reward_head:
+                reward_hat = self.reward_decoder(conditioned_dist_feat)
+                reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
+            else:
+                reward_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            if self.use_termination_head:
+                termination_hat = self.termination_decoder(conditioned_dist_feat)
+                termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
+            else:
+                termination_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             # Compute dynamics and representation KL losses.
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())

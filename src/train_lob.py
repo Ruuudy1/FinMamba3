@@ -151,7 +151,7 @@ def _imagine_and_log(
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.stright_throught_gradient(prior_logits)
             prior_flat = world_model.flatten_sample(prior_sample)
-            decoded.append(world_model.image_decoder(prior_flat).cpu().numpy()[0, 0])
+            decoded.append(world_model.obs_decoder(prior_flat).cpu().numpy()[0, 0])
             if step != horizon - 1:
                 next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
@@ -197,7 +197,7 @@ def _validation_metrics(
         post_logits = world_model.dist_head.forward_post(embedding)
         sample = world_model.stright_throught_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
-        obs_hat = world_model.image_decoder(flattened_sample)
+        obs_hat = world_model.obs_decoder(flattened_sample)
         reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
 
         if world_model.model == "Transformer":
@@ -212,7 +212,7 @@ def _validation_metrics(
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
         prior_sample = world_model.stright_throught_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
-        next_hat = world_model.image_decoder(prior_flat)
+        next_hat = world_model.obs_decoder(prior_flat)
 
     target_next = obs[:, 1:].detach().float()
     pred_next = next_hat.detach().float()
