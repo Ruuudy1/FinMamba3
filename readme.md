@@ -16,7 +16,7 @@ In Colab:
 1. Runtime -> Change runtime type -> A100 GPU.
 2. Open `notebooks/colab_lob_pretrain.ipynb`.
 3. Confirm `REPO_URL = "https://github.com/Ruuudy1/FinDrama.git"` and
-   `BRANCH = "master"` in the first code cell, and optionally set `DATA_ZIP`.
+   `BRANCH = "dev-mamba3-mimo"` in the first code cell, and optionally set `DATA_ZIP`.
 4. Run cells top to bottom.
 5. Start with `SMOKE_TEST = True`; after one short update and validation print
    complete, set it back to `False` for the full `20_000` step run.
@@ -36,6 +36,18 @@ saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
 The final notebook cell copies `saved_models/lob` to Google Drive.
+
+The Mamba3 install cell caches pip downloads and compiled CUDA wheels under:
+
+```text
+MyDrive/FinDrama/colab_cache/
+```
+
+The first T4/A100 run can still be slow because Mamba3 is source-built, but
+later runtimes on the same Python/Torch/CUDA/GPU combination reuse the cached
+`causal-conv1d` and `mamba-ssm` wheels. Set `FORCE_REBUILD_WHEELS = True` in
+the first notebook cell after changing the dependency stack or if a cached
+wheel becomes stale.
 
 ## Local Smoke Test
 
