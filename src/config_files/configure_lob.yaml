@@ -116,6 +116,12 @@ Models:
       chunk_size: 16
       is_outproj_norm: false
       rope_fraction: 0.5
+    Direction:
+      Enabled: True           # Auxiliary 3-class direction loss; cheap predictive signal.
+      NumClasses: 3           # 0=down, 1=flat, 2=up.
+      Threshold: 0.01         # Normalized-mid delta below this is bucketed as 'flat'.
+      LossWeight: 0.5         # Relative to reconstruction.
+      Dropout: 0.0
     Regime:
       Enabled: False
       NumRegimes: 8

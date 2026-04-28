@@ -21,6 +21,7 @@ _LOSS_NAMES = (
     "dynamics_real_kl_div",
     "representation_loss",
     "representation_real_kl_div",
+    "direction_loss",
     "total_loss",
 )
 

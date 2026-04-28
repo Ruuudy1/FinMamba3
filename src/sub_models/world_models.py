@@ -10,7 +10,7 @@ from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
 from sub_models.fin_mamba import FinMambaSequenceModel
-from sub_models.lob_auxiliary import RegimeConditioner, RegimeHead
+from sub_models.lob_auxiliary import DirectionHead, RegimeConditioner, RegimeHead
 from sub_models.lob_encoder import LOBDecoder, LOBEncoder, LOBReconstructionLoss
 import agents
 from tools import weight_init
@@ -269,6 +269,24 @@ class WorldModel(nn.Module):
             self.termination_decoder.apply(weight_init)
         else:
             self.termination_decoder = None
+        direction_cfg = getattr(config.Models.WorldModel, 'Direction', None)
+        self.use_direction_head = bool(direction_cfg is not None and getattr(direction_cfg, 'Enabled', False))
+        if self.use_direction_head:
+            self.direction_head = DirectionHead(
+                hidden_dim=self.hidden_state_dim,
+                num_classes=int(getattr(direction_cfg, 'NumClasses', 3)),
+                dropout=float(getattr(direction_cfg, 'Dropout', 0.0)),
+                dtype=config.Models.WorldModel.dtype, device=device,
+            )
+            self.direction_loss_weight = float(getattr(direction_cfg, 'LossWeight', 0.5))
+            self.direction_threshold = float(getattr(direction_cfg, 'Threshold', 1.0e-2))
+            # Index of normalized midprice in the flat feature vector.
+            self.midprice_index = int(enc_cfg.K) * int(enc_cfg.FeatureDimLevel)
+        else:
+            self.direction_head = None
+            self.direction_loss_weight = 0.0
+            self.direction_threshold = 0.0
+            self.midprice_index = -1
         if self.use_regime:
             self.regime_head = RegimeHead(
                 hidden_dim=self.hidden_state_dim,
@@ -564,7 +582,24 @@ class WorldModel(nn.Module):
             # Compute dynamics and representation KL losses.
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
-            total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
+            # Auxiliary directional supervision: predict next-tick midprice direction
+            # from the prior hidden state. Forces the latent to encode predictive
+            # information, not just reconstructive information.
+            if self.use_direction_head:
+                mid_norm = obs[..., self.midprice_index]
+                direction_targets, _ = DirectionHead.make_targets(mid_norm, self.direction_threshold)
+                direction_logits = self.direction_head(conditioned_dist_feat[:, :-1])
+                direction_loss = F.cross_entropy(
+                    direction_logits.reshape(-1, direction_logits.shape[-1]),
+                    direction_targets.reshape(-1),
+                )
+            else:
+                direction_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            total_loss = (
+                reconstruction_loss + reward_loss + termination_loss
+                + dynamics_loss + 0.1 * representation_loss
+                + self.direction_loss_weight * direction_loss
+            )
 
         # Catch bf16 selective_scan blowups during early training. Skipping the
         # backward + step here keeps the rest of the run salvageable instead of
@@ -579,7 +614,7 @@ class WorldModel(nn.Module):
                 )
             self.optimizer.zero_grad(set_to_none=True)
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-            return (zero, zero, zero, zero, zero, zero, zero, zero)
+            return (zero, zero, zero, zero, zero, zero, zero, zero, zero)
         self._nan_skip_count = 0
 
         # Apply gradient update.
@@ -594,9 +629,9 @@ class WorldModel(nn.Module):
             self.warmup_scheduler.dampen()
 
         # Return detached tensors so the caller can stack and sync once per log step
-        # instead of paying 8 GPU-CPU syncs per call to update().
+        # instead of paying many GPU-CPU syncs per call to update().
         return (
             reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
-            representation_real_kl_div.detach(), total_loss.detach(),
+            representation_real_kl_div.detach(), direction_loss.detach(), total_loss.detach(),
         )

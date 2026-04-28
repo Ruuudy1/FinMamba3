@@ -6,6 +6,55 @@ from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+class DirectionHead(nn.Module):
+    """Three-class head over next-tick midprice direction (down / flat / up).
+
+    Forces the Mamba hidden state to encode predictive information about price
+    movement, not just reconstructive information about the current tick. The
+    target sign is derived inline from the normalized midprice channel of the
+    obs vector, so no replay-buffer change is required.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_classes: int = 3,
+        dropout: float = 0.0,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+    ) -> None:
+        super().__init__()
+        factory = {"dtype": dtype, "device": device}
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
+        self.act = nn.SiLU()
+        self.head = nn.Linear(hidden_dim // 2, num_classes, **factory)
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        h = self.act(self.proj(self.dropout(hidden)))
+        return self.head(h)
+
+    @staticmethod
+    def make_targets(
+        mid_norm: torch.Tensor, threshold: float = 1.0e-2
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Three-class targets from the normalized midprice tensor.
+
+        mid_norm shape: (B, L). Returns (targets, mask) both (B, L-1) — the
+        target at position t corresponds to the change from tick t to t+1, so
+        the head must use hidden_state[:, :-1] to predict it.
+        Class 0 = down, 1 = flat, 2 = up. Mask is always True; threshold
+        controls how aggressively small moves get bucketed as 'flat'.
+        """
+        dmid = mid_norm[:, 1:] - mid_norm[:, :-1]
+        targets = torch.full_like(dmid, fill_value=1, dtype=torch.long)
+        targets = torch.where(dmid > threshold, torch.full_like(targets, 2), targets)
+        targets = torch.where(dmid < -threshold, torch.full_like(targets, 0), targets)
+        mask = torch.ones_like(targets, dtype=torch.bool)
+        return targets, mask
 
 
 class RegimeHead(nn.Module):

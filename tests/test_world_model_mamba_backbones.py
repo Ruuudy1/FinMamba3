@@ -79,6 +79,9 @@ def _small_config(backbone="Mamba3"):
     wm["Mamba3"]["d_state"] = 8
     wm["Mamba3"]["headdim"] = 16
     wm["Mamba3"]["chunk_size"] = 4
+    # Disable optional auxiliary heads for backbone unit tests; they are
+    # exercised end-to-end in the integration smoke test.
+    wm.setdefault("Direction", {})["Enabled"] = False
 
     from config_utils import DotDict
 
@@ -135,6 +138,25 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         action = torch.zeros(1, 3)
         out = model.sequence_model(latent, action)
         self.assertEqual(tuple(out.shape), (1, 3, config.Models.WorldModel.HiddenStateDim))
+
+    def test_direction_head_path_runs_finite(self):
+        from sub_models.world_models import WorldModel
+
+        config = _small_config("Mamba3")
+        config.Models.WorldModel.Direction.Enabled = True
+        config.Models.WorldModel.Direction.NumClasses = 3
+        config.Models.WorldModel.Direction.LossWeight = 0.5
+        config.Models.WorldModel.Direction.Threshold = 0.01
+        config.Models.WorldModel.Direction.Dropout = 0.0
+        model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
+        self.assertTrue(model.use_direction_head)
+        obs = torch.randn(2, 4, config.BasicSettings.FeatureDim)
+        action = torch.zeros(2, 4)
+        reward = torch.zeros(2, 4)
+        termination = torch.zeros(2, 4)
+        losses = model.update(obs, action, reward, termination, 0, 0)
+        self.assertEqual(len(losses), 9)  # 8 base losses + direction_loss
+        self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 
 
 if __name__ == "__main__":
