@@ -117,6 +117,9 @@ class EpisodicMemory:
         self.keys = torch.empty((0, self.key_dim), dtype=torch.float32)
         self.values = torch.empty((0, self.value_dim), dtype=torch.float32)
 
+    def __len__(self) -> int:
+        return int(self.keys.shape[0])
+
     def add(self, keys: torch.Tensor, values: torch.Tensor) -> None:
         keys = keys.detach().float().cpu().reshape(-1, self.key_dim)
         values = values.detach().float().cpu().reshape(-1, self.value_dim)
@@ -138,3 +141,29 @@ class EpisodicMemory:
             values=fused.reshape(*query.shape[:-1], self.value_dim).to(query.device),
             weights=weights.reshape(*query.shape[:-1], -1).to(query.device),
         )
+
+
+class EpisodicMemoryFuser(nn.Module):
+    """Gated residual fusion of a retrieved memory value into the Mamba hidden state.
+
+    Mirrors the RegimeConditioner pattern: the gate decides per-feature how much
+    of the retrieved context to inject. The retrieved value has no gradients, but
+    the gate and projection are learned.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        memory_dim: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+    ) -> None:
+        super().__init__()
+        factory = {"dtype": dtype, "device": device}
+        self.proj = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
+        self.gate = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
+
+    def forward(self, hidden: torch.Tensor, memory_value: torch.Tensor) -> torch.Tensor:
+        x = torch.cat([hidden, memory_value], dim=-1)
+        gate = torch.sigmoid(self.gate(x))
+        return hidden + gate * torch.tanh(self.proj(x))

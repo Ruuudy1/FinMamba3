@@ -1,3 +1,7 @@
+# Ablation config: identical to configure_lob.yaml except EpisodicMemory is on.
+# Run this alongside the baseline to A/B the thesis claim that retrieval-augmented
+# state helps under non-stationary LOB regimes. Compare WorldModel/reconstruction_loss,
+# WorldModel/direction_loss, and Val/mid_direction_accuracy curves between runs.
 BasicSettings:
   ObsMode: features
   FeatureDim: 94          # K(10) * F_level(8) + F_tick(14)
@@ -127,7 +131,7 @@ Models:
       NumRegimes: 8
       EmbedDim: 32
     EpisodicMemory:
-      Enabled: False                # Default off; baseline run for the A/B.
+      Enabled: True                 # Ablation: episodic-memory fusion is the thesis novelty.
       Capacity: 50000               # Number of past hidden states retained on CPU.
       TopK: 4                       # Nearest neighbours fused per query.
       MinFillBeforeRetrieve: 1024   # Skip retrieval until the buffer has this many entries.
@@ -184,5 +188,5 @@ Models:
 Wandb:
   Init:
     Mode: offline
-    Project: Drama_LOB_pretrain
-n: lob
+    Project: Drama_LOB_pretrain_em
+n: lob_em

@@ -10,7 +10,13 @@ from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
 from sub_models.fin_mamba import FinMambaSequenceModel
-from sub_models.lob_auxiliary import DirectionHead, RegimeConditioner, RegimeHead
+from sub_models.lob_auxiliary import (
+    DirectionHead,
+    EpisodicMemory,
+    EpisodicMemoryFuser,
+    RegimeConditioner,
+    RegimeHead,
+)
 from sub_models.lob_encoder import LOBDecoder, LOBEncoder, LOBReconstructionLoss
 import agents
 from tools import weight_init
@@ -305,6 +311,32 @@ class WorldModel(nn.Module):
             self.regime_head = None
             self.regime_conditioner = None
 
+        em_cfg = getattr(config.Models.WorldModel, 'EpisodicMemory', None)
+        self.use_episodic_memory = bool(em_cfg is not None and getattr(em_cfg, 'Enabled', False))
+        if self.use_episodic_memory:
+            self.episodic_memory = EpisodicMemory(
+                key_dim=self.hidden_state_dim,
+                value_dim=self.hidden_state_dim,
+                capacity=int(getattr(em_cfg, 'Capacity', 50_000)),
+            )
+            self.episodic_memory_fuser = EpisodicMemoryFuser(
+                hidden_dim=self.hidden_state_dim,
+                memory_dim=self.hidden_state_dim,
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
+            self.memory_topk = int(getattr(em_cfg, 'TopK', 4))
+            self.memory_min_fill = int(getattr(em_cfg, 'MinFillBeforeRetrieve', 1024))
+            self.memory_retrieve_every = int(getattr(em_cfg, 'RetrieveEvery', 4))
+            self._memory_steps_since_retrieve = self.memory_retrieve_every
+        else:
+            self.episodic_memory = None
+            self.episodic_memory_fuser = None
+            self.memory_topk = 0
+            self.memory_min_fill = 0
+            self.memory_retrieve_every = 0
+            self._memory_steps_since_retrieve = 0
+
         self.reconstruction_loss_func = LOBReconstructionLoss(
             k_levels=enc_cfg.K,
             f_level=enc_cfg.FeatureDimLevel,
@@ -565,6 +597,21 @@ class WorldModel(nn.Module):
             else:
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
+            # Optional episodic-memory fusion: retrieve top-K nearest past hidden
+            # states using the most recent step as the query, broadcast and fuse
+            # via gated residual. Retrieval cost is CPU-bound; throttle with
+            # RetrieveEvery and skip until the memory has MinFillBeforeRetrieve
+            # entries so retrieval over a near-empty buffer doesn't waste compute.
+            if self.use_episodic_memory and len(self.episodic_memory) >= self.memory_min_fill:
+                self._memory_steps_since_retrieve += 1
+                if self._memory_steps_since_retrieve >= self.memory_retrieve_every:
+                    self._memory_steps_since_retrieve = 0
+                    query = conditioned_dist_feat[:, -1].detach()
+                    mem_batch = self.episodic_memory.retrieve(query, k=self.memory_topk)
+                    if mem_batch is not None:
+                        mem_value = mem_batch.values.to(dtype=conditioned_dist_feat.dtype)
+                        mem_value = mem_value.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1], -1)
+                        conditioned_dist_feat = self.episodic_memory_fuser(conditioned_dist_feat, mem_value)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
             # Compute observation loss.
             reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
@@ -627,6 +674,13 @@ class WorldModel(nn.Module):
             self.optimizer.zero_grad(set_to_none=True)
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
+
+        # Side-effect: stash the last-frame hidden state per batch element into
+        # episodic memory. One entry per sequence keeps the CPU buffer manageable
+        # (B entries/step) while still building a representative regime catalog.
+        if self.use_episodic_memory:
+            last_hidden = conditioned_dist_feat[:, -1].detach()
+            self.episodic_memory.add(last_hidden, last_hidden)
 
         # Return detached tensors so the caller can stack and sync once per log step
         # instead of paying many GPU-CPU syncs per call to update().

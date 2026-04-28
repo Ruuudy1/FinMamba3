@@ -139,6 +139,28 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         out = model.sequence_model(latent, action)
         self.assertEqual(tuple(out.shape), (1, 3, config.Models.WorldModel.HiddenStateDim))
 
+    def test_episodic_memory_path_runs_finite(self):
+        from sub_models.world_models import WorldModel
+
+        config = _small_config("Mamba3")
+        em = config.Models.WorldModel.EpisodicMemory
+        em.Enabled = True
+        em.Capacity = 64
+        em.TopK = 2
+        em.MinFillBeforeRetrieve = 0
+        em.RetrieveEvery = 1
+        model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
+        self.assertTrue(model.use_episodic_memory)
+        obs = torch.randn(2, 4, config.BasicSettings.FeatureDim)
+        action = torch.zeros(2, 4)
+        reward = torch.zeros(2, 4)
+        termination = torch.zeros(2, 4)
+        # First call populates memory; second call should retrieve and fuse.
+        model.update(obs, action, reward, termination, 0, 0)
+        self.assertGreater(len(model.episodic_memory), 0)
+        losses = model.update(obs, action, reward, termination, 1, 0)
+        self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
     def test_direction_head_path_runs_finite(self):
         from sub_models.world_models import WorldModel
 
