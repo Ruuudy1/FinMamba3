@@ -11,19 +11,22 @@ Use exactly one notebook:
 
 `notebooks/colab_lob_pretrain.ipynb`
 
+The notebook works on any CUDA GPU (H100, L4, A100, T4). H100 is recommended.
+
 In Colab:
 
-1. Runtime -> Change runtime type -> A100 GPU.
+1. Set the runtime to a GPU instance (Runtime, Change runtime type).
 2. Open `notebooks/colab_lob_pretrain.ipynb`.
 3. Confirm `REPO_URL = "https://github.com/Ruuudy1/FinDrama.git"` and
-   `BRANCH = "dev-mamba3-mimo"` in the first code cell, and optionally set `DATA_ZIP`.
-4. Run cells top to bottom.
-5. Start with `SMOKE_TEST = True`; after one short update and validation print
-   complete, set it back to `False` for the full `20_000` step run.
+   `BRANCH = "dev-mamba3-mimo"` in the first code cell.
+4. Add your `HF_TOKEN` to Colab Secrets (key icon, left sidebar). The token
+   needs write access to upload compiled wheels.
+5. Run cells top to bottom.
+6. Start with `SMOKE_TEST = True`. After one short update and validation print
+   complete, set it to `False` for the full 20,000-step run.
 
-The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d`, source
-installs upstream Mamba3, extracts the data bundle into `data/train` and
-`data/validation`, then runs:
+The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
+`mamba-ssm` from source, downloads the data bundle automatically, and runs:
 
 ```bash
 python -B src/train_lob.py --hours-train 6 --hours-val 1 --JointTrainAgent.SampleMaxSteps 20000
@@ -35,34 +38,35 @@ Checkpoints are written under:
 saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
-The final notebook cell copies `saved_models/lob` to Google Drive.
+The final notebook cell uploads `saved_models/lob` to the HuggingFace dataset
+repo at `ruuudy/FinDrama` under `checkpoints/lob/`.
 
-The Mamba3 install cell caches pip downloads and compiled CUDA wheels under:
+## Wheel Cache
 
-```text
-MyDrive/FinDrama/colab_cache/
-```
+Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached on HuggingFace
+so later runtimes skip the source build:
 
-The first T4/A100 run can still be slow because Mamba3 is source-built, but
-later runtimes on the same Python/Torch/CUDA/GPU combination reuse the cached
-`causal-conv1d` and `mamba-ssm` wheels. Set `FORCE_REBUILD_WHEELS = True` in
-the first notebook cell after changing the dependency stack or if a cached
-wheel becomes stale.
+https://huggingface.co/datasets/ruuudy/FinDrama/tree/main
+
+Wheels are keyed by Python version, PyTorch version, CUDA version, and GPU
+architecture (for example `wheels-py312-torch260-cu124-sm90`). The first run
+on a new GPU type builds and uploads; subsequent runs pull and install in
+seconds.
+
+Set `FORCE_REBUILD_WHEELS = True` in the first notebook cell to force a fresh
+build after updating the dependency stack or if a cached wheel becomes stale.
 
 ## Data
 
-The pretraining dataset is hosted on Google Drive:
+The pretraining dataset is a public Google Drive folder:
 
-[drive.google.com/drive/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz](https://drive.google.com/drive/u/0/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz)
+https://drive.google.com/drive/u/0/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz
 
-Download `train.tar.zip` and `validation.tar.zip` into the same Drive folder, then
-set `DATA_ZIP` in the notebook's first cell:
+The notebook downloads it automatically via `gdown`. No manual step is needed.
+Leave `DATA_ZIP = ""` in the first cell unless you are providing a local zip.
 
-```python
-DATA_ZIP = "/content/drive/MyDrive/FinDrama/data/train.tar.zip"
-```
-
-The notebook extracts both splits automatically.
+The folder contains `train.tar.zip` and `validation.tar.zip`. The notebook
+extracts both splits into `data/train` and `data/validation`.
 
 ## Local Smoke Test
 
@@ -126,8 +130,8 @@ tests/
 - `train_lob.py` no longer imports `gym` or the removed Atari path.
 - Normalized LOB features are clipped and checked before training.
 - `Backbone: Mamba3` is the default. Full-sequence Phase A pretraining is the
-  supported T4/A100 path; Phase B imagination uses full-prefix recomputation
-  rather than Mamba3 step/inference-cache kernels.
-- If the local short run fails while importing `mamba_ssm.modules.mamba3`, the
+  supported path; Phase B imagination uses full-prefix recomputation rather
+  than Mamba3 step/inference-cache kernels.
+- If a local run fails while importing `mamba_ssm.modules.mamba3`, the
   upstream source install is missing or was built against a different PyTorch
   CUDA wheel.
