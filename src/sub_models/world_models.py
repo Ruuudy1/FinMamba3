@@ -396,9 +396,8 @@ class WorldModel(nn.Module):
             self.settlement_head = None
             self.settlement_loss_weight = 0.0
 
-        # Multi-threshold direction sweep: when DirectionThresholds is a list,
-        # the direction loss is computed at each threshold and averaged. This
-        # replaces the single-threshold (1%) target with a curve over thresholds.
+        # When DirectionThresholds is a list, the direction loss is computed at each threshold and averaged.
+        # This replaces the single-threshold (1%) target with a curve over thresholds.
         self.direction_thresholds = getattr(config.Models.WorldModel, 'DirectionThresholds', None)
         if isinstance(self.direction_thresholds, (list, tuple)):
             self.direction_thresholds = [float(t) for t in self.direction_thresholds]
@@ -443,8 +442,8 @@ class WorldModel(nn.Module):
             "cuda",
             enabled=self.use_amp and config.Models.WorldModel.dtype is not torch.bfloat16,
         )
-        # Watch for selective_scan/Mamba3 instability under bf16 autocast for the
-        # first NaNGuardSteps updates. After that we trust the run.
+        # Watch for selective_scan and Mamba3 instability under bf16 autocast for the first NaNGuardSteps updates.
+        # After that we trust the run.
         self.nan_guard_steps = int(getattr(config.Models.WorldModel, 'NaNGuardSteps', 50))
         self._nan_skip_count = 0
 
@@ -666,8 +665,8 @@ class WorldModel(nn.Module):
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
-            # Reconstruct observations from samples. The decoder returns the flat
-            # feature vector under MSE, or (mean, log_scale) under Student-t.
+            # Reconstruct observations from samples.
+            # The decoder returns the flat feature vector under MSE, or (mean, log_scale) under Student-t.
             decoder_out = self.obs_decoder(flattened_sample)
             if self.decoder_kind == 'studentt':
                 obs_hat_mean, obs_hat_log_scale = decoder_out
@@ -681,11 +680,9 @@ class WorldModel(nn.Module):
             else:
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
-            # Optional episodic-memory fusion: retrieve top-K nearest past hidden
-            # states using the most recent step as the query, broadcast and fuse
-            # via gated residual. Retrieval cost is CPU-bound; throttle with
-            # RetrieveEvery and skip until the memory has MinFillBeforeRetrieve
-            # entries so retrieval over a near-empty buffer doesn't waste compute.
+            # Episodic-memory fusion retrieves top-K nearest past hidden states using the most recent step as the query.
+            # Retrieved values are broadcast across the sequence and fused via a gated residual.
+            # Retrieval is CPU-bound, so it is throttled by RetrieveEvery and skipped until the memory holds MinFillBeforeRetrieve entries.
             if self.use_episodic_memory and len(self.episodic_memory) >= self.memory_min_fill:
                 self._memory_steps_since_retrieve += 1
                 if self._memory_steps_since_retrieve >= self.memory_retrieve_every:
@@ -697,8 +694,8 @@ class WorldModel(nn.Module):
                         mem_value = mem_value.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1], -1)
                         conditioned_dist_feat = self.episodic_memory_fuser(conditioned_dist_feat, mem_value)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
-            # Compute observation loss. Student-t uses negative log-likelihood
-            # over (mean, log_scale); MSE uses the existing weighted MSE.
+            # Compute observation loss.
+            # Student-t uses negative log-likelihood over (mean, log_scale), and MSE uses the existing weighted MSE.
             if self.decoder_kind == 'studentt':
                 reconstruction_loss = self.reconstruction_loss_func(
                     self.obs_decoder,
@@ -722,15 +719,14 @@ class WorldModel(nn.Module):
             # Compute dynamics and representation KL losses.
             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
-            # Auxiliary directional supervision: predict next-tick midprice direction
-            # from the prior hidden state. Forces the latent to encode predictive
-            # information, not just reconstructive information.
+            # Auxiliary directional supervision predicts the next-tick midprice direction from the prior hidden state.
+            # The cross-entropy term forces the latent to encode predictive information rather than only reconstructive information.
             if self.use_direction_head:
                 mid_norm = obs[..., self.midprice_index]
                 direction_logits = self.direction_head(conditioned_dist_feat[:, :-1])
                 if self.direction_thresholds is not None:
-                    # Multi-threshold sweep: average cross-entropy across the
-                    # threshold curve so the head is not pinned to a single bucket.
+                    # Multi-threshold sweep averages cross-entropy across the threshold curve.
+                    # This stops the head from being pinned to a single bucket.
                     losses = []
                     for thr in self.direction_thresholds:
                         targets, _ = DirectionHead.make_targets(mid_norm, float(thr))
@@ -749,9 +745,8 @@ class WorldModel(nn.Module):
                     )
             else:
                 direction_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
-            # Hawkes intensity auxiliary: predict log-intensity for buy/sell
-            # arrivals. Only contributes when event_counts is provided by the
-            # data pipeline (shape (B, L, 2): buy and sell counts per tick or bar).
+            # Hawkes intensity auxiliary predicts log-intensity for buy and sell arrivals.
+            # The term only contributes when event_counts is provided with shape (B, L, 2) for buy and sell counts per tick or bar.
             if self.use_hawkes_head and event_counts is not None:
                 hawkes_logits = self.hawkes_head(conditioned_dist_feat)
                 hawkes_loss = HawkesIntensityHead.poisson_nll(
@@ -759,9 +754,8 @@ class WorldModel(nn.Module):
                 )
             else:
                 hawkes_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
-            # Settlement auxiliary: predict the binary contract outcome from
-            # the latent. Only contributes when outcome is provided as a
-            # broadcastable scalar per sequence (shape (B,) or (B, L)).
+            # Settlement auxiliary predicts the binary contract outcome from the latent.
+            # The term only contributes when outcome is provided as a broadcastable scalar per sequence with shape (B,) or (B, L).
             if self.use_settlement_head and outcome is not None:
                 settle_logits = self.settlement_head(conditioned_dist_feat).reshape(-1)
                 outcome_flat = outcome.reshape(-1).to(dtype=settle_logits.dtype)
@@ -782,9 +776,8 @@ class WorldModel(nn.Module):
                 + self.settlement_loss_weight * settlement_loss
             )
 
-        # Catch bf16 selective_scan blowups during early training. Skipping the
-        # backward + step here keeps the rest of the run salvageable instead of
-        # propagating NaN parameters everywhere.
+        # Catch bf16 selective_scan blowups during early training.
+        # Skipping the backward and optimizer step here keeps the rest of the run salvageable instead of propagating NaN parameters everywhere.
         if global_step < self.nan_guard_steps and not torch.isfinite(total_loss):
             self._nan_skip_count += 1
             if self._nan_skip_count >= 5:
@@ -809,16 +802,14 @@ class WorldModel(nn.Module):
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
 
-        # Side-effect: stash the last-frame hidden state per batch element into
-        # episodic memory. One entry per sequence keeps the CPU buffer manageable
-        # (B entries/step) while still building a representative regime catalog.
+        # Stash the last-frame hidden state per batch element into episodic memory.
+        # One entry per sequence keeps the CPU buffer manageable while still building a representative regime catalog.
         if self.use_episodic_memory:
             last_hidden = conditioned_dist_feat[:, -1].detach()
             novelty = None
             if getattr(self, 'memory_use_novelty', False):
-                # Novelty score = symmetric KL between posterior and prior over
-                # the last step. High KL means the observation surprised the
-                # prior, so the entry is worth catalogging.
+                # Novelty score is the symmetric KL between posterior and prior at the last step.
+                # High KL means the observation surprised the prior, so the entry is worth cataloguing.
                 with torch.no_grad():
                     p = post_logits[:, -1].detach()
                     q = prior_logits[:, -1].detach()
@@ -829,8 +820,8 @@ class WorldModel(nn.Module):
                     novelty = (kl_pq + kl_qp).reshape(-1)
             self.episodic_memory.add(last_hidden, last_hidden, novelty=novelty)
 
-        # Return detached tensors so the caller can stack and sync once per log step
-        # instead of paying many GPU-CPU syncs per call to update().
+        # Return detached tensors so the caller can stack and sync once per log step.
+        # This avoids paying many GPU-CPU syncs per call to update.
         return (
             reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),

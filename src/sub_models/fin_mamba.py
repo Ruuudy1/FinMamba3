@@ -134,9 +134,9 @@ class FinMambaSequenceModel(nn.Module):
         self.d_model = d_model
         self.block_type = block_type
         self.dropout_p = dropout_p
-        # Use_action_input gates the one-hot action concat in forward. Phase A
-        # pretraining feeds zero actions, so the embedding gradient is degenerate
-        # and the path adds noise without signal. Disable for Phase A runs.
+        # The use_action_input flag gates the one-hot action concat in forward.
+        # Phase A pretraining feeds zero actions, so the embedding gradient is degenerate and the path adds noise without signal.
+        # Set this flag to False for Phase A runs.
         self.use_action_input = bool(use_action_input)
         ssm_cfg = dict(ssm_cfg or {})
         factory = {"device": device, "dtype": dtype}
@@ -186,8 +186,8 @@ class FinMambaSequenceModel(nn.Module):
         else:
             hidden_states = self.stem(samples)
 
-        # Mamba3 single-token cache/step kernels are intentionally bypassed on
-        # T4/A100 compatibility runs; full-prefix recomputation calls this path.
+        # Mamba3 single-token cache and step kernels are intentionally bypassed on T4 and A100 compatibility runs.
+        # Full-prefix recomputation calls this path instead.
         if self.block_type == "Mamba3":
             inference_params = None
 

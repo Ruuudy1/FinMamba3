@@ -83,11 +83,11 @@ DEFAULT_TICK_STD_FLOOR = np.asarray(
 @dataclass
 class LOBSequence:
     market_slug: str
-    per_level: np.ndarray  # (T, K_LEVELS, F_LEVEL) float32
-    per_tick: np.ndarray   # (T, F_TICK) float32
-    midprice: np.ndarray   # (T,) float32, raw unnormalized mid
-    ts_sec: np.ndarray     # (T,) int64
-    yes_outcome: np.ndarray | None = None  # (T,) float32 in {0, 1}, or nan if unknown
+    per_level: np.ndarray  # Shape (T, K_LEVELS, F_LEVEL) float32.
+    per_tick: np.ndarray   # Shape (T, F_TICK) float32.
+    midprice: np.ndarray   # Shape (T,) float32, raw unnormalized mid.
+    ts_sec: np.ndarray     # Shape (T,) int64.
+    yes_outcome: np.ndarray | None = None  # Shape (T,) float32 in {0, 1}, or nan if unknown.
 
     def to_flat(self) -> np.ndarray:
         T = self.per_level.shape[0]
@@ -320,9 +320,8 @@ def fit_normalization(
     pl_std = np.maximum(pl.std(axis=0), DEFAULT_LEVEL_STD_FLOOR).astype(np.float32)
     pt_std = np.maximum(pt.std(axis=0), DEFAULT_TICK_STD_FLOOR).astype(np.float32)
 
-    # Level index and side are deterministic token metadata. Keep their
-    # bounded encodings directly instead of turning tiny distribution shifts
-    # into large z-scores.
+    # Level index and side are deterministic token metadata.
+    # Their bounded encodings are kept directly to avoid turning tiny distribution shifts into large z-scores.
     for idx in LEVEL_DETERMINISTIC_INDICES:
         pl_mean[idx] = 0.0
         pl_std[idx] = 1.0

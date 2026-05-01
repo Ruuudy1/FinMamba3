@@ -38,8 +38,8 @@ def train_world_model_step(
     global_step,
     accum_steps: int = 1,
 ):
-    # Accumulate as on-device tensors per epoch to avoid per-step GPU-CPU syncs;
-    # convert to floats once at the end of the function for logging.
+    # Accumulate on-device tensors per epoch to avoid per-step GPU-CPU syncs.
+    # Convert to floats once at the end of the function for logging.
     epoch_means: dict[str, list[float]] = {name: [] for name in _LOSS_NAMES}
     for e in range(epoch):
         accum_stacks: list[list[torch.Tensor]] = [[] for _ in _LOSS_NAMES]

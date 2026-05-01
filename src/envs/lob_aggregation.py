@@ -206,17 +206,15 @@ def aggregate_array(
 
 
 # Default sum-mode indices for the project's 94-dim feature layout.
-# K=10 levels x F_LEVEL=8 = 80, then F_TICK=14. Tick layout (offset 80):
-# 0 mid, 1 spread, 2 log_spread, 3 imbalance, 4 microprice, 5 weighted_mid_disp,
-# 6 log_bid_vol, 7 log_ask_vol, 8 dmid, 9 dspread, 10 dimbalance,
-# 11 ofi_top, 12 trade_intensity, 13 rolling_vol.
+# Layout: K=10 levels times F_LEVEL=8 equals 80, then F_TICK=14 tick features.
+# Tick offsets after 80: 0 mid, 1 spread, 2 log_spread, 3 imbalance, 4 microprice, 5 weighted_mid_disp, 6 log_bid_vol, 7 log_ask_vol, 8 dmid, 9 dspread, 10 dimbalance, 11 ofi_top, 12 trade_intensity, 13 rolling_vol.
 DEFAULT_TICK_BASE = 80
 DEFAULT_MID_INDEX = DEFAULT_TICK_BASE + 0
 DEFAULT_BID_VOL_INDEX = DEFAULT_TICK_BASE + 6
 DEFAULT_SUM_INDICES: tuple[int, ...] = (
-    DEFAULT_TICK_BASE + 8,   # dmid
-    DEFAULT_TICK_BASE + 9,   # dspread
-    DEFAULT_TICK_BASE + 10,  # dimbalance
-    DEFAULT_TICK_BASE + 11,  # ofi_top
-    DEFAULT_TICK_BASE + 12,  # trade_intensity
+    DEFAULT_TICK_BASE + 8,   # Dmid.
+    DEFAULT_TICK_BASE + 9,   # Dspread.
+    DEFAULT_TICK_BASE + 10,  # Dimbalance.
+    DEFAULT_TICK_BASE + 11,  # OFI top.
+    DEFAULT_TICK_BASE + 12,  # Trade intensity.
 )

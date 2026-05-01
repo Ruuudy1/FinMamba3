@@ -64,8 +64,19 @@ build after updating the dependency stack or if a cached wheel becomes stale.
 
 ## Data
 
-The pretraining dataset is hosted on the same HuggingFace dataset repo that
-hosts the wheel cache. The recommended path is:
+The pretraining dataset is hosted on the HuggingFace dataset repo that also
+hosts the wheel cache. Both splits are stored under `data/`:
+
+```text
+ruuudy/FinDrama
+  data/
+    train.tar.zip
+    validation.tar.zip
+  wheels-py.../
+  checkpoints/lob/
+```
+
+Download both splits with `huggingface_hub`:
 
 ```python
 from huggingface_hub import snapshot_download
@@ -77,22 +88,18 @@ snapshot_download(
 )
 ```
 
-This replaces the older Google Drive path. Reasons for the migration:
-single auth (HF_TOKEN already required for wheels), git-versioned data with
-pinned revisions for reproducibility, Xet content-defined chunking so updates
-re-upload only changed bytes, and `datasets` library streaming for runs that
-should not download the full tar.
+Or use the helper in `src/utils_hf.py`:
 
-The fallback Google Drive folder is preserved for now while the HF mirror is
-populated:
+```python
+from utils_hf import download_data
+train_zip, val_zip = download_data(local_dir="./", revision=None)
+```
 
-https://drive.google.com/drive/u/0/folders/1fInfOLCJ9SAfRbghC67k1ppK_B5_Ucxz
+Pin a `revision` in calling code for reproducibility. Authentication: the
+HF token is read from the `HF_TOKEN` environment variable or the standard
+HuggingFace cache. The notebook reads the same token from Colab Secrets.
 
-The notebook downloads either source automatically. Leave `DATA_ZIP = ""` in
-the first cell unless you are providing a local zip.
-
-The folder contains `train.tar.zip` and `validation.tar.zip`. The notebook
-extracts both splits into `data/train` and `data/validation`.
+The notebook extracts both archives into `data/train` and `data/validation`.
 
 ## Local Smoke Test
 

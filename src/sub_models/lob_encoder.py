@@ -160,8 +160,8 @@ class LOBReconstructionLoss(nn.Module):
         tick_weight: float = 1.0,
     ) -> None:
         super().__init__()
-        # F_LEVEL dims: rel_price, log_size, cum_depth, vol_share, gap,
-        # lvl_idx, side, staleness. F_TICK dims defined in lob_features.py.
+        # F_LEVEL dims are rel_price, log_size, cum_depth, vol_share, gap, lvl_idx, side, staleness.
+        # F_TICK dims are defined in lob_features.py.
         level_w = torch.full((f_level,), level_weight, dtype=torch.float32)
         level_w[1] = size_weight
         level_w[2] = size_weight
@@ -243,7 +243,7 @@ class StudentTLOBDecoder(nn.Module):
         nu = self.log_nu.exp().clamp(min=2.1, max=200.0).to(mean.dtype)
         scale = log_scale.exp()
         z = (target - mean) / scale
-        # log Student-t density.
+        # Compute the log Student-t density.
         log_const = (
             torch.lgamma((nu + 1.0) / 2.0)
             - torch.lgamma(nu / 2.0)

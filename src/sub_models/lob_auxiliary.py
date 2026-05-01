@@ -43,7 +43,7 @@ class DirectionHead(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Three-class targets from the normalized midprice tensor.
 
-        mid_norm shape: (B, L). Returns (targets, mask) both (B, L-1) — the
+        mid_norm shape: (B, L). Returns (targets, mask) both (B, L-1). The
         target at position t corresponds to the change from tick t to t+1, so
         the head must use hidden_state[:, :-1] to predict it.
         Class 0 = down, 1 = flat, 2 = up. Mask is always True; threshold
