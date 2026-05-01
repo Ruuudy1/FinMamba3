@@ -53,6 +53,14 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
 
     sys.path = [path for path in sys.path if not _points_to_repo_src(path)]
     try:
+        import triton as _triton
+        if not hasattr(_triton, "set_allocator"):
+            # Pytorch-triton omits triton.set_allocator; mamba3_siso_fwd.py calls it at module level.
+            # The no-op stub is safe because pytorch-triton manages TMA descriptor memory internally.
+            _triton.set_allocator = lambda fn: None
+    except ImportError:
+        pass
+    try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
         raise ImportError(
