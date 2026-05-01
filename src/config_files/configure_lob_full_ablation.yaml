@@ -63,7 +63,7 @@ Models:
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
-    DirectionThresholds: null   # Set to e.g. [0.0001, 0.001, 0.005, 0.01] for a multi-threshold sweep.
+    DirectionThresholds: [0.0001, 0.001, 0.005, 0.01]   # Multi-threshold sweep so accuracy is reported as a curve.
     Dropout: 0.1
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
@@ -85,7 +85,7 @@ Models:
       AggregateOnly: False
       GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
-      Kind: mse              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.
+      Kind: studentt         # Heavy-tailed; honest noise model.
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0            # Student-t degrees of freedom; ignored for 'mse'.
@@ -132,18 +132,18 @@ Models:
       NumRegimes: 8
       EmbedDim: 32
     EpisodicMemory:
-      Enabled: False                # Default off; baseline run for the A/B.
-      Capacity: 50000               # Number of past hidden states retained on CPU.
-      TopK: 4                       # Nearest neighbours fused per query.
-      MinFillBeforeRetrieve: 1024   # Skip retrieval until the buffer has this many entries.
-      RetrieveEvery: 4              # CPU retrieval throttle (every N training steps).
-      UseNovelty: False             # When True, only writes whose KL novelty exceeds NoveltyThreshold are kept.
-      NoveltyThreshold: 0.0
+      Enabled: True
+      Capacity: 50000
+      TopK: 4
+      MinFillBeforeRetrieve: 1024
+      RetrieveEvery: 4
+      UseNovelty: True              # Filter writes by KL-novelty so the buffer becomes a regime catalog rather than a sliding window.
+      NoveltyThreshold: 1.0
     Hawkes:
-      Enabled: False                # Auxiliary Poisson NLL on buy/sell event counts; needs event_counts data.
+      Enabled: True
       LossWeight: 0.1
     Settlement:
-      Enabled: False                # Auxiliary BCE on the binary contract outcome; needs outcome labels.
+      Enabled: True
       LossWeight: 0.25
 
   Agent:

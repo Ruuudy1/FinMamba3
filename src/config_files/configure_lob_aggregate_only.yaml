@@ -82,7 +82,7 @@ Models:
       NumHeads: 4
       DimFeedforward: 256
       OutputFlattenDim: 1024
-      AggregateOnly: False
+      AggregateOnly: True            # Tick-aggregate features only; per-level depth is masked. Tests advisor's hypothesis.
       GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
       Kind: mse              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.

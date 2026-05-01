@@ -22,6 +22,8 @@ _LOSS_NAMES = (
     "representation_loss",
     "representation_real_kl_div",
     "direction_loss",
+    "hawkes_loss",
+    "settlement_loss",
     "total_loss",
 )
 

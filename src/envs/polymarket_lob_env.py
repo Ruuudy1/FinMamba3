@@ -97,6 +97,12 @@ class PolymarketLOBEnv(gym.Env):
         vol_scale: float = 0.01,
         max_position_shares: float = 1_000.0,
         reset_to_active: bool = True,
+        reward_kind: str = "default",
+        reward_settlement_weight: float = 1.0,
+        reward_risk_budget: float = 0.05,
+        reward_turnover_coef: float = 0.05,
+        reward_inventory_coef: float = 0.02,
+        reward_drawdown_coef: float = 0.10,
     ) -> None:
         super().__init__()
         if len(data.timeline) < 2:
@@ -111,6 +117,18 @@ class PolymarketLOBEnv(gym.Env):
         self.vol_scale = float(vol_scale)
         self.max_position_shares = float(max_position_shares)
         self.reset_to_active = bool(reset_to_active)
+        valid_kinds = {"default", "settlement_calibrated", "risk_budgeted"}
+        if reward_kind not in valid_kinds:
+            raise ValueError(
+                f"reward_kind must be one of {sorted(valid_kinds)}; got {reward_kind!r}"
+            )
+        self.reward_kind = reward_kind
+        self.reward_settlement_weight = float(reward_settlement_weight)
+        self.reward_risk_budget = float(reward_risk_budget)
+        self.reward_turnover_coef = float(reward_turnover_coef)
+        self.reward_inventory_coef = float(reward_inventory_coef)
+        self.reward_drawdown_coef = float(reward_drawdown_coef)
+        self._return_buffer: list[float] = []
 
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -187,11 +205,12 @@ class PolymarketLOBEnv(gym.Env):
         drawdown_increment = max(0.0, drawdown - self._drawdown)
         self._drawdown = drawdown
 
-        reward = (
-            math.tanh(delta_log / max(self.vol_scale, 1e-8))
-            - 0.05 * turnover
-            - 0.02 * inventory_frac ** 2
-            - 0.10 * drawdown_increment
+        reward = self._compute_reward(
+            delta_log=delta_log,
+            turnover=turnover,
+            inventory_frac=inventory_frac,
+            drawdown_increment=drawdown_increment,
+            settlements=settlements,
         )
 
         self._done = self._i >= len(self.data.timeline) - 1
@@ -210,6 +229,53 @@ class PolymarketLOBEnv(gym.Env):
             }
         )
         return self._observation(tick), float(reward), self._done, False, info
+
+    def _compute_reward(
+        self,
+        *,
+        delta_log: float,
+        turnover: float,
+        inventory_frac: float,
+        drawdown_increment: float,
+        settlements: list,
+    ) -> float:
+        """Dispatch over reward_kind variants.
+
+        - default: Atari-style PnL-tanh minus turnover, inventory, drawdown costs.
+        - settlement_calibrated: PnL-tanh plus a binary-outcome reward on every
+          settlement event, scaled by reward_settlement_weight. Captures the
+          contract structure absent from default.
+        - risk_budgeted: PnL-tanh divided by realized rolling volatility,
+          implementing a Sharpe-like reward (Cartea/Jaimungal style).
+        """
+        base_pnl = math.tanh(delta_log / max(self.vol_scale, 1e-8))
+        cost = (
+            self.reward_turnover_coef * turnover
+            + self.reward_inventory_coef * inventory_frac ** 2
+            + self.reward_drawdown_coef * drawdown_increment
+        )
+        if self.reward_kind == "default":
+            return base_pnl - cost
+        if self.reward_kind == "settlement_calibrated":
+            settle_reward = 0.0
+            for s in settlements:
+                payoff = float(getattr(s, "payoff", 0.0))
+                pos = float(getattr(s, "position_value", 0.0))
+                settle_reward += math.tanh((payoff - pos) / max(self.vol_scale, 1e-8))
+            return base_pnl + self.reward_settlement_weight * settle_reward - cost
+        if self.reward_kind == "risk_budgeted":
+            self._return_buffer.append(float(delta_log))
+            if len(self._return_buffer) > 64:
+                self._return_buffer = self._return_buffer[-64:]
+            if len(self._return_buffer) >= 8:
+                arr = np.asarray(self._return_buffer, dtype=np.float64)
+                realized = float(arr.std() + 1e-8)
+            else:
+                realized = max(self.vol_scale, 1e-8)
+            risk_scaled = math.tanh(delta_log / max(realized, 1e-8))
+            variance_penalty = self.reward_risk_budget * realized
+            return risk_scaled - variance_penalty - cost
+        raise RuntimeError(f"Unhandled reward_kind: {self.reward_kind}")
 
     def _first_active_index(self) -> int:
         for idx, tick in enumerate(self.data.timeline[:-1]):

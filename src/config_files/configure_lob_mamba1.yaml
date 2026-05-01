@@ -45,7 +45,7 @@ JointTrainAgent:
 Models:
   WorldModel:
     dtype: float32
-    Backbone: Mamba3
+    Backbone: Mamba
     Act: SiLU
     # DreamerV3 (Hafner et al. 2023) uses 32x32 = 1024 across every domain. We
     # shrink to 16x16 = 256 because the LOB-aggregate input is only 94 dims:

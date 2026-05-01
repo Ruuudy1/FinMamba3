@@ -125,6 +125,7 @@ class FinMambaSequenceModel(nn.Module):
         block_type: str,
         dropout_p: float = 0.0,
         ssm_cfg: dict | None = None,
+        use_action_input: bool = True,
         device=None,
         dtype=None,
     ) -> None:
@@ -133,6 +134,10 @@ class FinMambaSequenceModel(nn.Module):
         self.d_model = d_model
         self.block_type = block_type
         self.dropout_p = dropout_p
+        # Use_action_input gates the one-hot action concat in forward. Phase A
+        # pretraining feeds zero actions, so the embedding gradient is degenerate
+        # and the path adds noise without signal. Disable for Phase A runs.
+        self.use_action_input = bool(use_action_input)
         ssm_cfg = dict(ssm_cfg or {})
         factory = {"device": device, "dtype": dtype}
 
@@ -151,8 +156,9 @@ class FinMambaSequenceModel(nn.Module):
         else:
             raise ValueError(f"Unknown Mamba block_type: {block_type}")
 
+        stem_in = stoch_dim + action_dim if self.use_action_input else stoch_dim
         self.stem = nn.Sequential(
-            nn.Linear(stoch_dim + action_dim, d_model, bias=True, **factory),
+            nn.Linear(stem_in, d_model, bias=True, **factory),
             nn.RMSNorm(d_model, **factory),
             nn.SiLU(),
         )
@@ -174,8 +180,11 @@ class FinMambaSequenceModel(nn.Module):
         self.norm_f = nn.RMSNorm(d_model, **factory)
 
     def forward(self, samples, action, inference_params=None, **mixer_kwargs):
-        action = F.one_hot(action.long(), self.action_dim).to(dtype=samples.dtype)
-        hidden_states = self.stem(torch.cat([samples, action], dim=-1))
+        if self.use_action_input:
+            action = F.one_hot(action.long(), self.action_dim).to(dtype=samples.dtype)
+            hidden_states = self.stem(torch.cat([samples, action], dim=-1))
+        else:
+            hidden_states = self.stem(samples)
 
         # Mamba3 single-token cache/step kernels are intentionally bypassed on
         # T4/A100 compatibility runs; full-prefix recomputation calls this path.

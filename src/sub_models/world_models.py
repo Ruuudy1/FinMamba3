@@ -14,10 +14,18 @@ from sub_models.lob_auxiliary import (
     DirectionHead,
     EpisodicMemory,
     EpisodicMemoryFuser,
+    HawkesIntensityHead,
     RegimeConditioner,
     RegimeHead,
+    SettlementHead,
 )
-from sub_models.lob_encoder import LOBDecoder, LOBEncoder, LOBReconstructionLoss
+from sub_models.lob_encoder import (
+    LOBDecoder,
+    LOBEncoder,
+    LOBReconstructionLoss,
+    StudentTLOBDecoder,
+    StudentTReconstructionLoss,
+)
 import agents
 from tools import weight_init
 
@@ -225,6 +233,7 @@ class WorldModel(nn.Module):
                     'is_outproj_norm': mamba3_cfg.is_outproj_norm,
                     'rope_fraction': mamba3_cfg.rope_fraction,
                 },
+                use_action_input=bool(getattr(config.Models.WorldModel, 'UseActionInput', True)),
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -240,15 +249,34 @@ class WorldModel(nn.Module):
             unimix_ratio=config.Models.WorldModel.Unimix_ratio,
             dtype=config.Models.WorldModel.dtype, device=device
         )      
-        self.obs_decoder = LOBDecoder(
-            stoch_dim=self.stoch_flattened_dim,
-            hidden_dim=getattr(config.Models.WorldModel.Decoder, 'HiddenDim', 512),
-            num_layers=getattr(config.Models.WorldModel.Decoder, 'NumLayers', 3),
-            k_levels=enc_cfg.K,
-            f_level=enc_cfg.FeatureDimLevel,
-            f_tick=enc_cfg.FeatureDimTick,
-            dtype=config.Models.WorldModel.dtype, device=device,
-        )
+        decoder_kind = getattr(config.Models.WorldModel.Decoder, 'Kind', 'mse')
+        self.decoder_kind = decoder_kind
+        if decoder_kind == 'mse':
+            self.obs_decoder = LOBDecoder(
+                stoch_dim=self.stoch_flattened_dim,
+                hidden_dim=getattr(config.Models.WorldModel.Decoder, 'HiddenDim', 512),
+                num_layers=getattr(config.Models.WorldModel.Decoder, 'NumLayers', 3),
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+                dtype=config.Models.WorldModel.dtype, device=device,
+            )
+        elif decoder_kind == 'studentt':
+            self.obs_decoder = StudentTLOBDecoder(
+                stoch_dim=self.stoch_flattened_dim,
+                hidden_dim=getattr(config.Models.WorldModel.Decoder, 'HiddenDim', 512),
+                num_layers=getattr(config.Models.WorldModel.Decoder, 'NumLayers', 3),
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+                nu_init=float(getattr(config.Models.WorldModel.Decoder, 'NuInit', 5.0)),
+                learnable_nu=bool(getattr(config.Models.WorldModel.Decoder, 'LearnableNu', True)),
+                dtype=config.Models.WorldModel.dtype, device=device,
+            )
+        else:
+            raise ValueError(
+                f"Models.WorldModel.Decoder.Kind must be 'mse' or 'studentt'; got {decoder_kind!r}"
+            )
 
         self.use_reward_head = bool(getattr(config.Models.WorldModel.Reward, 'Enabled', True))
         self.use_termination_head = bool(getattr(config.Models.WorldModel.Termination, 'Enabled', True))
@@ -318,7 +346,9 @@ class WorldModel(nn.Module):
                 key_dim=self.hidden_state_dim,
                 value_dim=self.hidden_state_dim,
                 capacity=int(getattr(em_cfg, 'Capacity', 50_000)),
+                novelty_threshold=float(getattr(em_cfg, 'NoveltyThreshold', 0.0)),
             )
+            self.memory_use_novelty = bool(getattr(em_cfg, 'UseNovelty', False))
             self.episodic_memory_fuser = EpisodicMemoryFuser(
                 hidden_dim=self.hidden_state_dim,
                 memory_dim=self.hidden_state_dim,
@@ -336,12 +366,57 @@ class WorldModel(nn.Module):
             self.memory_min_fill = 0
             self.memory_retrieve_every = 0
             self._memory_steps_since_retrieve = 0
+            self.memory_use_novelty = False
 
-        self.reconstruction_loss_func = LOBReconstructionLoss(
-            k_levels=enc_cfg.K,
-            f_level=enc_cfg.FeatureDimLevel,
-            f_tick=enc_cfg.FeatureDimTick,
+        hawkes_cfg = getattr(config.Models.WorldModel, 'Hawkes', None)
+        self.use_hawkes_head = bool(hawkes_cfg is not None and getattr(hawkes_cfg, 'Enabled', False))
+        if self.use_hawkes_head:
+            self.hawkes_head = HawkesIntensityHead(
+                hidden_dim=self.hidden_state_dim,
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
+            self.hawkes_loss_weight = float(getattr(hawkes_cfg, 'LossWeight', 0.1))
+        else:
+            self.hawkes_head = None
+            self.hawkes_loss_weight = 0.0
+
+        settle_cfg = getattr(config.Models.WorldModel, 'Settlement', None)
+        self.use_settlement_head = bool(
+            settle_cfg is not None and getattr(settle_cfg, 'Enabled', False)
         )
+        if self.use_settlement_head:
+            self.settlement_head = SettlementHead(
+                hidden_dim=self.hidden_state_dim,
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
+            self.settlement_loss_weight = float(getattr(settle_cfg, 'LossWeight', 0.25))
+        else:
+            self.settlement_head = None
+            self.settlement_loss_weight = 0.0
+
+        # Multi-threshold direction sweep: when DirectionThresholds is a list,
+        # the direction loss is computed at each threshold and averaged. This
+        # replaces the single-threshold (1%) target with a curve over thresholds.
+        self.direction_thresholds = getattr(config.Models.WorldModel, 'DirectionThresholds', None)
+        if isinstance(self.direction_thresholds, (list, tuple)):
+            self.direction_thresholds = [float(t) for t in self.direction_thresholds]
+        else:
+            self.direction_thresholds = None
+
+        if self.decoder_kind == 'mse':
+            self.reconstruction_loss_func = LOBReconstructionLoss(
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+            )
+        else:
+            self.reconstruction_loss_func = StudentTReconstructionLoss(
+                k_levels=enc_cfg.K,
+                f_level=enc_cfg.FeatureDimLevel,
+                f_tick=enc_cfg.FeatureDimTick,
+            )
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
@@ -579,7 +654,10 @@ class WorldModel(nn.Module):
 
 
     def update(self, obs, action, reward, termination, global_step, epoch_step,
-               logger=None, accum_steps: int = 1, is_last_accum: bool = True):
+               logger=None, accum_steps: int = 1, is_last_accum: bool = True,
+               event_counts: torch.Tensor | None = None,
+               outcome: torch.Tensor | None = None,
+               time_to_expiry_frac: torch.Tensor | None = None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -588,8 +666,14 @@ class WorldModel(nn.Module):
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
-            # Reconstruct observations from samples.
-            obs_hat = self.obs_decoder(flattened_sample)
+            # Reconstruct observations from samples. The decoder returns the flat
+            # feature vector under MSE, or (mean, log_scale) under Student-t.
+            decoder_out = self.obs_decoder(flattened_sample)
+            if self.decoder_kind == 'studentt':
+                obs_hat_mean, obs_hat_log_scale = decoder_out
+                obs_hat = obs_hat_mean
+            else:
+                obs_hat = decoder_out
             # Compute sequence-model hidden states.
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
@@ -613,8 +697,17 @@ class WorldModel(nn.Module):
                         mem_value = mem_value.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1], -1)
                         conditioned_dist_feat = self.episodic_memory_fuser(conditioned_dist_feat, mem_value)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
-            # Compute observation loss.
-            reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
+            # Compute observation loss. Student-t uses negative log-likelihood
+            # over (mean, log_scale); MSE uses the existing weighted MSE.
+            if self.decoder_kind == 'studentt':
+                reconstruction_loss = self.reconstruction_loss_func(
+                    self.obs_decoder,
+                    obs_hat_mean[:batch_size],
+                    obs_hat_log_scale[:batch_size],
+                    obs[:batch_size],
+                )
+            else:
+                reconstruction_loss = self.reconstruction_loss_func(obs_hat[:batch_size], obs[:batch_size])
             # Predict reward and termination from the prior hidden state when their heads are enabled.
             if self.use_reward_head:
                 reward_hat = self.reward_decoder(conditioned_dist_feat)
@@ -634,18 +727,59 @@ class WorldModel(nn.Module):
             # information, not just reconstructive information.
             if self.use_direction_head:
                 mid_norm = obs[..., self.midprice_index]
-                direction_targets, _ = DirectionHead.make_targets(mid_norm, self.direction_threshold)
                 direction_logits = self.direction_head(conditioned_dist_feat[:, :-1])
-                direction_loss = F.cross_entropy(
-                    direction_logits.reshape(-1, direction_logits.shape[-1]),
-                    direction_targets.reshape(-1),
-                )
+                if self.direction_thresholds is not None:
+                    # Multi-threshold sweep: average cross-entropy across the
+                    # threshold curve so the head is not pinned to a single bucket.
+                    losses = []
+                    for thr in self.direction_thresholds:
+                        targets, _ = DirectionHead.make_targets(mid_norm, float(thr))
+                        losses.append(
+                            F.cross_entropy(
+                                direction_logits.reshape(-1, direction_logits.shape[-1]),
+                                targets.reshape(-1),
+                            )
+                        )
+                    direction_loss = torch.stack(losses).mean()
+                else:
+                    direction_targets, _ = DirectionHead.make_targets(mid_norm, self.direction_threshold)
+                    direction_loss = F.cross_entropy(
+                        direction_logits.reshape(-1, direction_logits.shape[-1]),
+                        direction_targets.reshape(-1),
+                    )
             else:
                 direction_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            # Hawkes intensity auxiliary: predict log-intensity for buy/sell
+            # arrivals. Only contributes when event_counts is provided by the
+            # data pipeline (shape (B, L, 2): buy and sell counts per tick or bar).
+            if self.use_hawkes_head and event_counts is not None:
+                hawkes_logits = self.hawkes_head(conditioned_dist_feat)
+                hawkes_loss = HawkesIntensityHead.poisson_nll(
+                    hawkes_logits, event_counts.to(dtype=hawkes_logits.dtype)
+                )
+            else:
+                hawkes_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            # Settlement auxiliary: predict the binary contract outcome from
+            # the latent. Only contributes when outcome is provided as a
+            # broadcastable scalar per sequence (shape (B,) or (B, L)).
+            if self.use_settlement_head and outcome is not None:
+                settle_logits = self.settlement_head(conditioned_dist_feat).reshape(-1)
+                outcome_flat = outcome.reshape(-1).to(dtype=settle_logits.dtype)
+                if outcome_flat.shape[0] != settle_logits.shape[0]:
+                    if outcome.dim() == 1:
+                        outcome_flat = outcome.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1]).reshape(-1).to(dtype=settle_logits.dtype)
+                ttf_flat = None
+                if time_to_expiry_frac is not None:
+                    ttf_flat = time_to_expiry_frac.reshape(-1).to(dtype=settle_logits.dtype)
+                settlement_loss = SettlementHead.bce(settle_logits, outcome_flat, ttf_flat)
+            else:
+                settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             total_loss = (
                 reconstruction_loss + reward_loss + termination_loss
                 + dynamics_loss + 0.1 * representation_loss
                 + self.direction_loss_weight * direction_loss
+                + self.hawkes_loss_weight * hawkes_loss
+                + self.settlement_loss_weight * settlement_loss
             )
 
         # Catch bf16 selective_scan blowups during early training. Skipping the
@@ -661,7 +795,7 @@ class WorldModel(nn.Module):
                 )
             self.optimizer.zero_grad(set_to_none=True)
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-            return (zero, zero, zero, zero, zero, zero, zero, zero, zero)
+            return (zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero)
         self._nan_skip_count = 0
 
         # Apply gradient update.
@@ -680,12 +814,26 @@ class WorldModel(nn.Module):
         # (B entries/step) while still building a representative regime catalog.
         if self.use_episodic_memory:
             last_hidden = conditioned_dist_feat[:, -1].detach()
-            self.episodic_memory.add(last_hidden, last_hidden)
+            novelty = None
+            if getattr(self, 'memory_use_novelty', False):
+                # Novelty score = symmetric KL between posterior and prior over
+                # the last step. High KL means the observation surprised the
+                # prior, so the entry is worth catalogging.
+                with torch.no_grad():
+                    p = post_logits[:, -1].detach()
+                    q = prior_logits[:, -1].detach()
+                    p_log_softmax = F.log_softmax(p, dim=-1)
+                    q_log_softmax = F.log_softmax(q, dim=-1)
+                    kl_pq = (p_log_softmax.exp() * (p_log_softmax - q_log_softmax)).sum(dim=(-1, -2))
+                    kl_qp = (q_log_softmax.exp() * (q_log_softmax - p_log_softmax)).sum(dim=(-1, -2))
+                    novelty = (kl_pq + kl_qp).reshape(-1)
+            self.episodic_memory.add(last_hidden, last_hidden, novelty=novelty)
 
         # Return detached tensors so the caller can stack and sync once per log step
         # instead of paying many GPU-CPU syncs per call to update().
         return (
             reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
-            representation_real_kl_div.detach(), direction_loss.detach(), total_loss.detach(),
+            representation_real_kl_div.detach(), direction_loss.detach(),
+            hawkes_loss.detach(), settlement_loss.detach(), total_loss.detach(),
         )

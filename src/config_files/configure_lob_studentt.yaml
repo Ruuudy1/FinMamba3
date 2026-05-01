@@ -85,7 +85,7 @@ Models:
       AggregateOnly: False
       GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
-      Kind: mse              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.
+      Kind: studentt         # Heavy-tailed log-likelihood; better noise model for cents-discretized prices.
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0            # Student-t degrees of freedom; ignored for 'mse'.
