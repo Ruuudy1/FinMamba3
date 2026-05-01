@@ -1,6 +1,6 @@
 # docker build -f Dockerfile -t drama .
 # Use the official PyTorch image as a base for GPU support
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
  
 # Set the working directory
 RUN mkdir /app
@@ -47,11 +47,12 @@ COPY requirements.txt .
 # Install Python packages
 RUN pip install --upgrade pip
 RUN pip install packaging
-RUN pip install torch==2.2.1
-# mamba-ssm and causal-conv1d compile CUDA extensions that require torch at build time.
-# --no-build-isolation lets them see the already-installed torch instead of an empty sandbox.
-RUN pip install causal-conv1d==1.2.0.post2 --no-build-isolation
-RUN pip install mamba-ssm==1.2.0.post1 --no-build-isolation
+RUN pip install "numpy>=2,<3"
+RUN pip install torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+# Mamba3 is source-install only. --no-build-isolation lets the build use the
+# active CUDA PyTorch wheel instead of pulling an isolated CPU torch.
+RUN pip install "causal-conv1d>=1.4.0" --no-build-isolation
+RUN MAMBA_FORCE_BUILD=TRUE pip install --no-cache-dir --force-reinstall git+https://github.com/state-spaces/mamba.git --no-build-isolation
 RUN pip install -r requirements.txt
  
 # Add your code to the container

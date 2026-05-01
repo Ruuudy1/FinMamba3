@@ -2,16 +2,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as distributions
-from mamba_ssm.ops.triton.layer_norm import RMSNorm
 import copy
 import numpy as np
 from sub_models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-# from nfnets import AGC
 
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
 from tools import layer_init
+
+RMSNorm = nn.RMSNorm
 
 def percentile(x, percentage):
     flat_x = torch.flatten(x)
@@ -20,11 +20,10 @@ def percentile(x, percentage):
     return per
 
 def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=torch.float32):
-    # Invert termination to have 0 if the episode ended and 1 otherwise
+    # Invert termination to have 0 if the episode ended and 1 otherwise.
     inv_termination = (termination * -1) + 1
 
     batch_size, batch_length = rewards.shape[:2]
-    # gae_step = torch.zeros((batch_size, ), dtype=dtype, device="cuda")
     gamma_return = torch.zeros((batch_size, batch_length+1), dtype=dtype, device=rewards.device)
     gamma_return[:, -1] = values[:, -1]
     for t in reversed(range(batch_length)):  # with last bootstrap
@@ -157,8 +156,7 @@ class ActorCriticAgent(nn.Module):
             )
         else:
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.AC.Optimiser}")
-        # self.optimizer = AGC(self.parameters(), self.optimizer)
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)  # No-op schedule; required to drive the warmup scheduler.
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
@@ -189,7 +187,7 @@ class ActorCriticAgent(nn.Module):
         return logits, raw_value
 
     def unimix(self, logits):
-        # uniform noise mixing
+        # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
             probs = F.softmax(logits, dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
@@ -213,9 +211,7 @@ class ActorCriticAgent(nn.Module):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
-        '''
-        Update policy and value model
-        '''
+        """Update policy and value model."""
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             logits, raw_value = self.get_logits_raw_value(latent)
@@ -223,20 +219,20 @@ class ActorCriticAgent(nn.Module):
             log_prob = dist.log_prob(action)
             entropy = dist.entropy()
 
-            # decode value, calc lambda return
+            # Decode value estimates and compute lambda returns.
             slow_value = self.slow_value(latent)
             slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
             value = self.symlog_twohot_loss.decode(raw_value)
             lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
 
-            # update value function with slow critic regularization
+            # Update value function with slow-critic regularization.
             value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
             slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
                 
             lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
             upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
             S = upper_bound-lower_bound
-            norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # max(1, S) in the paper
+            norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # Clip to 1 per the paper's max(1, S) formulation.
             norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
             policy_loss = -(log_prob * norm_advantage.detach()).mean()
 
@@ -244,9 +240,10 @@ class ActorCriticAgent(nn.Module):
 
             loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
 
-        # gradient descent
+        # Apply gradient descent step.
         self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.optimizer)  # for clip grad
+        self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
+
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -342,7 +339,7 @@ class PPOAgent(nn.Module):
             )
         else:
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.PPO.Optimiser}")
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0) # No lr schedule but neccessary for the warm up
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)  # No-op schedule; required to drive the warmup scheduler.
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.PPO.Warmup_steps)
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
     def get_logp_val_entr(self, latent, action, longer_value=True):
@@ -359,7 +356,7 @@ class PPOAgent(nn.Module):
     
     
     def unimix(self, logits):
-        # uniform noise mixing
+        # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
             probs = F.softmax(logits, dim=-1)
             uniform = torch.ones_like(probs) / self.action_dim
@@ -375,18 +372,13 @@ class PPOAgent(nn.Module):
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
 
         ratio = torch.exp(logp - logp_old)
-        # Kl approx according to http://joschu.net/blog/kl-approx.html
+        # KL approximation per joschu.net/blog/kl-approx.html.
         kl_apx = ((ratio - 1) - (logp - logp_old)).mean()
-    
         clip_advs = torch.clamp(ratio, 1-self.eps_clip, 1+self.eps_clip) * advs
-        # Torch Adam implement tation mius the gradient, to plus the gradient, we need make the loss negative
+        # Negate the loss because Adam minimizes; policy gradient requires ascent.
         actor_loss = -(torch.min(ratio*advs.detach(), clip_advs.detach())).mean()
-
-        # values = values.flatten() # I used squeeze before, maybe a mistake
         slow_critic_loss = self.symlog_twohot_loss(raw_values, slow_return.detach())
         critic_loss = self.symlog_twohot_loss(raw_values, rtgs.detach())
-        # critic_loss = F.mse_loss(values, rtgs)
-        # critic_loss = ((values - rtgs) ** 2).mean()
 
         entropy_loss = entropy.mean()
 
@@ -394,34 +386,22 @@ class PPOAgent(nn.Module):
 
 
     def calc_gae_and_reward_to_go(self, rewards, values, termination):
-        # Invert termination to have 0 if the episode ended and 1 otherwise
+        # Invert termination to have 0 if the episode ended and 1 otherwise.
         inv_termination = (termination * -1) + 1
-
         batch_size, batch_length = rewards.shape[:2]
-        
         deltas = torch.zeros((batch_size, batch_length), dtype=rewards.dtype, device=rewards.device)
         advantages = torch.zeros((batch_size, batch_length+1), dtype=rewards.dtype, device=rewards.device)
-        # reward_to_go = torch.zeros((batch_size, batch_length), dtype=rewards.dtype, device=rewards.device)
-    
-        # Calculate deltas
+        # Calculate per-step TD deltas.
         for t in range(batch_length):
             next_value = values[:, t+1]
             deltas[:, t] = rewards[:, t] + self.gamma * inv_termination[:, t] * next_value - values[:, t]
-        
-        # Calculate advantages (GAE)
+        # Accumulate advantages using GAE.
         for t in reversed(range(batch_length)):
             next_advantage = advantages[:, t+1] if t < batch_length - 1 else 0
             advantages[:, t] = deltas[:, t] + self.gamma * self.lamb * inv_termination[:, t] * next_advantage
-        
-        # Calculate reward-to-go
-        # for t in reversed(range(batch_length)):
-        #     next_return = reward_to_go[:, t+1] if t < batch_length - 1 else 0
-        #     reward_to_go[:, t] = rewards[:, t] + self.gamma * inv_termination[:, t] * next_return
-        
-        # Compute the final returns by adding the value function estimates to the advantages
+        # Add value estimates to advantages to recover the lambda returns.
         returns = advantages[:, :-1] + values[:, :-1]
-        
-        return advantages[:, :-1], returns #, reward_to_go, deltas
+        return advantages[:, :-1], returns
     
     def value(self, x):
         value = self.critic(x)
@@ -460,29 +440,20 @@ class PPOAgent(nn.Module):
             kl_approx_list = []
             
             for _ in range(self.K_epochs):
-                # Recompute the value after each update Andrychowicz et al. 2020 3.5
+                # Recompute value after each PPO update per Andrychowicz et al. 2020, section 3.5.
                 value = self.value(latent)
                 slow_value = self.slow_value(latent)
-
                 lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
                 slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
-                # context_lambda_return = calc_lambda_return(context_reward[:, 1:], context_termination[:, 1:], self.gamma, self.lamb)
-                
-                # advantage, lambda_return = self.calc_gae_and_reward_to_go(reward, value, termination)
-                # Normalize the tensor
-                # norm_advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-
                 lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
                 upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
                 S = upper_bound-lower_bound
-                norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # max(1, S) in the paper
+                norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # Clip to 1 per the paper's max(1, S) formulation.
                 norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
-                
-
                 flatten_advantages = norm_advantage.view(-1)
                 flatten_returns = lambda_return.reshape(-1)
-                flatten_slow_return = slow_lambda_return.reshape(-1)                
-                # Shuffle indices
+                flatten_slow_return = slow_lambda_return.reshape(-1)
+                # Shuffle minibatch indices each PPO epoch.
                 inds = np.arange(batch_size)
                 np.random.shuffle(inds)
                 
@@ -509,7 +480,7 @@ class PPOAgent(nn.Module):
                     kl_approx_list.append(kl_apx.item())
 
                     self.scaler.scale(total_loss).backward()
-                    self.scaler.unscale_(self.optimizer)  # for clip grad
+                    self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
                     torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()

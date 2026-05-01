@@ -122,8 +122,6 @@ def _imagine_and_log(
     """Encode a short validation context, autoregressively roll forward,
     save decoded feature tensors for diagnostic plots.
     """
-    from mamba_ssm import InferenceParams
-
     world_model.eval()
     device = world_model.device
     T = val_seq.per_tick.shape[0]
@@ -136,27 +134,28 @@ def _imagine_and_log(
 
     with torch.no_grad():
         ctx_latent = world_model.encode_obs(obs)
-        inference_params = InferenceParams(
-            max_seqlen=context_len + horizon,
-            max_batch_size=1,
-        )
-        ctx_feat = world_model.sequence_model(ctx_latent, action, inference_params)
-        inference_params.seqlen_offset += ctx_feat.shape[1]
+        prefix_latent = ctx_latent
+        prefix_action = action
+        decoded = []
+        for step in range(horizon):
+            if world_model.model == "Transformer":
+                from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
 
-        prior_logits = world_model.dist_head.forward_prior(ctx_feat[:, -1:])
-        prior_sample = world_model.stright_throught_gradient(prior_logits)
-        prior_flat = world_model.flatten_sample(prior_sample)
-
-        decoded = [world_model.image_decoder(prior_flat).cpu().numpy()[0, 0]]
-        last_sample = prior_flat
-        last_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
-        for _ in range(horizon - 1):
-            feat = world_model.sequence_model(last_sample, last_action, inference_params)
-            inference_params.seqlen_offset += 1
+                temporal_mask = get_subsequent_mask_with_batch_length(
+                    prefix_latent.shape[1], prefix_latent.device
+                )
+                feat = world_model.sequence_model(prefix_latent, prefix_action, temporal_mask)
+            else:
+                feat = world_model.sequence_model(prefix_latent, prefix_action)
+            feat = world_model.condition_dist_feat(feat[:, -1:])
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.stright_throught_gradient(prior_logits)
-            last_sample = world_model.flatten_sample(prior_sample)
-            decoded.append(world_model.image_decoder(last_sample).cpu().numpy()[0, 0])
+            prior_flat = world_model.flatten_sample(prior_sample)
+            decoded.append(world_model.obs_decoder(prior_flat).cpu().numpy()[0, 0])
+            if step != horizon - 1:
+                next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
+                prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
+                prefix_action = torch.cat([prefix_action, next_action], dim=1)
 
     decoded = np.stack(decoded, axis=0)
     LEVEL_FLAT = 10 * 8
@@ -198,7 +197,7 @@ def _validation_metrics(
         post_logits = world_model.dist_head.forward_post(embedding)
         sample = world_model.stright_throught_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
-        obs_hat = world_model.image_decoder(flattened_sample)
+        obs_hat = world_model.obs_decoder(flattened_sample)
         reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
 
         if world_model.model == "Transformer":
@@ -213,7 +212,7 @@ def _validation_metrics(
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
         prior_sample = world_model.stright_throught_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
-        next_hat = world_model.image_decoder(prior_flat)
+        next_hat = world_model.obs_decoder(prior_flat)
 
     target_next = obs[:, 1:].detach().float()
     pred_next = next_hat.detach().float()
@@ -370,6 +369,48 @@ def main() -> None:
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
+
+    # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows
+    # up before a 6-hour training run instead of after.
+    try:
+        with torch.no_grad():
+            probe_obs = torch.zeros(
+                (1, 4, config.BasicSettings.FeatureDim), device=device, dtype=torch.float32
+            )
+            probe_action = torch.zeros((1, 4), device=device, dtype=torch.float32)
+            with torch.autocast(
+                device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
+            ):
+                emb = world_model.encoder(probe_obs)
+                seq = world_model.sequence_model(
+                    torch.zeros(
+                        (1, 4, world_model.stoch_flattened_dim),
+                        device=device,
+                        dtype=emb.dtype,
+                    ),
+                    probe_action,
+                )
+            logger.info(
+                f"dtype probe: encoder->{emb.dtype}, sequence_model->{seq.dtype} "
+                f"(use_amp={world_model.use_amp})"
+            )
+    except Exception as exc:
+        logger.warning(f"dtype probe failed: {exc}")
+
+    # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
+    # kernels; torch.compile would fight them and risks recompilations every
+    # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
+    if getattr(config.BasicSettings, "Compile", False):
+        try:
+            world_model.encoder = torch.compile(
+                world_model.encoder, mode="reduce-overhead", dynamic=False
+            )
+            world_model.obs_decoder = torch.compile(
+                world_model.obs_decoder, mode="reduce-overhead", dynamic=False
+            )
+            logger.info("torch.compile enabled for encoder + obs_decoder")
+        except Exception as exc:
+            logger.warning(f"torch.compile unavailable, running eager: {exc}")
 
     replay_buffer = ReplayBuffer(config, device=device)
     _populate_buffer(replay_buffer, train_seq)

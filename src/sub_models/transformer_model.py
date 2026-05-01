@@ -12,7 +12,7 @@ class StochasticTransformer(nn.Module):
         super().__init__()
         self.action_dim = action_dim
 
-        # mix image_embedding and action
+        # Combine the stochastic sample with the one-hot action embedding.
         self.stem = nn.Sequential(
             nn.Linear(stoch_dim+action_dim, feat_dim, bias=False),
             nn.LayerNorm(feat_dim),
@@ -47,7 +47,7 @@ class StochasticTransformerKVCache(nn.Module):
         self.action_dim = action_dim
         self.feat_dim = feat_dim
 
-        # mix image_embedding and action
+        # Combine the stochastic sample with the one-hot action embedding.
         self.stem = nn.Sequential(
             nn.Linear(stoch_dim+action_dim, feat_dim, bias=False),
             nn.LayerNorm(feat_dim),
@@ -62,9 +62,7 @@ class StochasticTransformerKVCache(nn.Module):
         self.layer_norm = nn.LayerNorm(feat_dim, eps=1e-6)
 
     def forward(self, samples, action, mask):
-        '''
-        Normal forward pass
-        '''
+        """Standard forward pass through the full sequence."""
         action = F.one_hot(action.long(), self.action_dim).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding(feats)
@@ -76,9 +74,7 @@ class StochasticTransformerKVCache(nn.Module):
         return feats
 
     def reset_kv_cache_list(self, batch_size, dtype):
-        '''
-        Reset self.kv_cache_list
-        '''
+        """Clear and reinitialize the KV cache for a new episode."""
         param_example = next(iter(self.stem.parameters()))
         device = param_example.device
         self.kv_cache_list = []
@@ -86,9 +82,7 @@ class StochasticTransformerKVCache(nn.Module):
             self.kv_cache_list.append(torch.zeros(size=(batch_size, 0, self.feat_dim), dtype=dtype, device=device))
 
     def forward_with_kv_cache(self, samples, action):
-        '''
-        Forward pass with kv_cache, cache stored in self.kv_cache_list
-        '''
+        """Autoregressive step using the KV cache stored in self.kv_cache_list."""
         assert samples.shape[1] == 1
         mask = get_vector_mask(self.kv_cache_list[0].shape[1]+1, samples.device)
 

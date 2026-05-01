@@ -3,7 +3,6 @@ from torch import nn
 
 
 def layer_init(layer, std=np.sqrt(2)):
-    # nn.init.normal_(layer.weight, mean=0.0, std=std)
     nn.init.orthogonal_(layer.weight, std)
     nn.init.constant_(layer.bias, 0.0)
     return layer

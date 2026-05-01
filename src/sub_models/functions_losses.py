@@ -30,7 +30,7 @@ class SymLogTwoHotLoss(nn.Module):
         self.upper_bound = upper_bound
         self.bin_length = (upper_bound - lower_bound) / (num_classes-1)
 
-        # use register buffer so that bins move with .cuda() automatically
+        # Use register_buffer so bins move automatically with .cuda().
         self.bins: torch.Tensor
         self.register_buffer(
             'bins', torch.linspace(-20, 20, num_classes), persistent=False)
@@ -40,7 +40,7 @@ class SymLogTwoHotLoss(nn.Module):
         assert target.min() >= self.lower_bound and target.max() <= self.upper_bound
 
         index = torch.bucketize(target, self.bins)
-        diff = target - self.bins[index-1]  # -1 to get the lower bound
+        diff = target - self.bins[index-1]  # Offset by 1 to get the lower bin boundary.
         weight = diff / self.bin_length
         weight = torch.clamp(weight, 0, 1)
         weight = weight.unsqueeze(-1)
@@ -63,7 +63,3 @@ if __name__ == "__main__":
     loss = loss_func(output, target)
     print(loss)
 
-    # prob = torch.ones(1, 1, 255)*0.5/255
-    # prob[0, 0, 128] = 0.5
-    # logits = torch.log(prob)
-    # print(loss_func.decode(logits), loss_func.bins[128])

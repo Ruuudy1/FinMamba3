@@ -16,7 +16,7 @@ def seed_np_torch(seed=20001118):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # some cudnn methods can be random even after fixing the seed unless you tell it to be deterministic
+    # Some cuDNN methods are non-deterministic even after seeding unless explicitly set to deterministic mode.
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -30,7 +30,7 @@ class WandbLogger():
             path (str): Path to the directory where logs will be saved. This can be used to define the run name in W&B.
             project (str, optional): Name of the W&B project. Defaults to None.
         """
-        # Initialize a W&B run with the given project and path as the run name
+        # Initialize a W&B run with the given project and path as the run name.
         pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
         run_name = f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
         if wandb is None:
@@ -53,21 +53,21 @@ class WandbLogger():
             tag (str): The tag or label for the data being logged.
             value: The data to be logged. It can be a scalar, image, histogram, or video.
         """
-        # Log data based on the type
+        # Log data based on the type.
         if wandb is None:
             return
         if "video" in tag:
-            # Log video
+            # Log video.
             wandb.log({tag: wandb.Video(value, fps=1, format='gif')}, step=global_step)
         elif "images" in tag:
-            # Log images
-            images = [wandb.Image(img) for img in value]  # Convert each image to a wandb.Image
+            # Log images.
+            images = [wandb.Image(img) for img in value]
             wandb.log({tag: images}, step=global_step)
         elif "hist" in tag:
-            # Log histogram
+            # Log histogram.
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
         else:
-            # Log scalar value
+            # Log scalar value.
             wandb.log({tag: value}, step=global_step)
 
     def update_config(self, update_dict):
@@ -77,7 +77,7 @@ class WandbLogger():
         Args:
             update_dict (dict): A dictionary containing scalar parameter information to update in the configuration.
         """
-        # Update the configuration using wandb.config.update
+        # Update the configuration using wandb.config.update.
         if wandb is not None:
             wandb.config.update(update_dict)
 
@@ -85,7 +85,7 @@ class WandbLogger():
         """
         Finalize and close the W&B run.
         """
-        # Finish the run
+        # Finish the run.
         if wandb is not None:
             wandb.finish()
 
