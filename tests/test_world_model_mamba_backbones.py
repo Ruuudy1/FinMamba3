@@ -177,7 +177,8 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        self.assertEqual(len(losses), 9)  # 8 base losses + direction_loss
+        # 8 base losses + direction + hawkes + settlement = 11 total.
+        self.assertEqual(len(losses), 11)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 
 

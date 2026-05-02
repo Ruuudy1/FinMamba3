@@ -331,6 +331,79 @@ zero loss when its required labels are absent.
 
 Enable all three at once via `configure_lob_full_ablation.yaml`.
 
+## Evaluation
+
+Three CLIs in `src/eval/` consume a trained world-model checkpoint and emit
+the artifacts the paper's evaluation table needs.
+
+### Diagnose a checkpoint
+
+`src/eval/diagnose_run.py` regenerates the 32-step imagine rollout, computes
+posterior and prior categorical entropy on a val batch, and prints the top
+per-feature val MSE. Use after a Phase A run that ended with
+`Imagine/mid_norm_std = 0` or an unexpectedly large `val_loss`.
+
+```bash
+python -m eval.diagnose_run \
+    --checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
+    --config src/config_files/configure_lob.yaml \
+    --data-val data/validation \
+    --norm-path saved_models/lob/normalization.json \
+    --out-dir notes/
+```
+
+Outputs: `notes/diagnose_rollout_<slug>.npy`,
+`notes/diagnose_rollout_<slug>.png`, and `notes/diagnose_summary_<slug>.json`.
+
+### Compare against direction-prediction baselines
+
+`src/eval/compare_direction.py` evaluates the world-model direction head,
+DeepLOB (trained from scratch on the train split), and a closed-form LinearAR
+on the same val split, across one or more direction thresholds. Emits a
+markdown table.
+
+```bash
+python -m eval.compare_direction \
+    --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
+    --config src/config_files/configure_lob.yaml \
+    --data-train data/train --data-val data/validation \
+    --thresholds 0.001,0.005,0.01 \
+    --baselines world_model,deeplob,linear_ar \
+    --epochs-deeplob 3 \
+    --out reports/direction_comparison.md
+```
+
+### Run a backtest with a frozen world model
+
+`src/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen
+world model, runs `run_backtest` against `PolymarketLOBEnv`, and writes
+`BacktestMetrics` (PnL, Sharpe, MaxDD, win rate, portfolio curve) as JSON.
+
+```bash
+python -m eval.run_backtest_cli \
+    --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
+    --config src/config_files/configure_lob.yaml \
+    --data-val data/validation \
+    --max-steps 5000 \
+    --regime-split none \
+    --out reports/backtest_<run_id>.json
+```
+
+Pass `--regime-split time:<unix_ts>` to evaluate only on markets resolved
+after the cutoff, or `--regime-split volatility:<quantile>` to evaluate on
+the high-volatility tail. Reuse the same checkpoint with
+`configure_lob_em.yaml` (episodic memory enabled) to produce the
+non-stationarity A/B numbers.
+
+### Diagnose hyperparameter levers
+
+`src/config_files/configure_lob_diagnose.yaml` exposes three constants the
+plain config previously hardcoded: `RepresentationLossWeight` (was 0.1),
+`FreeBits` (was 1.0), and `Decoder.SizeWeight` (was 2.0). These are the
+levers for the prior-collapse hypothesis sweep. Default values in
+`configure_lob.yaml` are preserved when the keys are absent, so existing
+configs remain backward compatible.
+
 ## Notes
 
 - `train_lob.py` no longer imports `gym` or the removed Atari path.

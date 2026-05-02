@@ -404,11 +404,15 @@ class WorldModel(nn.Module):
         else:
             self.direction_thresholds = None
 
+        # Decoder size_weight up-weights size and depth feature MSE relative to price features.
+        # The 2.0 default biases the decoder toward volume signal but can crowd out predictive capacity for mid and spread.
+        size_weight = float(getattr(config.Models.WorldModel.Decoder, 'SizeWeight', 2.0))
         if self.decoder_kind == 'mse':
             self.reconstruction_loss_func = LOBReconstructionLoss(
                 k_levels=enc_cfg.K,
                 f_level=enc_cfg.FeatureDimLevel,
                 f_tick=enc_cfg.FeatureDimTick,
+                size_weight=size_weight,
             )
         else:
             self.reconstruction_loss_func = StudentTReconstructionLoss(
@@ -419,7 +423,13 @@ class WorldModel(nn.Module):
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
-        self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
+        # Free bits floors the categorical KL so the dynamics term cannot drive the prior to copy the posterior trivially.
+        # Larger values starve the dynamics signal; smaller values risk prior collapse.
+        free_bits = float(getattr(config.Models.WorldModel, 'FreeBits', 1.0))
+        self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=free_bits)
+        # Representation loss weight controls how strongly the posterior is pulled toward the prior.
+        # DreamerV3 uses 0.5; the original Drama default is 0.1.
+        self.representation_loss_weight = float(getattr(config.Models.WorldModel, 'RepresentationLossWeight', 0.1))
         if config.Models.WorldModel.Optimiser == 'Laprop':
             self.optimizer = LaProp(self.parameters(), lr=config.Models.WorldModel.Laprop.LearningRate, eps=config.Models.WorldModel.Laprop.Epsilon, weight_decay=config.Models.WorldModel.Weight_decay)
         elif config.Models.WorldModel.Optimiser == 'Adam':
@@ -770,7 +780,7 @@ class WorldModel(nn.Module):
                 settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             total_loss = (
                 reconstruction_loss + reward_loss + termination_loss
-                + dynamics_loss + 0.1 * representation_loss
+                + dynamics_loss + self.representation_loss_weight * representation_loss
                 + self.direction_loss_weight * direction_loss
                 + self.hawkes_loss_weight * hawkes_loss
                 + self.settlement_loss_weight * settlement_loss

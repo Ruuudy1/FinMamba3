@@ -111,32 +111,30 @@ def _settlement_yes_outcome(settlement) -> float | None:
     return None
 
 
-def _imagine_and_log(
-    world_model: WorldModel,
+def imagine_rollout(
+    world_model: "WorldModel",
     val_seq: LOBSequence,
-    wlogger: WandbLogger,
-    global_step: int,
     context_len: int = 16,
     horizon: int = 32,
-) -> None:
-    """Encode a short validation context, autoregressively roll forward,
-    save decoded feature tensors for diagnostic plots.
+) -> np.ndarray | None:
+    """Encode a short validation context and autoregressively roll forward.
+
+    Returns a (horizon, FEATURE_DIM_FLAT) decoded trajectory, or None if the
+    val sequence is too short. Pure function with no wandb side-effects.
     """
     world_model.eval()
     device = world_model.device
     T = val_seq.per_tick.shape[0]
     if T < context_len + 1:
-        return
-    start = 0
-    ctx = val_seq.to_flat()[start : start + context_len]
+        return None
+    ctx = val_seq.to_flat()[:context_len]
     obs = torch.from_numpy(ctx).float().to(device, non_blocking=True).unsqueeze(0)
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
-
+    decoded: list[np.ndarray] = []
     with torch.no_grad():
         ctx_latent = world_model.encode_obs(obs)
         prefix_latent = ctx_latent
         prefix_action = action
-        decoded = []
         for step in range(horizon):
             if world_model.model == "Transformer":
                 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
@@ -156,8 +154,21 @@ def _imagine_and_log(
                 next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
                 prefix_action = torch.cat([prefix_action, next_action], dim=1)
+    return np.stack(decoded, axis=0)
 
-    decoded = np.stack(decoded, axis=0)
+
+def _imagine_and_log(
+    world_model: WorldModel,
+    val_seq: LOBSequence,
+    wlogger: WandbLogger,
+    global_step: int,
+    context_len: int = 16,
+    horizon: int = 32,
+) -> None:
+    """Run an imagine rollout and emit wandb metrics plus the .npy snapshot."""
+    decoded = imagine_rollout(world_model, val_seq, context_len, horizon)
+    if decoded is None:
+        return
     LEVEL_FLAT = 10 * 8
     mid_norm = decoded[:, LEVEL_FLAT + 0]
     spread_norm = decoded[:, LEVEL_FLAT + 1]
@@ -276,6 +287,12 @@ def _validation_metrics(
     top_idx = np.argsort(feature_mse)[-5:][::-1]
     top_features = [(FLAT_FEATURE_NAMES[int(i)], float(feature_mse[int(i)])) for i in top_idx]
     return metrics, top_features
+
+
+# Public aliases for use by external eval scripts. The underscored names remain
+# the implementation; the public names mirror the API the eval CLIs import.
+validate = _validation_metrics
+build_sequences = _build_sequences
 
 
 def _gpu_monitor(interval: int = 30) -> None:
