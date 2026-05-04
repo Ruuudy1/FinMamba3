@@ -67,6 +67,8 @@ Models:
     Dropout: 0.1
     Unimix_ratio: 0.01
     Weight_decay: 1.0e-4
+    RepresentationLossWeight: 0.1   # Beta on the representation-side KL term in the split KL.
+    FreeBits: 1.0                   # Per-step KL floor in nats; KL is clipped to zero below this.
     Adam:
       LearningRate: 1.0e-4
     Laprop:
@@ -90,6 +92,7 @@ Models:
       NumLayers: 3
       NuInit: 5.0            # Student-t degrees of freedom; ignored for 'mse'.
       LearnableNu: True
+      SizeWeight: 2.0        # Multiplier on size-feature reconstruction MSE in the decoder loss.
     Reward:
       Enabled: false        # Phase A pretraining has no reward signal; gate the head off.
       HiddenUnits: 256
