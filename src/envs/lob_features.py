@@ -307,21 +307,23 @@ class NormalizationStats:
     @classmethod
     def from_json(cls, d: dict) -> "NormalizationStats":
         per_level_mean = np.asarray(d["per_level_mean"], dtype=np.float32)
-        per_level_std = np.maximum(
-            np.asarray(d["per_level_std"], dtype=np.float32),
-            DEFAULT_LEVEL_STD_FLOOR,
-        )
-        for idx in LEVEL_DETERMINISTIC_INDICES:
-            per_level_mean[idx] = 0.0
-            per_level_std[idx] = 1.0
+        per_level_std = np.asarray(d["per_level_std"], dtype=np.float32)
+        per_tick_mean = np.asarray(d["per_tick_mean"], dtype=np.float32)
+        per_tick_std = np.asarray(d["per_tick_std"], dtype=np.float32)
+        # Apply the canonical Polymarket floors and deterministic-index pins only
+        # when the saved stats match that schema's widths.
+        if per_level_mean.shape[0] == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
+            per_level_std = np.maximum(per_level_std, DEFAULT_LEVEL_STD_FLOOR)
+            for idx in LEVEL_DETERMINISTIC_INDICES:
+                per_level_mean[idx] = 0.0
+                per_level_std[idx] = 1.0
+        if per_tick_std.shape[0] == DEFAULT_TICK_STD_FLOOR.shape[0]:
+            per_tick_std = np.maximum(per_tick_std, DEFAULT_TICK_STD_FLOOR)
         return cls(
             per_level_mean=per_level_mean,
             per_level_std=per_level_std,
-            per_tick_mean=np.asarray(d["per_tick_mean"], dtype=np.float32),
-            per_tick_std=np.maximum(
-                np.asarray(d["per_tick_std"], dtype=np.float32),
-                DEFAULT_TICK_STD_FLOOR,
-            ),
+            per_tick_mean=per_tick_mean,
+            per_tick_std=per_tick_std,
             clip_value=float(d.get("clip_value", DEFAULT_NORM_CLIP)),
         )
 
@@ -331,17 +333,32 @@ def fit_normalization(
     eps: float = 1e-6,
     clip_value: float = DEFAULT_NORM_CLIP,
 ) -> NormalizationStats:
-    pl = seq.per_level.reshape(-1, F_LEVEL)
+    # Infer per-level feature width from the array. Polymarket uses 8 (with the
+    # canonical std_floor and deterministic indices); FI-2010 and other schemas
+    # fall back to a flat eps floor and no deterministic pinning.
+    f_level = int(seq.per_level.shape[-1])
+    f_tick = int(seq.per_tick.shape[-1])
+    pl = seq.per_level.reshape(-1, f_level)
     pt = seq.per_tick
     pl_mean = pl.mean(axis=0).astype(np.float32)
     pt_mean = pt.mean(axis=0).astype(np.float32)
-    pl_std = np.maximum(pl.std(axis=0), DEFAULT_LEVEL_STD_FLOOR).astype(np.float32)
-    pt_std = np.maximum(pt.std(axis=0), DEFAULT_TICK_STD_FLOOR).astype(np.float32)
-    # Level index and side are deterministic token metadata.
-    # Their bounded encodings are kept directly to avoid turning tiny distribution shifts into large z-scores.
-    for idx in LEVEL_DETERMINISTIC_INDICES:
-        pl_mean[idx] = 0.0
-        pl_std[idx] = 1.0
+    level_floor = (
+        DEFAULT_LEVEL_STD_FLOOR if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]
+        else np.full(f_level, eps, dtype=np.float32)
+    )
+    tick_floor = (
+        DEFAULT_TICK_STD_FLOOR if f_tick == DEFAULT_TICK_STD_FLOOR.shape[0]
+        else np.full(f_tick, eps, dtype=np.float32)
+    )
+    pl_std = np.maximum(pl.std(axis=0), level_floor).astype(np.float32)
+    pt_std = np.maximum(pt.std(axis=0), tick_floor).astype(np.float32)
+    # Polymarket level index and side are deterministic token metadata; pin them
+    # so tiny distribution shifts cannot blow up the z-score. Skip when the
+    # active schema does not have those slots.
+    if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
+        for idx in LEVEL_DETERMINISTIC_INDICES:
+            pl_mean[idx] = 0.0
+            pl_std[idx] = 1.0
     return NormalizationStats(
         per_level_mean=pl_mean,
         per_level_std=np.maximum(pl_std, eps).astype(np.float32),

@@ -15,7 +15,7 @@ Dataset:
   Kind: fi2010
   FI2010:
     Horizon: 10              # Events ahead for direction labels. One of 10, 20, 30, 50, 100.
-    Split: NoAuction_ZScore  # File family. Only NoAuction ZScore CF is currently wired.
+    MaxEvents: 0             # 0 = use the full file; positive caps to the most recent N events.
 
 Evaluate:
   EpisodeNum: 10

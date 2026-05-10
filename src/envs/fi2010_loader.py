@@ -20,11 +20,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
-from envs.lob_features import (
-    LOBSequence,
-    NormalizationStats,
-    compute_basic_tick_features,
-)
+from envs.lob_features import LOBSequence, compute_basic_tick_features
 logger = logging.getLogger(__name__)
 FI2010_K_LEVELS = 10
 FI2010_F_LEVEL = 4
@@ -45,9 +41,19 @@ FLAT_FEATURE_NAMES_FI2010 = (
 # FI-2010 label encoding from the published files: 1 = up, 2 = stationary, 3 = down.
 # Our direction head expects {0=down, 1=flat, 2=up} so we remap on load.
 _LABEL_ROW_BY_HORIZON = {10: 144, 20: 145, 30: 146, 50: 147, 100: 148}
-FILENAME_BY_SPLIT = {
-    "train": "Train_Dst_NoAuction_ZScore_CF_7.txt",
-    "validation": "Test_Dst_NoAuction_ZScore_CF_7.txt",
+# Candidate filenames in priority order. The first one that exists wins.
+# DecPre is the decimal-precision normalized variant (used by DeepLOB's vendored
+# data.zip); ZScore is the per-stock per-day z-scored variant from the FairData
+# release. Either works because the trainer fits its own normalization stats.
+FILENAMES_BY_SPLIT = {
+    "train": (
+        "Train_Dst_NoAuction_DecPre_CF_7.txt",
+        "Train_Dst_NoAuction_ZScore_CF_7.txt",
+    ),
+    "validation": (
+        "Test_Dst_NoAuction_DecPre_CF_7.txt",
+        "Test_Dst_NoAuction_ZScore_CF_7.txt",
+    ),
 }
 
 
@@ -82,46 +88,55 @@ def _remap_labels(raw: np.ndarray) -> np.ndarray:
     return out
 
 
+def _resolve_split_path(data_dir: Path, split: str) -> Path:
+    candidates = FILENAMES_BY_SPLIT[split]
+    for name in candidates:
+        path = Path(data_dir) / name
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        f"FI-2010 file not found under {data_dir}. Looked for: {', '.join(candidates)}. "
+        "Download from the FairData Etsin release (Ntakaris et al. 2018) or the "
+        "project HF Hub mirror at ruuudy/FinDrama under data/fi2010/<split>/."
+    )
+
+
 def load_fi2010_split(
     data_dir: Path,
     split: str,
     horizon: int = 10,
-    clip_value: float = 8.0,
+    max_events: int | None = None,
 ) -> FI2010Sequence:
     """Load one FI-2010 split as an LOBSequence plus direction labels.
 
-    The level features come straight from the pre-normalized FI-2010 file; the
-    six per-tick aggregates are derived on the fly via compute_basic_tick_features
-    so downstream code does not have to special-case the dataset.
+    Returns raw (un-normalized) per_level and per_tick arrays so the trainer
+    can fit its own z-score stats. The DecPre variant is decimal-scaled; the
+    ZScore variant is already per-stock-day z-scored - both work because
+    fit_normalization handles either input.
     """
-    if split not in FILENAME_BY_SPLIT:
-        raise ValueError(f"split must be one of {sorted(FILENAME_BY_SPLIT)}, got {split!r}")
+    if split not in FILENAMES_BY_SPLIT:
+        raise ValueError(f"split must be one of {sorted(FILENAMES_BY_SPLIT)}, got {split!r}")
     if horizon not in _LABEL_ROW_BY_HORIZON:
         raise ValueError(
             f"horizon must be one of {sorted(_LABEL_ROW_BY_HORIZON)}, got {horizon}"
         )
-    path = Path(data_dir) / FILENAME_BY_SPLIT[split]
-    if not path.exists():
-        raise FileNotFoundError(
-            f"FI-2010 file not found: {path}. Download the NoAuction ZScore CF "
-            "files from the FairData Etsin release (Ntakaris et al. 2018) or "
-            "the project HF Hub mirror."
-        )
-    logger.info(f"loading FI-2010 split={split} horizon={horizon} from {path}")
+    path = _resolve_split_path(Path(data_dir), split)
+    logger.info(f"loading FI-2010 split={split} horizon={horizon} from {path.name}")
     matrix = _load_raw_matrix(path)
     n_events = matrix.shape[0]
+    if max_events is not None and 0 < max_events < n_events:
+        # Keep the most recent slice; LOB statistics drift, and the tail is
+        # closest to the validation split.
+        matrix = matrix[-max_events:]
+        n_events = matrix.shape[0]
     lob_flat = matrix[:, :40]
     per_level = lob_flat.reshape(n_events, FI2010_K_LEVELS, FI2010_F_LEVEL).astype(np.float32)
     per_tick = compute_basic_tick_features(per_level)
-    # Clip both tensors to the same window used for Polymarket features.
-    per_level = np.clip(per_level, -clip_value, clip_value).astype(np.float32)
-    per_tick = np.clip(per_tick, -clip_value, clip_value).astype(np.float32)
     if not np.isfinite(per_level).all() or not np.isfinite(per_tick).all():
-        raise ValueError(f"Non-finite values after clipping in {path}")
+        raise ValueError(f"Non-finite values in {path}")
     label_row = _LABEL_ROW_BY_HORIZON[horizon]
     direction_labels = _remap_labels(matrix[:, label_row])
-    # Synthetic midprice for downstream metrics: average of best ask and best bid
-    # in z-scored space. Not a true price, just a stable reference signal.
+    # Synthetic midprice for downstream metrics: average of best ask and best bid.
     mid_norm = 0.5 * (per_level[:, 0, 0] + per_level[:, 0, 2])
     sequence = LOBSequence(
         market_slug=f"fi2010_h{horizon}",
@@ -137,18 +152,3 @@ def load_fi2010_split(
         f"{np.bincount(direction_labels, minlength=3).tolist()}"
     )
     return FI2010Sequence(sequence=sequence, direction_labels=direction_labels, horizon=horizon)
-
-
-def build_identity_normalization() -> NormalizationStats:
-    """Identity normalization stats for the pre-normalized FI-2010 files.
-
-    apply_normalization() expects mean and std arrays; passing zeros and ones
-    leaves the data untouched so the same downstream code path works.
-    """
-    return NormalizationStats(
-        per_level_mean=np.zeros(FI2010_F_LEVEL, dtype=np.float32),
-        per_level_std=np.ones(FI2010_F_LEVEL, dtype=np.float32),
-        per_tick_mean=np.zeros(FI2010_F_TICK, dtype=np.float32),
-        per_tick_std=np.ones(FI2010_F_TICK, dtype=np.float32),
-        clip_value=8.0,
-    )

@@ -35,11 +35,7 @@ from envs.lob_features import (
     pick_longest_market,
     save_normalization,
 )
-from envs.fi2010_loader import (
-    FLAT_FEATURE_NAMES_FI2010,
-    build_identity_normalization,
-    load_fi2010_split,
-)
+from envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010, load_fi2010_split
 from config_utils import DotDict, parse_args_and_update_config
 from lob.backtester import build_timeline
 from replay_buffer import ReplayBuffer
@@ -290,16 +286,26 @@ def _build_fi2010_sequences(
     data_dir: Path,
     split: str,
     horizon: int,
+    norm_path: Path,
+    fit_stats: bool,
+    norm_clip: float,
+    max_events: int | None = None,
 ) -> tuple[LOBSequence, str, object]:
     """FI-2010 mirror of _build_sequences. Returns (sequence, slug, stats).
 
-    The FI-2010 NoAuction ZScore files are already per-stock z-scored, so we
-    skip the normalization-fitting step and return identity stats. This keeps
-    the rest of the training loop unchanged.
+    Fits z-score normalization on the training split and reuses it for validation,
+    matching the Polymarket flow. Works for both DecPre and ZScore source files.
     """
-    bundle = load_fi2010_split(data_dir, split=split, horizon=horizon)
-    stats = build_identity_normalization()
-    return bundle.sequence, bundle.sequence.market_slug, stats
+    bundle = load_fi2010_split(data_dir, split=split, horizon=horizon, max_events=max_events)
+    seq = bundle.sequence
+    if fit_stats:
+        stats = fit_normalization(seq, clip_value=norm_clip)
+        save_normalization(stats, norm_path)
+        logger.info(f"FI-2010 normalization fit on {seq.market_slug}, saved to {norm_path}")
+    else:
+        stats = load_normalization(norm_path)
+    seq_norm = apply_normalization(seq, stats)
+    return seq_norm, seq.market_slug, stats
 # Public aliases for use by external eval scripts. The underscored names remain
 # the implementation; the public names mirror the API the eval CLIs import.
 validate = _validation_metrics
@@ -379,13 +385,19 @@ def main() -> None:
     elif dataset_kind == "fi2010":
         fi2010_cfg = getattr(dataset_cfg, "FI2010", None) if dataset_cfg is not None else None
         horizon = int(getattr(fi2010_cfg, "Horizon", 10)) if fi2010_cfg is not None else 10
+        max_events_cfg = getattr(fi2010_cfg, "MaxEvents", None) if fi2010_cfg is not None else None
+        max_events = int(max_events_cfg) if max_events_cfg else None
         logger.info(f"loading FI-2010 train split from {pre_args.data_train}")
         train_seq, slug, stats = _build_fi2010_sequences(
             pre_args.data_train, split="train", horizon=horizon,
+            norm_path=pre_args.norm_path, fit_stats=True,
+            norm_clip=norm_clip, max_events=max_events,
         )
         logger.info(f"loading FI-2010 validation split from {pre_args.data_val}")
         val_seq, _, _ = _build_fi2010_sequences(
             pre_args.data_val, split="validation", horizon=horizon,
+            norm_path=pre_args.norm_path, fit_stats=False,
+            norm_clip=norm_clip, max_events=max_events,
         )
         if aggregate_only:
             train_seq = make_aggregate_only(train_seq)
