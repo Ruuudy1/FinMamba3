@@ -17,19 +17,15 @@ Example
         --norm-path saved_models/lob/normalization.json \\
         --out-dir notes/
 """
-
 from __future__ import annotations
-
 import argparse
 import json
 import logging
 import math
 import sys
 from pathlib import Path
-
 import numpy as np
 import torch
-
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
@@ -67,12 +63,10 @@ def _load_world_model(args: argparse.Namespace, device: torch.device):
     import yaml
     from config_utils import DotDict, parse_args_and_update_config
     from sub_models.world_models import WorldModel
-
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-
     # Action_dim is read by WorldModel from the agent action space; for diagnosis
     # we use a small default since action input is gated by Phase A defaults anyway.
     action_dim = 13
@@ -95,7 +89,6 @@ def _load_val_sequence(args: argparse.Namespace, cfg):
         pick_longest_market,
     )
     from lob.backtester import build_timeline
-
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val)
     slug = args.market_slug or pick_longest_market(bt)
     seq = extract_features(bt.timeline, slug)
@@ -255,11 +248,9 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     device = _device_from_arg(args.device)
     logger.info(f"device: {device}")
-
     wm, cfg = _load_world_model(args, device)
     val_seq, _stats, slug = _load_val_sequence(args, cfg)
     logger.info(f"val market: {slug}, {val_seq.per_tick.shape[0]} ticks")
-
     decoded = _imagine_rollout(wm, val_seq, args.context_len, args.horizon)
     LEVEL_FLAT = 10 * 8
     mid = decoded[:, LEVEL_FLAT + 0]
@@ -275,19 +266,16 @@ def main() -> int:
         "imbalance_norm_std": float(imb.std()),
     }
     logger.info(f"rollout summary: {rollout_summary}")
-
     entropy_stats = _categorical_entropy_stats(wm, val_seq, args.entropy_batch)
     logger.info(f"entropy stats (uniform={entropy_stats['uniform_entropy']:.4f}):")
     logger.info(f"  posterior mean={entropy_stats['post_entropy_mean']:.4f} "
                 f"std={entropy_stats['post_entropy_std']:.4f}")
     logger.info(f"  prior     mean={entropy_stats['prior_entropy_mean']:.4f} "
                 f"std={entropy_stats['prior_entropy_std']:.4f}")
-
     feature_mse = _per_feature_val_mse(wm, val_seq)
     logger.info("top 10 per-feature val MSE:")
     for name, val in feature_mse[:10]:
         logger.info(f"  {name:32s} {val:>10.4f}")
-
     rollout_path = args.out_dir / f"diagnose_rollout_{slug}.npy"
     np.save(rollout_path, decoded)
     plot_path = args.out_dir / f"diagnose_rollout_{slug}.png"
@@ -304,7 +292,5 @@ def main() -> int:
         json.dump(summary, f, indent=2)
     logger.info(f"wrote {rollout_path}, {plot_path}, {summary_path}")
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())

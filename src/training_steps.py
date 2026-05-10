@@ -1,18 +1,11 @@
 """Shared training steps for Drama world-model updates."""
-
 from __future__ import annotations
-
 import numpy as np
 import torch
-
 from replay_buffer import ReplayBuffer
-
 from typing import TYPE_CHECKING
-
 if TYPE_CHECKING:
     from sub_models.world_models import WorldModel
-
-
 _LOSS_NAMES = (
     "reconstruction_loss",
     "reward_loss",

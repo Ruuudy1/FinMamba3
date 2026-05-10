@@ -5,23 +5,16 @@ synthetic timeline plus a fake policy. The full CLI main() requires a trained
 world model checkpoint, which is out of scope for unit tests; that path is
 exercised manually after a Phase A pretrain.
 """
-
 from __future__ import annotations
-
 import os
 import sys
 import unittest
 from pathlib import Path
-
 import numpy as np
-
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_PATH = os.path.join(REPO_ROOT, "src")
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
-
-
 try:
     from envs.polymarket_lob_env import PolymarketLOBEnv
 except ModuleNotFoundError as exc:
@@ -29,7 +22,6 @@ except ModuleNotFoundError as exc:
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
-
 from eval.backtest import run_backtest  # noqa: E402
 from eval.run_backtest_cli import _filter_backtest_data  # noqa: E402
 from lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
@@ -78,7 +70,6 @@ def _data():
 class _NoopPolicy:
     def reset(self) -> None:
         pass
-
     def act(self, observation: np.ndarray) -> int:
         return 0
 

@@ -15,12 +15,9 @@ expects so the baseline runs on the same data the FinDrama encoder sees.
 
 Use this as a benchmarking comparator, not as a component of the world model.
 """
-
 from __future__ import annotations
-
 import torch
 import torch.nn as nn
-
 from envs.lob_features import F_LEVEL, K_LEVELS
 
 
@@ -37,7 +34,6 @@ class _ConvStack(nn.Module):
             nn.Conv2d(out_channels, out_channels, kernel_size=(3, 1), padding=(1, 0)),
             nn.LeakyReLU(0.01),
         )
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.body(x)
 
@@ -66,7 +62,6 @@ class _Inception(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
             nn.LeakyReLU(0.01),
         )
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.cat(
             [self.branch_1x1(x), self.branch_3(x), self.branch_5(x), self.branch_pool(x)],
@@ -96,7 +91,6 @@ class DeepLOB(nn.Module):
         self.k_levels = int(k_levels)
         self.f_level = int(f_level)
         self.input_width = self.k_levels * self.f_level
-
         self.stack1 = _ConvStack(1, conv_channels)
         self.stack2 = _ConvStack(conv_channels, conv_channels)
         self.stack3 = _ConvStack(conv_channels, conv_channels)
@@ -107,7 +101,6 @@ class DeepLOB(nn.Module):
         post_conv_width = max(1, self.input_width // (2 ** 3))
         self.lstm = nn.LSTM(inception_out * post_conv_width, lstm_hidden, batch_first=True)
         self.head = nn.Linear(lstm_hidden, num_classes)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, F = x.shape
         if F != self.input_width:

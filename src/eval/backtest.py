@@ -19,12 +19,9 @@ Example
     )
     print(metrics)
 """
-
 from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Protocol
-
 import numpy as np
 import torch
 
@@ -62,7 +59,6 @@ def run_backtest(env, policy: Policy, max_steps: int = 10_000) -> BacktestMetric
     returns: list[float] = []
     num_trades = 0
     wins = 0
-
     for _ in range(max_steps):
         action = int(policy.act(obs))
         obs, reward, done, _, info = env.step(action)
@@ -74,7 +70,6 @@ def run_backtest(env, policy: Policy, max_steps: int = 10_000) -> BacktestMetric
                 wins += 1
         if done:
             break
-
     total_return = portfolio[-1] / portfolio[0] - 1.0 if portfolio and portfolio[0] > 0 else 0.0
     arr = np.asarray(returns, dtype=np.float64)
     if arr.size > 0 and arr.std() > 1e-9:
@@ -117,10 +112,8 @@ class GreedyDirectionPolicy:
         self.threshold = float(threshold)
         self.device = device
         self._latent = None
-
     def reset(self) -> None:
         self._latent = None
-
     @torch.no_grad()
     def act(self, observation: np.ndarray) -> int:
         if not hasattr(self.world_model, "direction_head") or self.world_model.direction_head is None:

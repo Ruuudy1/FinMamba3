@@ -7,6 +7,7 @@ def layer_init(layer, std=np.sqrt(2)):
     nn.init.constant_(layer.bias, 0.0)
     return layer
 
+
 def weight_init(m):
     if isinstance(m, nn.Linear):
         in_num = m.in_features
@@ -66,10 +67,4 @@ def uniform_weight_init(given_scale):
                 m.bias.data.fill_(0.0)
         elif isinstance(m, nn.RMSNorm):
             pass
-
     return f
-
-
-
-
-

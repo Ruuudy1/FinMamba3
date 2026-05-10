@@ -7,17 +7,12 @@ auxiliary inputs (event_counts, outcome, time_to_expiry_frac) and asserts:
 - Direction-thresholds sweep changes the direction loss compared to the
   single-threshold baseline.
 """
-
 from __future__ import annotations
-
 import os
 import sys
-
 import pytest
 import torch
 from types import SimpleNamespace
-
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_PATH = os.path.join(REPO_ROOT, "src")
 if SRC_PATH not in sys.path:
@@ -130,7 +125,6 @@ def _build_config(**overrides):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="WorldModel requires CUDA-built mamba_ssm")
 def test_world_model_update_returns_eleven_finite_losses():
     from sub_models.world_models import WorldModel
-
     cfg = _build_config()
     device = torch.device("cuda")
     wm = WorldModel(action_dim=4, config=cfg, device=device).to(device)

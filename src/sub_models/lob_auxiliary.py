@@ -1,9 +1,6 @@
 """Auxiliary LOB heads for regime-aware world-model experiments."""
-
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,11 +29,9 @@ class DirectionHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, num_classes, **factory)
-
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(self.dropout(hidden)))
         return self.head(h)
-
     @staticmethod
     def make_targets(
         mid_norm: torch.Tensor, threshold: float = 1.0e-2
@@ -72,7 +67,6 @@ class RegimeHead(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.logits = nn.Linear(hidden_dim, num_regimes, **factory)
         self.embedding = nn.Embedding(num_regimes, embed_dim, **factory)
-
     def forward(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.logits(hidden)
         probs = torch.softmax(logits, dim=-1)
@@ -94,7 +88,6 @@ class RegimeConditioner(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim + regime_dim, hidden_dim, **factory)
         self.gate = nn.Linear(hidden_dim + regime_dim, hidden_dim, **factory)
-
     def forward(self, hidden: torch.Tensor, regime_emb: torch.Tensor) -> torch.Tensor:
         x = torch.cat([hidden, regime_emb], dim=-1)
         gate = torch.sigmoid(self.gate(x))
@@ -130,10 +123,8 @@ class EpisodicMemory:
         self.novelty_threshold = float(novelty_threshold)
         self.keys = torch.empty((0, self.key_dim), dtype=torch.float32)
         self.values = torch.empty((0, self.value_dim), dtype=torch.float32)
-
     def __len__(self) -> int:
         return int(self.keys.shape[0])
-
     def add(
         self,
         keys: torch.Tensor,
@@ -155,7 +146,6 @@ class EpisodicMemory:
         self.keys = torch.cat([self.keys, keys_cpu], dim=0)[-self.capacity :]
         self.values = torch.cat([self.values, values_cpu], dim=0)[-self.capacity :]
         return int(keys_cpu.shape[0])
-
     def retrieve(self, query: torch.Tensor, k: int = 4) -> MemoryBatch | None:
         if self.keys.numel() == 0:
             return None
@@ -193,11 +183,9 @@ class HawkesIntensityHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, 2, **factory)
-
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(hidden))
         return self.head(h)
-
     @staticmethod
     def poisson_nll(
         log_intensity: torch.Tensor,
@@ -229,11 +217,9 @@ class SettlementHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, 1, **factory)
-
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(hidden))
         return self.head(h).squeeze(-1)
-
     @staticmethod
     def bce(
         logits: torch.Tensor,
@@ -274,7 +260,6 @@ class EpisodicMemoryFuser(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
         self.gate = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
-
     def forward(self, hidden: torch.Tensor, memory_value: torch.Tensor) -> torch.Tensor:
         x = torch.cat([hidden, memory_value], dim=-1)
         gate = torch.sigmoid(self.gate(x))

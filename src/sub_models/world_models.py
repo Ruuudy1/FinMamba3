@@ -5,7 +5,6 @@ from torch.distributions import OneHotCategorical
 from einops import rearrange, reduce
 from sub_models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-
 from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
@@ -28,7 +27,6 @@ from sub_models.lob_encoder import (
 )
 import agents
 from tools import weight_init
-
 RMSNorm = nn.RMSNorm
 
 
@@ -42,7 +40,6 @@ class DistHead(nn.Module):
         self.unimix_ratio = unimix_ratio
         self.dtype=dtype
         self.device=device
-
     def unimix(self, logits, mixing_ratio=0.01):
         # Mix logits with uniform noise for uniform-prior regularization.
         if mixing_ratio > 0:
@@ -50,13 +47,11 @@ class DistHead(nn.Module):
             mixed_probs = mixing_ratio * torch.ones_like(probs, dtype=self.dtype, device=self.device) / self.stoch_dim + (1-mixing_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
-
     def forward_post(self, x):
         logits = self.post_head(x)
         logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
         logits = self.unimix(logits, self.unimix_ratio)
         return logits
-
     def forward_prior(self, x):
         logits = self.prior_head(x)
         logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
@@ -64,52 +59,42 @@ class DistHead(nn.Module):
         return logits
 
 
-
-    
-
 class RewardHead(nn.Module):
     def __init__(self, num_classes, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
         super().__init__()
         act = getattr(nn, act)
-
         # Build backbone layers dynamically.
         layers = []
         for _ in range(layer_num):
             layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
             layers.append(RMSNorm(hidden_units, dtype=dtype, device=device))
             layers.append(act())
-
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(hidden_units, num_classes, dtype=dtype, device=device)
-
     def forward(self, feat):
         feat = self.backbone(feat)
         reward = self.head(feat)
         return reward
 
 
-
-
 class TerminationHead(nn.Module):
     def __init__(self, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
         super().__init__()
         act = getattr(nn, act)
-
         # Build backbone layers dynamically.
         layers = []
         for _ in range(layer_num):
             layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
             layers.append(RMSNorm(hidden_units, dtype=dtype, device=device))
             layers.append(act())
-
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(hidden_units, 1, dtype=dtype, device=device)
-
     def forward(self, feat):
         feat = self.backbone(feat)
         termination = self.head(feat)
         termination = termination.squeeze(-1)  # Remove the trailing singleton dimension.
         return termination
+
 
 class CategoricalKLDivLossWithFreeBits(nn.Module):
     """KL with a per-step free-bits floor. DreamerV3 uses 1.0 nat (Hafner et al. 2023);
@@ -118,7 +103,6 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
     def __init__(self, free_bits) -> None:
         super().__init__()
         self.free_bits = free_bits
-
     def forward(self, p_logits, q_logits):
         p_dist = OneHotCategorical(logits=p_logits)
         q_dist = OneHotCategorical(logits=q_logits)
@@ -239,8 +223,6 @@ class WorldModel(nn.Module):
             )
         else:
             raise ValueError(f"Unknown dynamics model: {self.model}")               
-        
-
         self.dist_head = DistHead(
             image_feat_dim=self.encoder.output_flatten_dim,
             hidden_state_dim=self.hidden_state_dim,
@@ -277,7 +259,6 @@ class WorldModel(nn.Module):
             raise ValueError(
                 f"Models.WorldModel.Decoder.Kind must be 'mse' or 'studentt'; got {decoder_kind!r}"
             )
-
         self.use_reward_head = bool(getattr(config.Models.WorldModel.Reward, 'Enabled', True))
         self.use_termination_head = bool(getattr(config.Models.WorldModel.Termination, 'Enabled', True))
         if self.use_reward_head:
@@ -338,7 +319,6 @@ class WorldModel(nn.Module):
         else:
             self.regime_head = None
             self.regime_conditioner = None
-
         em_cfg = getattr(config.Models.WorldModel, 'EpisodicMemory', None)
         self.use_episodic_memory = bool(em_cfg is not None and getattr(em_cfg, 'Enabled', False))
         if self.use_episodic_memory:
@@ -367,7 +347,6 @@ class WorldModel(nn.Module):
             self.memory_retrieve_every = 0
             self._memory_steps_since_retrieve = 0
             self.memory_use_novelty = False
-
         hawkes_cfg = getattr(config.Models.WorldModel, 'Hawkes', None)
         self.use_hawkes_head = bool(hawkes_cfg is not None and getattr(hawkes_cfg, 'Enabled', False))
         if self.use_hawkes_head:
@@ -380,7 +359,6 @@ class WorldModel(nn.Module):
         else:
             self.hawkes_head = None
             self.hawkes_loss_weight = 0.0
-
         settle_cfg = getattr(config.Models.WorldModel, 'Settlement', None)
         self.use_settlement_head = bool(
             settle_cfg is not None and getattr(settle_cfg, 'Enabled', False)
@@ -395,7 +373,6 @@ class WorldModel(nn.Module):
         else:
             self.settlement_head = None
             self.settlement_loss_weight = 0.0
-
         # When DirectionThresholds is a list, the direction loss is computed at each threshold and averaged.
         # This replaces the single-threshold (1%) target with a curve over thresholds.
         self.direction_thresholds = getattr(config.Models.WorldModel, 'DirectionThresholds', None)
@@ -403,22 +380,33 @@ class WorldModel(nn.Module):
             self.direction_thresholds = [float(t) for t in self.direction_thresholds]
         else:
             self.direction_thresholds = None
-
         # Decoder size_weight up-weights size and depth feature MSE relative to price features.
         # The 2.0 default biases the decoder toward volume signal but can crowd out predictive capacity for mid and spread.
         size_weight = float(getattr(config.Models.WorldModel.Decoder, 'SizeWeight', 2.0))
+        # Per-feature size indices default to the Polymarket schema. FI-2010 and other
+        # datasets with different level/tick orderings override these in the loss configs.
+        level_size_indices = getattr(
+            config.Models.WorldModel.Decoder, 'LevelSizeIndices', (1, 2, 3)
+        )
+        tick_size_indices = getattr(
+            config.Models.WorldModel.Decoder, 'TickSizeIndices', (6, 7, 11, 12)
+        )
         if self.decoder_kind == 'mse':
             self.reconstruction_loss_func = LOBReconstructionLoss(
                 k_levels=enc_cfg.K,
                 f_level=enc_cfg.FeatureDimLevel,
                 f_tick=enc_cfg.FeatureDimTick,
                 size_weight=size_weight,
+                level_size_indices=level_size_indices,
+                tick_size_indices=tick_size_indices,
             )
         else:
             self.reconstruction_loss_func = StudentTReconstructionLoss(
                 k_levels=enc_cfg.K,
                 f_level=enc_cfg.FeatureDimLevel,
                 f_tick=enc_cfg.FeatureDimTick,
+                level_size_indices=level_size_indices,
+                tick_size_indices=tick_size_indices,
             )
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
@@ -456,13 +444,11 @@ class WorldModel(nn.Module):
         # After that we trust the run.
         self.nan_guard_steps = int(getattr(config.Models.WorldModel, 'NaNGuardSteps', 50))
         self._nan_skip_count = 0
-
     def condition_dist_feat(self, dist_feat):
         if not self.use_regime:
             return dist_feat
         _, regime_emb = self.regime_head(dist_feat)
         return self.regime_conditioner(dist_feat, regime_emb)
-
     def encode_obs(self, obs):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             embedding = self.encoder(obs)
@@ -503,7 +489,6 @@ class WorldModel(nn.Module):
             post_logits = post_stat.reshape(list(post_stat.shape[:-1]) + [self.categorical_dim, self.categorical_dim])
             post_sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
             post_flattened_sample = self.flatten_sample(post_sample)            
-
         return post_flattened_sample, post_feat    
     # Called only when using the Transformer backbone (requires KV cache).
     def predict_next(self, last_flattened_sample, action, log_video=True):
@@ -511,7 +496,6 @@ class WorldModel(nn.Module):
             dist_feat = self.sequence_model.forward_with_kv_cache(last_flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
-
             # Decode prior sample into observation.
             prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
             prior_flattened_sample = self.flatten_sample(prior_sample)
@@ -529,7 +513,6 @@ class WorldModel(nn.Module):
                 termination_hat = termination_hat > 0
             else:
                 termination_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=torch.bool)
-
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, conditioned_dist_feat
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
         dist = OneHotCategorical(logits=logits)
@@ -540,11 +523,8 @@ class WorldModel(nn.Module):
         elif sample_mode == "probs":
             sample = dist.probs
         return sample
-    
-    
     def flatten_sample(self, sample):
         return rearrange(sample, "B L K C -> B L (K C)")
-
     def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype, device):
         """Pre-allocate imagination buffers to avoid per-step allocation overhead."""
         if self.imagine_batch_size != imagine_batch_size or self.imagine_batch_length != imagine_batch_length:
@@ -559,48 +539,40 @@ class WorldModel(nn.Module):
             self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
-
     def _imagine_data_full_prefix(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
                                   imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         context_latent = self.encode_obs(sample_obs)
-
         generated_samples = []
         generated_actions = []
         old_logits_list = []
-
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             context_dist_feat = self.sequence_model(context_latent, sample_action)
             conditioned_context_dist_feat = self.condition_dist_feat(context_dist_feat)
             context_prior_logits = self.dist_head.forward_prior(conditioned_context_dist_feat)
             context_prior_sample = self.stright_throught_gradient(context_prior_logits)
             context_flattened_sample = self.flatten_sample(context_prior_sample)
-
             current_sample = context_flattened_sample[:, -1:]
             current_dist_feat = conditioned_context_dist_feat[:, -1:]
             generated_samples.append(current_sample)
             self.sample_buffer[:, 0:1] = current_sample
             self.dist_feat_buffer[:, 0:1] = current_dist_feat
-
             for i in range(imagine_batch_length):
                 action, logits = agent.sample(torch.cat([current_sample, current_dist_feat], dim=-1))
                 action_for_model = action.to(dtype=sample_action.dtype)
                 generated_actions.append(action_for_model)
                 old_logits_list.append(logits)
                 self.action_buffer[:, i:i+1] = action_for_model
-
                 prefix_samples = torch.cat([context_latent] + generated_samples, dim=1)
                 prefix_actions = torch.cat([sample_action] + generated_actions, dim=1)
                 dist_feat = self.sequence_model(prefix_samples, prefix_actions)[:, -1:]
                 current_dist_feat = self.condition_dist_feat(dist_feat)
                 self.dist_feat_buffer[:, i+1:i+2] = current_dist_feat
-
                 prior_logits = self.dist_head.forward_prior(current_dist_feat)
                 prior_sample = self.stright_throught_gradient(prior_logits)
                 current_sample = self.flatten_sample(prior_sample)
                 generated_samples.append(current_sample)
                 self.sample_buffer[:, i+1:i+2] = current_sample
-
             old_logits_tensor = torch.cat(old_logits_list, dim=1) if old_logits_list else None
             if self.use_reward_head:
                 reward_hat_tensor = self.reward_decoder(self.dist_feat_buffer[:, :-1])
@@ -612,11 +584,9 @@ class WorldModel(nn.Module):
                 self.termination_hat_buffer = termination_hat_tensor > 0
             else:
                 self.termination_hat_buffer = torch.zeros_like(self.termination_hat_buffer, dtype=torch.bool)
-
         context_out = torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1)
         imagined_out = torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1)
         return imagined_out, self.action_buffer, old_logits_tensor, context_out, self.reward_hat_buffer, self.termination_hat_buffer
-
     def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         if self.model != 'Transformer':
@@ -624,13 +594,10 @@ class WorldModel(nn.Module):
                 agent, sample_obs, sample_action,
                 imagine_batch_size, imagine_batch_length, log_video, logger, global_step
             )
-
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         self.sequence_model.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
-
         # Encode context observations.
         context_latent = self.encode_obs(sample_obs)
-
         for i in range(sample_obs.shape[1]):
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
                 context_latent[:, i:i+1],
@@ -639,29 +606,23 @@ class WorldModel(nn.Module):
             )
         self.sample_buffer[:, 0:1] = last_latent
         self.dist_feat_buffer[:, 0:1] = last_dist_feat
-
         # Autoregressively imagine future latents.
         for i in range(imagine_batch_length):
             action, _ = agent.sample(torch.cat([self.sample_buffer[:, i:i+1], self.dist_feat_buffer[:, i:i+1]], dim=-1))
             self.action_buffer[:, i:i+1] = action
-
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
                 self.sample_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=log_video)
-
             self.sample_buffer[:, i+1:i+2] = last_latent
             self.dist_feat_buffer[:, i+1:i+2] = last_dist_feat
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
-
     def imagine_data2(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         return self._imagine_data_full_prefix(
             agent, sample_obs, sample_action,
             imagine_batch_size, imagine_batch_length, log_video, logger, global_step
         )
-
-
     def update(self, obs, action, reward, termination, global_step, epoch_step,
                logger=None, accum_steps: int = 1, is_last_accum: bool = True,
                event_counts: torch.Tensor | None = None,
@@ -785,7 +746,6 @@ class WorldModel(nn.Module):
                 + self.hawkes_loss_weight * hawkes_loss
                 + self.settlement_loss_weight * settlement_loss
             )
-
         # Catch bf16 selective_scan blowups during early training.
         # Skipping the backward and optimizer step here keeps the rest of the run salvageable instead of propagating NaN parameters everywhere.
         if global_step < self.nan_guard_steps and not torch.isfinite(total_loss):
@@ -800,7 +760,6 @@ class WorldModel(nn.Module):
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
             return (zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero)
         self._nan_skip_count = 0
-
         # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()
         if is_last_accum:
@@ -811,7 +770,6 @@ class WorldModel(nn.Module):
             self.optimizer.zero_grad(set_to_none=True)
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
-
         # Stash the last-frame hidden state per batch element into episodic memory.
         # One entry per sequence keeps the CPU buffer manageable while still building a representative regime catalog.
         if self.use_episodic_memory:
@@ -829,7 +787,6 @@ class WorldModel(nn.Module):
                     kl_qp = (q_log_softmax.exp() * (q_log_softmax - p_log_softmax)).sum(dim=(-1, -2))
                     novelty = (kl_pq + kl_qp).reshape(-1)
             self.episodic_memory.add(last_hidden, last_hidden, novelty=novelty)
-
         # Return detached tensors so the caller can stack and sync once per log step.
         # This avoids paying many GPU-CPU syncs per call to update.
         return (

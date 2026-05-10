@@ -9,11 +9,8 @@ The fit is closed-form via numpy.linalg.lstsq so this baseline trains in
 seconds and gives a sanity check that any neural model is actually learning
 something beyond a linear lag.
 """
-
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 import numpy as np
 
 
@@ -31,7 +28,6 @@ class LinearAR:
         self.config = config or LinearARConfig()
         self.coef: np.ndarray | None = None
         self.feature_dim: int | None = None
-
     def _build_design_matrix(self, features: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         T, F = features.shape
         L = self.config.lookback
@@ -44,12 +40,10 @@ class LinearAR:
             rows.append(np.concatenate([[1.0], window]))
             targets.append(features[t + 1, self.config.midprice_index])
         return np.asarray(rows), np.asarray(targets)
-
     def fit(self, features: np.ndarray) -> None:
         X, y = self._build_design_matrix(features)
         self.coef, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
         self.feature_dim = int(features.shape[1])
-
     def predict(self, features: np.ndarray) -> np.ndarray:
         if self.coef is None or self.feature_dim is None:
             raise RuntimeError("Call LinearAR.fit before predict.")
@@ -59,7 +53,6 @@ class LinearAR:
             )
         X, _ = self._build_design_matrix(features)
         return X @ self.coef
-
     def direction_labels(self, features: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Predicted and actual three-class direction labels.
 

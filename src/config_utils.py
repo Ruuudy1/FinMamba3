@@ -1,11 +1,8 @@
 """Shared configuration helpers for LOB pretraining."""
-
 from __future__ import annotations
-
 import argparse
 import ast
 from typing import Sequence
-
 import torch
 
 
@@ -17,7 +14,6 @@ class DotDict(dict):
         for key, value in self.items():
             if isinstance(value, dict):
                 self[key] = DotDict(value)
-
     def __getattr__(self, item):
         try:
             value = self[item]
@@ -27,10 +23,8 @@ class DotDict(dict):
             value = DotDict(value)
             self[item] = value
         return value
-
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
-
     def update_or_create(self, key_path, value):
         keys = key_path.split(".")
         d = self
@@ -69,9 +63,7 @@ def parse_args_and_update_config(
     argv: Sequence[str] | None = None,
 ):
     """Register dotted CLI overrides for every scalar config leaf."""
-
     parser = argparse.ArgumentParser(allow_abbrev=False)
-
     def add_arguments(node, current_prefix=""):
         for key, value in node.items():
             arg_name = f"--{current_prefix}{key}"
@@ -90,17 +82,13 @@ def parse_args_and_update_config(
                 )
             else:
                 parser.add_argument(arg_name, type=type(value), default=value)
-
     def update_dict(d, keys, value):
         for key in keys[:-1]:
             d = d.setdefault(key, {})
         d[keys[-1]] = value
-
     add_arguments(config, prefix)
     args = parser.parse_args(argv)
-
     for arg_key, arg_value in vars(args).items():
         if arg_value is not None:
             update_dict(config, arg_key.split("."), arg_value)
-
     return config
