@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 # endregion
-DEFAULT_REPO_ID = "ruuudy/FinDrama"
+DEFAULT_REPO_ID = "sj-hryi/FinDrama"
 DEFAULT_REPO_TYPE = "dataset"
 
 

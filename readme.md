@@ -69,7 +69,7 @@ saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
 The final cells upload checkpoints, stdout logs, and wandb summaries to the
-HuggingFace dataset repo at `ruuudy/FinDrama` under `checkpoints/lob/` and
+HuggingFace dataset repo at `sj-hryi/FinDrama` under `checkpoints/lob/` and
 `logs/<run_date>/`.
 
 ## Wheel Cache
@@ -77,7 +77,7 @@ HuggingFace dataset repo at `ruuudy/FinDrama` under `checkpoints/lob/` and
 Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached on HuggingFace
 so later runtimes skip the source build:
 
-https://huggingface.co/datasets/ruuudy/FinDrama/tree/main
+https://huggingface.co/datasets/sj-hryi/FinDrama/tree/main
 
 Wheels are keyed by Python version, PyTorch version, CUDA version, and GPU
 architecture (for example `wheels-py312-torch260-cu124-sm90`). The first run
@@ -93,7 +93,7 @@ Both supported datasets live under the same HuggingFace dataset repo that
 also hosts the wheel cache:
 
 ```text
-ruuudy/FinDrama
+sj-hryi/FinDrama
   data/
     train.tar.zip                                            Polymarket train bundle.
     validation.tar.zip                                       Polymarket val bundle.
@@ -112,7 +112,7 @@ Download both splits with `huggingface_hub`:
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="ruuudy/FinDrama",
+    repo_id="sj-hryi/FinDrama",
     repo_type="dataset",
     allow_patterns=["data/train.tar.zip", "data/validation.tar.zip"],
     local_dir="./",
@@ -136,7 +136,7 @@ bundles. Pull them directly:
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="ruuudy/FinDrama",
+    repo_id="sj-hryi/FinDrama",
     repo_type="dataset",
     allow_patterns=[
         "data/fi2010/train/Train_Dst_NoAuction_DecPre_CF_7.txt",

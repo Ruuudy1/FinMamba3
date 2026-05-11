@@ -99,7 +99,7 @@ def _resolve_split_path(data_dir: Path, split: str) -> Path:
     raise FileNotFoundError(
         f"FI-2010 file not found under {data_dir}. Looked for: {', '.join(candidates)}. "
         "Download from the FairData Etsin release (Ntakaris et al. 2018) or the "
-        "project HF Hub mirror at ruuudy/FinDrama under data/fi2010/<split>/."
+        "project HF Hub mirror at sj-hryi/FinDrama under data/fi2010/<split>/."
     )
 
 
