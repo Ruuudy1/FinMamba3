@@ -13,10 +13,12 @@ two complementary splits over a sequence of resolved markets:
 Both splits return the same MarketLifecycle objects already used by the
 backtester, so no data-format change is required downstream.
 """
+# region imports
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from lob.backtester.strategy import MarketLifecycle
+# endregion
 
 
 @dataclass

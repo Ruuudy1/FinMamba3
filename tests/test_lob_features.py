@@ -1,3 +1,4 @@
+# region imports
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from envs.lob_features import (  # noqa: E402
     fit_normalization,
     normalized_feature_diagnostics,
 )
+# endregion
 
 
 class LOBFeatureNormalizationTest(unittest.TestCase):

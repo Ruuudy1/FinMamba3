@@ -5,6 +5,7 @@ synthetic timeline plus a fake policy. The full CLI main() requires a trained
 world model checkpoint, which is out of scope for unit tests; that path is
 exercised manually after a Phase A pretrain.
 """
+# region imports
 from __future__ import annotations
 import os
 import sys
@@ -33,6 +34,7 @@ from lob.backtester.strategy import (  # noqa: E402
     StoredBook,
     Token,
 )
+# endregion
 
 
 def _book(bid, ask):

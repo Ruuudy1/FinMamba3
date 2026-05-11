@@ -1,5 +1,7 @@
+# region imports
 from torch.optim import Optimizer
 import torch
+# endregion
 
 
 class LaProp(Optimizer):

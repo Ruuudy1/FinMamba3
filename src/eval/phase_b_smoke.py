@@ -12,11 +12,13 @@ Example
         --config src/config_files/configure_lob.yaml \\
         --max-steps 1000
 """
+# region imports
 from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
 import torch
+# endregion
 
 
 def parse_args() -> argparse.Namespace:

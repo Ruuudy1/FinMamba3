@@ -1,4 +1,5 @@
 """Smoke tests for the LOB direction-prediction baselines."""
+# region imports
 from __future__ import annotations
 import os
 import sys
@@ -10,6 +11,7 @@ if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
 from baselines.deeplob import DeepLOB  # noqa: E402
 from baselines.linear_ar import LinearAR, LinearARConfig  # noqa: E402
+# endregion
 
 
 def test_deeplob_forward_shape():

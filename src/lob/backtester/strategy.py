@@ -4,6 +4,7 @@ Strategy Interface - What participants implement.
 Contains all dataclasses (MarketState, Order, Fill, etc.) and the BaseStrategy ABC.
 Participants subclass BaseStrategy and implement on_tick().
 """
+# region imports
 from __future__ import annotations
 import json
 try:  # orjson is ~5x faster; fall back to stdlib if not installed
@@ -17,6 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NamedTuple
+# endregion
 # - Enums -
 
 

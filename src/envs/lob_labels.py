@@ -15,11 +15,13 @@ This module implements two cleaner alternatives:
    threshold values, used for reporting accuracy as a curve over thresholds
    instead of a single 1% bucket.
 """
+# region imports
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 import numpy as np
 import torch
+# endregion
 
 
 @dataclass

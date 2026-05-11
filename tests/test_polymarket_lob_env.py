@@ -1,3 +1,4 @@
+# region imports
 import math
 import sys
 import unittest
@@ -19,6 +20,7 @@ from lob.backtester.strategy import (  # noqa: E402
     StoredBook,
     Token,
 )
+# endregion
 
 
 def _book(bid, ask):

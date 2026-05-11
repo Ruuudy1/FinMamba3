@@ -9,9 +9,11 @@ The fit is closed-form via numpy.linalg.lstsq so this baseline trains in
 seconds and gives a sanity check that any neural model is actually learning
 something beyond a linear lag.
 """
+# region imports
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
+# endregion
 
 
 @dataclass

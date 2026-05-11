@@ -1,4 +1,5 @@
 """Gymnasium trading environment over Polymarket LOB backtest data."""
+# region imports
 from __future__ import annotations
 import math
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ import numpy as np
 from gymnasium import spaces
 from lob.backtester.data_loader import BacktestData, TickData
 from lob.backtester.strategy import Fill, OrderBookSnapshot, Settlement, Side, Token
+# endregion
 ACTION_SPECS = (
     (Side.BUY, Token.YES),
     (Side.BUY, Token.NO),

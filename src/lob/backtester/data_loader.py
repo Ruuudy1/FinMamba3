@@ -8,6 +8,7 @@ map, and market lifecycle list.
 Note: pandas is imported lazily inside functions to avoid crashes on systems
 with broken numpy builds (e.g., MINGW-W64).
 """
+# region imports
 from __future__ import annotations
 import json
 import logging
@@ -25,6 +26,7 @@ from .strategy import (
     StoredBook,
     Token,
 )
+# endregion
 if TYPE_CHECKING:
     import pandas as pd
 logger = logging.getLogger(__name__)

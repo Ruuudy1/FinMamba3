@@ -16,6 +16,7 @@ Example
         --thresholds 0.001,0.005,0.01 \\
         --baselines world_model,deeplob,linear_ar
 """
+# region imports
 from __future__ import annotations
 import argparse
 import logging
@@ -25,6 +26,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:

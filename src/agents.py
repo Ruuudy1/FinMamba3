@@ -1,3 +1,4 @@
+# region imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -9,6 +10,7 @@ from pytorch_warmup import LinearWarmup
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
 from tools import layer_init
+# endregion
 RMSNorm = nn.RMSNorm
 
 

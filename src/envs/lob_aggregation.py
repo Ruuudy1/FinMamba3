@@ -16,10 +16,12 @@ Each bar yields the same 94-dim flat feature vector as the raw-tick path so
 the rest of the pipeline (encoder, replay buffer) is agnostic to the
 aggregation choice.
 """
+# region imports
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator
 import numpy as np
+# endregion
 
 
 @dataclass

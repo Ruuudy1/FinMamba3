@@ -1,3 +1,4 @@
+# region imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -27,6 +28,7 @@ from sub_models.lob_encoder import (
 )
 import agents
 from tools import weight_init
+# endregion
 RMSNorm = nn.RMSNorm
 
 

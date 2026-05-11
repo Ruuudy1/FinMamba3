@@ -15,12 +15,14 @@ Polymarket pipeline's safety net.
 
 Public entry point: load_fi2010_split(data_dir, split, horizon).
 """
+# region imports
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 from envs.lob_features import LOBSequence, compute_basic_tick_features
+# endregion
 logger = logging.getLogger(__name__)
 FI2010_K_LEVELS = 10
 FI2010_F_LEVEL = 4

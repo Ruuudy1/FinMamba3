@@ -17,6 +17,7 @@ Example
         --norm-path saved_models/lob/normalization.json \\
         --out-dir notes/
 """
+# region imports
 from __future__ import annotations
 import argparse
 import json
@@ -26,6 +27,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import torch
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:

@@ -1,4 +1,5 @@
 """Tests for triple-barrier and multi-threshold labeling helpers."""
+# region imports
 from __future__ import annotations
 import os
 import sys
@@ -14,6 +15,7 @@ from envs.lob_labels import (  # noqa: E402
     triple_barrier_labels_numpy,
     triple_barrier_labels_torch,
 )
+# endregion
 
 
 def test_triple_barrier_uniformly_rising_hits_profit():

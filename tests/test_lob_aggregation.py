@@ -1,4 +1,5 @@
 """Tests for tick-to-bar aggregation in src/envs/lob_aggregation.py."""
+# region imports
 from __future__ import annotations
 import os
 import sys
@@ -15,6 +16,7 @@ from envs.lob_aggregation import (  # noqa: E402
     DEFAULT_SUM_INDICES,
     aggregate_array,
 )
+# endregion
 
 
 def _toy_features(n_ticks: int, feature_dim: int = 94) -> tuple[np.ndarray, np.ndarray]:

@@ -9,6 +9,7 @@ Features are aggregate statistics relative to the midprice, not raw prices:
 raw top-K levels carry noise, and order flow (volume deltas, OFI) is a
 stronger directional signal than absolute price magnitudes.
 """
+# region imports
 from __future__ import annotations
 import argparse
 import json
@@ -21,6 +22,7 @@ if __package__ is None or __package__ == "":
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lob.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
+# endregion
 logger = logging.getLogger(__name__)
 K_LEVELS = 10
 F_LEVEL = 8

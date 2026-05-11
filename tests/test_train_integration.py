@@ -7,12 +7,14 @@ auxiliary inputs (event_counts, outcome, time_to_expiry_frac) and asserts:
 - Direction-thresholds sweep changes the direction loss compared to the
   single-threshold baseline.
 """
+# region imports
 from __future__ import annotations
 import os
 import sys
 import pytest
 import torch
 from types import SimpleNamespace
+# endregion
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_PATH = os.path.join(REPO_ROOT, "src")
 if SRC_PATH not in sys.path:

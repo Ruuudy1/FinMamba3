@@ -1,3 +1,4 @@
+# region imports
 import math
 import sys
 import types
@@ -5,6 +6,7 @@ import unittest
 from pathlib import Path
 import torch
 import yaml
+# endregion
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 

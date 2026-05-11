@@ -5,6 +5,7 @@ markdown formatting) that the CLI uses internally. The full main() flow needs
 a trained checkpoint and a real LOBSequence; that path is exercised manually
 during the diagnose/eval workflow rather than under unit tests.
 """
+# region imports
 from __future__ import annotations
 import os
 import sys
@@ -18,6 +19,7 @@ from eval.compare_direction import (  # noqa: E402
     _format_table,
     _label_directions,
 )
+# endregion
 
 
 def test_label_directions_three_buckets():

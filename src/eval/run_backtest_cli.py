@@ -16,6 +16,7 @@ Example
         --regime-split none \\
         --out reports/backtest_1iemugot.json
 """
+# region imports
 from __future__ import annotations
 import argparse
 import json
@@ -25,6 +26,7 @@ from dataclasses import asdict
 from pathlib import Path
 import numpy as np
 import torch
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:

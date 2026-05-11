@@ -1,9 +1,11 @@
 """Shared configuration helpers for LOB pretraining."""
+# region imports
 from __future__ import annotations
 import argparse
 import ast
 from typing import Sequence
 import torch
+# endregion
 
 
 class DotDict(dict):

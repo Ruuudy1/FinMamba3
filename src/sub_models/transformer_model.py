@@ -1,9 +1,11 @@
+# region imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import repeat, rearrange
 from sub_models.attention_blocks import get_vector_mask
 from sub_models.attention_blocks import PositionalEncoding1D, AttentionBlock, AttentionBlockKVCache
+# endregion
 
 
 class StochasticTransformer(nn.Module):

@@ -1,7 +1,9 @@
+# region imports
 import torch
 import os
 import numpy as np
 import random
+# endregion
 try:
     import wandb
 except ImportError:

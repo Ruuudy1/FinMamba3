@@ -1,5 +1,7 @@
+# region imports
 import numpy as np
 from torch import nn
+# endregion
 
 
 def layer_init(layer, std=np.sqrt(2)):

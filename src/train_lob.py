@@ -5,6 +5,7 @@ predict LOB feature sequences for a single market. No agent, no live env,
 no reward signal. Produces a world-model checkpoint suitable for warm-
 starting a downstream RL loop.
 """
+# region imports
 from __future__ import annotations
 import argparse
 import logging
@@ -40,6 +41,7 @@ from config_utils import DotDict, parse_args_and_update_config
 from lob.backtester import build_timeline
 from replay_buffer import ReplayBuffer
 from training_steps import train_world_model_step
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parent
 

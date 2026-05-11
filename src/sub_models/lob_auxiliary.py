@@ -1,9 +1,11 @@
 """Auxiliary LOB heads for regime-aware world-model experiments."""
+# region imports
 from __future__ import annotations
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+# endregion
 
 
 class DirectionHead(nn.Module):
