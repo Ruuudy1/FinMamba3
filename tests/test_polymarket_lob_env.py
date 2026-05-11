@@ -1,10 +1,9 @@
+# region imports
 import math
 import sys
 import unittest
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
 try:
     from envs.polymarket_lob_env import PolymarketLOBEnv
 except ModuleNotFoundError as exc:
@@ -12,7 +11,6 @@ except ModuleNotFoundError as exc:
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
-
 from lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
 from lob.backtester.strategy import (  # noqa: E402
     MarketLifecycle,
@@ -22,6 +20,7 @@ from lob.backtester.strategy import (  # noqa: E402
     StoredBook,
     Token,
 )
+# endregion
 
 
 def _book(bid, ask):
@@ -63,7 +62,6 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         obs, info = env.reset()
         self.assertEqual(obs.shape, env.observation_space.shape)
         self.assertFalse(info["invalid_action"])
-
         obs, reward, terminated, truncated, info = env.step(1)
         self.assertFalse(terminated)
         self.assertFalse(truncated)
@@ -71,11 +69,9 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         self.assertEqual(info["fill"].timestamp, 1)
         self.assertAlmostEqual(info["fill"].avg_price, 0.62)
         self.assertTrue(math.isfinite(reward))
-
         _, _, _, _, info = env.step(0)
         self.assertEqual(len(info["settlements"]), 1)
         self.assertAlmostEqual(env.cash, 100.0 - 6.2 + 10.0)
-
     def test_invalid_sell_does_not_change_cash(self):
         env = PolymarketLOBEnv(_data(), initial_cash=100.0, max_markets=1)
         env.reset()
@@ -84,7 +80,5 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         self.assertTrue(info["invalid_action"])
         self.assertIsNone(info["fill"])
         self.assertAlmostEqual(env.cash, 100.0)
-
-
 if __name__ == "__main__":
     unittest.main()

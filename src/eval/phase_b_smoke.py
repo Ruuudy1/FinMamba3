@@ -12,14 +12,13 @@ Example
         --config src/config_files/configure_lob.yaml \\
         --max-steps 1000
 """
-
+# region imports
 from __future__ import annotations
-
 import argparse
 import sys
 from pathlib import Path
-
 import torch
+# endregion
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,43 +34,35 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
     from agents import ActorCriticAgent
     from envs.polymarket_lob_env import PolymarketLOBEnv
     from lob.backtester.data_loader import build_timeline
     from sub_models.world_models import WorldModel
     import yaml
-
     with open(args.config) as f:
         cfg_dict = yaml.safe_load(f)
     # Convert nested dict to dotted-attribute config consistent with train_lob.
     from types import SimpleNamespace
-
     def _ns(d):
         if isinstance(d, dict):
             return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
         return d
-
     cfg = _ns(cfg_dict)
     device = torch.device(args.device)
-
     timeline = build_timeline(args.data_train)
     env = PolymarketLOBEnv(timeline)
-
     world_model = WorldModel(action_dim=env.action_space.n, config=cfg, device=device).to(device)
     state = torch.load(args.checkpoint, map_location=device)
     world_model.load_state_dict(state["state_dict"] if "state_dict" in state else state)
     world_model.eval()
     for p in world_model.parameters():
         p.requires_grad = False
-
     agent = ActorCriticAgent(
         feat_dim=world_model.hidden_state_dim + world_model.stoch_flattened_dim,
         action_dim=env.action_space.n,
         config=cfg,
         device=device,
     )
-
     obs, _ = env.reset()
     rewards = []
     for step in range(args.max_steps):
@@ -85,11 +76,8 @@ def main() -> int:
         rewards.append(float(reward))
         if done:
             obs, _ = env.reset()
-
     avg = sum(rewards) / max(1, len(rewards))
     print(f"phase_b_smoke: {len(rewards)} steps, mean reward {avg:.6f}")
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())

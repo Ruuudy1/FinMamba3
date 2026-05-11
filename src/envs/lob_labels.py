@@ -15,14 +15,13 @@ This module implements two cleaner alternatives:
    threshold values, used for reporting accuracy as a curve over thresholds
    instead of a single 1% bucket.
 """
-
+# region imports
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Sequence
-
 import numpy as np
 import torch
+# endregion
 
 
 @dataclass
@@ -33,7 +32,6 @@ class TripleBarrierConfig:
     (e.g. 0.005 for 50 bps). horizon is the maximum number of forward ticks
     the label can look ahead before the time barrier fires.
     """
-
     profit_threshold: float = 0.005
     stop_threshold: float = 0.005
     horizon: int = 32
@@ -69,7 +67,6 @@ def triple_barrier_labels_numpy(
     h = int(config.horizon)
     pt = float(config.profit_threshold)
     st = float(config.stop_threshold)
-
     for t in range(T):
         end = min(T, t + 1 + h)
         if end <= t + 1:
@@ -119,29 +116,24 @@ def triple_barrier_labels_torch(
     pt = float(config.profit_threshold)
     st = float(config.stop_threshold)
     device = mid.device
-
     labels = torch.full((B, L), 1, dtype=torch.long, device=device)
     valid = torch.zeros((B, L), dtype=torch.bool, device=device)
     if L <= 1 or h <= 0:
         return labels, valid
-
     pad = mid[:, -1:].expand(B, h)
     extended = torch.cat([mid, pad], dim=1)
     base = mid.unsqueeze(-1)
     future = extended.unfold(1, h, 1)[:, 1 : L + 1]
     safe_base = torch.where(base.abs() < 1e-12, torch.ones_like(base), base)
     rets = (future - base) / safe_base
-
     hit_profit = (rets >= pt).any(dim=-1)
     hit_stop = (rets <= -st).any(dim=-1)
     profit_idx = torch.argmax((rets >= pt).int(), dim=-1)
     stop_idx = torch.argmax((rets <= -st).int(), dim=-1)
-
     profit_first = hit_profit & (~hit_stop | (profit_idx < stop_idx))
     stop_first = hit_stop & (~hit_profit | (stop_idx < profit_idx))
     labels = torch.where(profit_first, torch.full_like(labels, 2), labels)
     labels = torch.where(stop_first, torch.full_like(labels, 0), labels)
-
     horizon_index = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
     valid = horizon_index < (L - 1)
     return labels, valid

@@ -9,26 +9,21 @@ Features are aggregate statistics relative to the midprice, not raw prices:
 raw top-K levels carry noise, and order flow (volume deltas, OFI) is a
 stronger directional signal than absolute price magnitudes.
 """
-
+# region imports
 from __future__ import annotations
-
 import argparse
 import json
 import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-
 import numpy as np
-
 if __package__ is None or __package__ == "":
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from lob.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
-
+# endregion
 logger = logging.getLogger(__name__)
-
 K_LEVELS = 10
 F_LEVEL = 8
 F_TICK = 14
@@ -64,7 +59,6 @@ FLAT_FEATURE_NAMES = tuple(
     for k in range(K_LEVELS)
     for name in LEVEL_FEATURE_NAMES
 ) + tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES)
-
 LEVEL_DETERMINISTIC_INDICES = (5, 6)
 DEFAULT_NORM_CLIP = 8.0
 DEFAULT_LEVEL_STD_FLOOR = np.asarray(
@@ -90,9 +84,10 @@ class LOBSequence:
     yes_outcome: np.ndarray | None = None  # Shape (T,) float32 in {0, 1}, or nan if unknown.
 
     def to_flat(self) -> np.ndarray:
-        T = self.per_level.shape[0]
+        # Use the array's own shape so FI-2010 (K, 4) works alongside Polymarket (K, 8).
+        T, k, f_level = self.per_level.shape
         return np.concatenate(
-            [self.per_level.reshape(T, K_LEVELS * F_LEVEL), self.per_tick],
+            [self.per_level.reshape(T, k * f_level), self.per_tick],
             axis=1,
         ).astype(np.float32)
 
@@ -101,13 +96,11 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
     out = np.zeros((K_LEVELS, F_LEVEL), dtype=np.float32)
     if mid <= 0.0:
         return out
-
     entries: list[tuple[float, float, int]] = []
     for lvl in book.bids[:K_LEVELS]:
         entries.append((float(lvl.price), float(lvl.size), +1))
     for lvl in book.asks[:K_LEVELS - len(entries)]:
         entries.append((float(lvl.price), float(lvl.size), -1))
-
     bid_cum_size = 0.0
     ask_cum_size = 0.0
     prev_price = mid
@@ -122,7 +115,6 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
         vol_share = cum_depth / total_cum if total_cum > 0 else 0.0
         gap = price - prev_price if k > 0 else price - mid
         prev_price = price
-
         out[k, 0] = (price - mid) / max(mid, 1e-6)
         out[k, 1] = math.log1p(max(size, 0.0))
         out[k, 2] = math.log1p(max(cum_depth, 0.0))
@@ -148,14 +140,12 @@ def extract_features(
     mids: list[float] = []
     ts_list: list[int] = []
     mid_window: list[float] = []
-
     prev_mid: float | None = None
     prev_spread: float | None = None
     prev_imbalance: float | None = None
     prev_top5_sizes: np.ndarray | None = None
     prev_top_bid_size: float | None = None
     prev_top_ask_size: float | None = None
-
     for tick in timeline:
         sb = tick.order_books.get(market_slug)
         if sb is None:
@@ -180,22 +170,18 @@ def extract_features(
         else:
             microprice = mid
         weighted_mid_disp = (microprice - mid) / max(mid, 1e-6)
-
         lvl_tokens = _encode_levels(book, mid)
         book_ts = int(tick.book_timestamps.get(market_slug, tick.ts_sec))
         staleness = max(float(tick.ts_sec - book_ts), 0.0)
         lvl_tokens[:, 7] = math.log1p(staleness)
-
         dmid = (mid - prev_mid) if prev_mid is not None else 0.0
         dspread = (spread - prev_spread) if prev_spread is not None else 0.0
         dimb = (imbalance - prev_imbalance) if prev_imbalance is not None else 0.0
-
         # Signed top-of-book order-flow imbalance (Cont-Kukanov style).
         if prev_top_bid_size is not None and prev_top_ask_size is not None:
             ofi_top = (top_bid_size - prev_top_bid_size) - (top_ask_size - prev_top_ask_size)
         else:
             ofi_top = 0.0
-
         top5 = np.zeros(10, dtype=np.float32)
         for k in range(min(5, len(book.bids))):
             top5[k] = float(book.bids[k].size)
@@ -206,12 +192,10 @@ def extract_features(
         else:
             trade_intensity = 0.0
         prev_top5_sizes = top5
-
         mid_window.append(mid)
         if len(mid_window) > vol_window:
             mid_window.pop(0)
         rolling_vol = float(np.std(mid_window)) if len(mid_window) >= 2 else 0.0
-
         tick_vec = np.array([
             mid, spread, math.log1p(max(spread, 0.0)),
             imbalance, microprice, weighted_mid_disp,
@@ -221,21 +205,17 @@ def extract_features(
             ofi_top, trade_intensity, rolling_vol,
         ], dtype=np.float32)
         assert tick_vec.shape[0] == F_TICK
-
         per_level_rows.append(lvl_tokens)
         per_tick_rows.append(tick_vec)
         mids.append(mid)
         ts_list.append(int(tick.ts_sec))
-
         prev_mid = mid
         prev_spread = spread
         prev_imbalance = imbalance
         prev_top_bid_size = top_bid_size
         prev_top_ask_size = top_ask_size
-
     if not per_tick_rows:
         raise RuntimeError(f"No usable ticks for market {market_slug}")
-
     return LOBSequence(
         market_slug=market_slug,
         per_level=np.stack(per_level_rows, axis=0),
@@ -248,6 +228,49 @@ def extract_features(
             else None
         ),
     )
+BASIC_TICK_FEATURE_NAMES = (
+    "mid",
+    "spread",
+    "log_spread",
+    "imbalance",
+    "microprice",
+    "log_total_vol",
+)
+
+
+def compute_basic_tick_features(per_level_fi2010: np.ndarray) -> np.ndarray:
+    """Derive 6 stationary tick aggregates from FI-2010-style level data.
+
+    Input shape is (T, K, 4) where the last axis is ordered
+    (ask_price, ask_size, bid_price, bid_size). Output shape is (T, 6).
+    Pure function: no cross-tick state, so it works on already-shuffled data.
+    """
+    if per_level_fi2010.ndim != 3 or per_level_fi2010.shape[-1] != 4:
+        raise ValueError(
+            "compute_basic_tick_features expects shape (T, K, 4); got "
+            f"{tuple(per_level_fi2010.shape)}"
+        )
+    ask_prices = per_level_fi2010[:, :, 0]
+    ask_sizes = per_level_fi2010[:, :, 1]
+    bid_prices = per_level_fi2010[:, :, 2]
+    bid_sizes = per_level_fi2010[:, :, 3]
+    best_ask = ask_prices[:, 0]
+    best_bid = bid_prices[:, 0]
+    top_ask_size = ask_sizes[:, 0]
+    top_bid_size = bid_sizes[:, 0]
+    mid = 0.5 * (best_ask + best_bid)
+    spread = best_ask - best_bid
+    log_spread = np.log1p(np.maximum(spread, 0.0))
+    top_sum = top_bid_size + top_ask_size
+    imbalance = np.where(top_sum > 0.0, top_bid_size / np.maximum(top_sum, 1e-12), 0.5)
+    microprice_num = best_ask * top_bid_size + best_bid * top_ask_size
+    microprice = np.where(top_sum > 0.0, microprice_num / np.maximum(top_sum, 1e-12), mid)
+    total_vol = ask_sizes.sum(axis=1) + bid_sizes.sum(axis=1)
+    log_total_vol = np.log1p(np.maximum(total_vol, 0.0))
+    return np.stack(
+        [mid, spread, log_spread, imbalance, microprice, log_total_vol],
+        axis=1,
+    ).astype(np.float32)
 
 
 def pick_longest_market(data: BacktestData) -> str:
@@ -259,8 +282,6 @@ def pick_longest_market(data: BacktestData) -> str:
     if not counts:
         raise RuntimeError("No markets with 2-sided books in timeline")
     return max(counts.items(), key=lambda kv: kv[1])[0]
-
-
 # Normalization.
 
 
@@ -285,25 +306,26 @@ class NormalizationStats:
             "tick_std_floor": DEFAULT_TICK_STD_FLOOR.tolist(),
             "deterministic_level_indices": list(LEVEL_DETERMINISTIC_INDICES),
         }
-
     @classmethod
     def from_json(cls, d: dict) -> "NormalizationStats":
         per_level_mean = np.asarray(d["per_level_mean"], dtype=np.float32)
-        per_level_std = np.maximum(
-            np.asarray(d["per_level_std"], dtype=np.float32),
-            DEFAULT_LEVEL_STD_FLOOR,
-        )
-        for idx in LEVEL_DETERMINISTIC_INDICES:
-            per_level_mean[idx] = 0.0
-            per_level_std[idx] = 1.0
+        per_level_std = np.asarray(d["per_level_std"], dtype=np.float32)
+        per_tick_mean = np.asarray(d["per_tick_mean"], dtype=np.float32)
+        per_tick_std = np.asarray(d["per_tick_std"], dtype=np.float32)
+        # Apply the canonical Polymarket floors and deterministic-index pins only
+        # when the saved stats match that schema's widths.
+        if per_level_mean.shape[0] == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
+            per_level_std = np.maximum(per_level_std, DEFAULT_LEVEL_STD_FLOOR)
+            for idx in LEVEL_DETERMINISTIC_INDICES:
+                per_level_mean[idx] = 0.0
+                per_level_std[idx] = 1.0
+        if per_tick_std.shape[0] == DEFAULT_TICK_STD_FLOOR.shape[0]:
+            per_tick_std = np.maximum(per_tick_std, DEFAULT_TICK_STD_FLOOR)
         return cls(
             per_level_mean=per_level_mean,
             per_level_std=per_level_std,
-            per_tick_mean=np.asarray(d["per_tick_mean"], dtype=np.float32),
-            per_tick_std=np.maximum(
-                np.asarray(d["per_tick_std"], dtype=np.float32),
-                DEFAULT_TICK_STD_FLOOR,
-            ),
+            per_tick_mean=per_tick_mean,
+            per_tick_std=per_tick_std,
             clip_value=float(d.get("clip_value", DEFAULT_NORM_CLIP)),
         )
 
@@ -313,19 +335,32 @@ def fit_normalization(
     eps: float = 1e-6,
     clip_value: float = DEFAULT_NORM_CLIP,
 ) -> NormalizationStats:
-    pl = seq.per_level.reshape(-1, F_LEVEL)
+    # Infer per-level feature width from the array. Polymarket uses 8 (with the
+    # canonical std_floor and deterministic indices); FI-2010 and other schemas
+    # fall back to a flat eps floor and no deterministic pinning.
+    f_level = int(seq.per_level.shape[-1])
+    f_tick = int(seq.per_tick.shape[-1])
+    pl = seq.per_level.reshape(-1, f_level)
     pt = seq.per_tick
     pl_mean = pl.mean(axis=0).astype(np.float32)
     pt_mean = pt.mean(axis=0).astype(np.float32)
-    pl_std = np.maximum(pl.std(axis=0), DEFAULT_LEVEL_STD_FLOOR).astype(np.float32)
-    pt_std = np.maximum(pt.std(axis=0), DEFAULT_TICK_STD_FLOOR).astype(np.float32)
-
-    # Level index and side are deterministic token metadata.
-    # Their bounded encodings are kept directly to avoid turning tiny distribution shifts into large z-scores.
-    for idx in LEVEL_DETERMINISTIC_INDICES:
-        pl_mean[idx] = 0.0
-        pl_std[idx] = 1.0
-
+    level_floor = (
+        DEFAULT_LEVEL_STD_FLOOR if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]
+        else np.full(f_level, eps, dtype=np.float32)
+    )
+    tick_floor = (
+        DEFAULT_TICK_STD_FLOOR if f_tick == DEFAULT_TICK_STD_FLOOR.shape[0]
+        else np.full(f_tick, eps, dtype=np.float32)
+    )
+    pl_std = np.maximum(pl.std(axis=0), level_floor).astype(np.float32)
+    pt_std = np.maximum(pt.std(axis=0), tick_floor).astype(np.float32)
+    # Polymarket level index and side are deterministic token metadata; pin them
+    # so tiny distribution shifts cannot blow up the z-score. Skip when the
+    # active schema does not have those slots.
+    if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
+        for idx in LEVEL_DETERMINISTIC_INDICES:
+            pl_mean[idx] = 0.0
+            pl_std[idx] = 1.0
     return NormalizationStats(
         per_level_mean=pl_mean,
         per_level_std=np.maximum(pl_std, eps).astype(np.float32),
@@ -366,28 +401,44 @@ def make_aggregate_only(seq: LOBSequence) -> LOBSequence:
 
 def normalized_feature_diagnostics(seq: LOBSequence, clip_value: float | None = None) -> dict:
     flat = seq.to_flat()
+    flat_dim = flat.shape[1] if flat.ndim == 2 else 0
     abs_flat = np.abs(flat)
     finite = bool(np.isfinite(flat).all())
     max_abs = float(abs_flat.max()) if flat.size else 0.0
-    feature_max_abs = abs_flat.max(axis=0) if flat.size else np.zeros(FEATURE_DIM_FLAT)
+    feature_max_abs = abs_flat.max(axis=0) if flat.size else np.zeros(flat_dim)
     top_idx = np.argsort(feature_max_abs)[-5:][::-1]
     cap = DEFAULT_NORM_CLIP if clip_value is None else float(clip_value)
+    # Pick the schema-appropriate feature-name tuple, defaulting to indices for unknown widths.
+    name_table = FLAT_FEATURE_NAMES if flat_dim == len(FLAT_FEATURE_NAMES) else tuple(
+        f"feature_{i}" for i in range(flat_dim)
+    )
     return {
         "finite": finite,
         "max_abs": max_abs,
         "clip_value": cap,
         "within_clip": bool(finite and max_abs <= cap + 1e-5),
         "top_features": [
-            (FLAT_FEATURE_NAMES[int(i)], float(feature_max_abs[int(i)]))
+            (name_table[int(i)], float(feature_max_abs[int(i)]))
             for i in top_idx
         ],
     }
 
 
 def denormalize_flat(flat: np.ndarray, stats: NormalizationStats) -> np.ndarray:
+    # Infer the schema (K, F_level) from the normalization stats so the same code path
+    # handles Polymarket (8 per-level features) and FI-2010 (4 per-level features).
     arr = np.asarray(flat, dtype=np.float32).copy()
-    level_dim = K_LEVELS * F_LEVEL
-    levels = arr[..., :level_dim].reshape(*arr.shape[:-1], K_LEVELS, F_LEVEL)
+    f_level = int(stats.per_level_mean.shape[0])
+    f_tick = int(stats.per_tick_mean.shape[0])
+    total = arr.shape[-1]
+    level_dim = total - f_tick
+    if level_dim % f_level != 0:
+        raise ValueError(
+            f"denormalize_flat: feature width {total} not divisible into "
+            f"(K * {f_level}) + {f_tick}"
+        )
+    k = level_dim // f_level
+    levels = arr[..., :level_dim].reshape(*arr.shape[:-1], k, f_level)
     ticks = arr[..., level_dim:]
     levels *= stats.per_level_std
     levels += stats.per_level_mean
@@ -403,8 +454,6 @@ def save_normalization(stats: NormalizationStats, path: Path) -> None:
 
 def load_normalization(path: Path) -> NormalizationStats:
     return NormalizationStats.from_json(json.loads(path.read_text()))
-
-
 # CLI entry point.
 
 
@@ -416,12 +465,10 @@ def _cli(argv: list[str] | None = None) -> None:
     p.add_argument("--norm-out", type=Path, default=None)
     p.add_argument("--norm-clip", type=float, default=DEFAULT_NORM_CLIP)
     args = p.parse_args(argv)
-
     logging.basicConfig(level=logging.WARNING)
     bt = build_timeline(data_dir=args.data_dir, hours=args.hours)
     slug = args.market or pick_longest_market(bt)
     print(f"market: {slug}")
-
     seq = extract_features(bt.timeline, slug)
     print(f"per_level shape: {seq.per_level.shape}")
     print(f"per_tick  shape: {seq.per_tick.shape}")
@@ -431,7 +478,6 @@ def _cli(argv: list[str] | None = None) -> None:
     for i in range(F_TICK):
         print(f"  f{i:02d}  mean={seq.per_tick[:, i].mean():+.4f}  "
               f"std={seq.per_tick[:, i].std():.4f}")
-
     if args.norm_out:
         stats = fit_normalization(seq, clip_value=args.norm_clip)
         save_normalization(stats, args.norm_out)
@@ -442,7 +488,5 @@ def _cli(argv: list[str] | None = None) -> None:
         print("top normalized feature magnitudes:")
         for name, value in diag["top_features"]:
             print(f"  {name}: {value:.4f}")
-
-
 if __name__ == "__main__":
     _cli()

@@ -1,3 +1,4 @@
+# region imports
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,12 +7,12 @@ import copy
 import numpy as np
 from sub_models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-
 from sub_models.functions_losses import SymLogTwoHotLoss
 from utils import EMAScalar
 from tools import layer_init
-
+# endregion
 RMSNorm = nn.RMSNorm
+
 
 def percentile(x, percentage):
     flat_x = torch.flatten(x)
@@ -19,10 +20,10 @@ def percentile(x, percentage):
     per = torch.kthvalue(flat_x, kth).values
     return per
 
+
 def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=torch.float32):
     # Invert termination to have 0 if the episode ended and 1 otherwise.
     inv_termination = (termination * -1) + 1
-
     batch_size, batch_length = rewards.shape[:2]
     gamma_return = torch.zeros((batch_size, batch_length+1), dtype=dtype, device=rewards.device)
     gamma_return[:, -1] = values[:, -1]
@@ -33,33 +34,30 @@ def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=torch.flo
             gamma * inv_termination[:, t] * lam * gamma_return[:, t+1]
     return gamma_return[:, :-1]
 
+
 class RunningMeanStd:
     def __init__(self, shape, device):
         self.mean = torch.zeros(shape, dtype=torch.float32, device=device)
         self.var = torch.ones(shape, dtype=torch.float32, device=device)
         self.count = torch.tensor(1e-4, dtype=torch.float32, device=device)
-
     def update(self, x):
         batch_mean = torch.mean(x, dim=0)
         batch_var = torch.var(x, dim=0, unbiased=False)
         batch_count = x.size(0)
-
         self.mean, self.var, self.count = self.update_mean_var_count(
             self.mean, self.var, self.count, batch_mean, batch_var, batch_count
         )
-
     def update_mean_var_count(self, mean, var, count, batch_mean, batch_var, batch_count):
         delta = batch_mean - mean
         tot_count = count + batch_count
-
         new_mean = mean + delta * batch_count / tot_count
         m_a = var * count
         m_b = batch_var * batch_count
         M2 = m_a + m_b + delta**2 * count * batch_count / tot_count
         new_var = M2 / tot_count
         new_count = tot_count
-
         return new_mean, new_var, new_count
+
 
 class VecNormalize(nn.Module):
     def __init__(self, shape, device, epsilon=1e-8, clipob=10.0):
@@ -67,7 +65,6 @@ class VecNormalize(nn.Module):
         self.ob_rms = RunningMeanStd(shape, device)
         self.epsilon = epsilon
         self.clipob = clipob
-
     def forward(self, x):
         if x.dim() == 2:  # (B, D)
             x_flat = x
@@ -76,17 +73,16 @@ class VecNormalize(nn.Module):
             x_flat = x.view(-1, D)  # Flatten to (B*L, D)
         else:
             raise ValueError("Unsupported input shape")
-
         self.ob_rms.update(x_flat)
         mean = self.ob_rms.mean
         var = self.ob_rms.var
         x_normalized = torch.clamp((x_flat - mean) / torch.sqrt(var + self.epsilon), -self.clipob, self.clipob)
-
         if x.dim() == 2:  # (B, D)
             return x_normalized
         elif x.dim() == 3:  # (B, L, D)
             return x_normalized.view(B, L, D)
-    
+
+
 class ActorCriticAgent(nn.Module):
     def __init__(self, conf, action_dim, device) -> None:
         super().__init__()
@@ -103,10 +99,8 @@ class ActorCriticAgent(nn.Module):
         self.action_dim = action_dim
         self.unimix_ratio = conf.Models.Agent.Unimix_ratio
         self.device = device
-
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
         act = getattr(nn, conf.Models.Agent.AC.Act)
-
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
@@ -123,8 +117,6 @@ class ActorCriticAgent(nn.Module):
             *actor,
             layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)
         ).to(device)
-        
-
         critic = [
             layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
             RMSNorm(critic_hidden_dim),
@@ -136,16 +128,13 @@ class ActorCriticAgent(nn.Module):
                 RMSNorm(critic_hidden_dim),
                 act()
             ])
-
         self.critic = nn.Sequential(
             *critic,
             layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)
         ).to(device)
         self.slow_critic = copy.deepcopy(self.critic)
-
         self.lowerbound_ema = EMAScalar(decay=0.99)
         self.upperbound_ema = EMAScalar(decay=0.99)
-
         if conf.Models.Agent.AC.Optimiser == 'Laprop':
             self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon)
         elif conf.Models.Agent.AC.Optimiser == 'Adam':
@@ -159,33 +148,27 @@ class ActorCriticAgent(nn.Module):
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)  # No-op schedule; required to drive the warmup scheduler.
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
-
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
         for slow_param, param in zip(self.slow_critic.parameters(), self.critic.parameters()):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
-
     def policy(self, x):
         logits = self.actor(x)
         logits = self.unimix(logits)
         return logits
-
     def value(self, x):
         value = self.critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
-
     @torch.no_grad()
     def slow_value(self, x):
         value = self.slow_critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
-
     def get_logits_raw_value(self, x):
         logits = self.actor(x)
         raw_value = self.critic(x)
         return logits, raw_value
-
     def unimix(self, logits):
         # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
@@ -194,7 +177,6 @@ class ActorCriticAgent(nn.Module):
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
-
     @torch.no_grad()
     def sample(self, latent, greedy=False):
         self.eval()
@@ -206,7 +188,6 @@ class ActorCriticAgent(nn.Module):
             else:
                 action = dist.sample()
         return action, logits
-
     def sample_as_env_action(self, latent, greedy=False):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
@@ -218,32 +199,25 @@ class ActorCriticAgent(nn.Module):
             dist = distributions.Categorical(logits=logits[:, :-1])
             log_prob = dist.log_prob(action)
             entropy = dist.entropy()
-
             # Decode value estimates and compute lambda returns.
             slow_value = self.slow_value(latent)
             slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
             value = self.symlog_twohot_loss.decode(raw_value)
             lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
-
             # Update value function with slow-critic regularization.
             value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
             slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
-                
             lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
             upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
             S = upper_bound-lower_bound
             norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # Clip to 1 per the paper's max(1, S) formulation.
             norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
             policy_loss = -(log_prob * norm_advantage.detach()).mean()
-
             entropy_loss = entropy.mean()
-
             loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
-
         # Apply gradient descent step.
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
-
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -251,7 +225,6 @@ class ActorCriticAgent(nn.Module):
         self.lr_scheduler.step()
         self.warmup_scheduler.dampen()
         self.update_slow_critic()
-
         if logger is not None:
             logger.log('ActorCritic/policy_loss', policy_loss.item(), global_step=global_step)
             logger.log('ActorCritic/value_loss', value_loss.item(), global_step=global_step)
@@ -259,8 +232,6 @@ class ActorCriticAgent(nn.Module):
             logger.log('ActorCritic/S', S.item(), global_step=global_step)
             logger.log('ActorCritic/norm_ratio', norm_ratio.item(), global_step=global_step)
             logger.log('ActorCritic/total_loss', loss.item(), global_step=global_step)
-
-
 
 
 class PPOAgent(nn.Module):
@@ -275,7 +246,6 @@ class PPOAgent(nn.Module):
         self.entropy_coef = conf.Models.Agent.PPO.EntropyCoef
         self.eps_clip=conf.Models.Agent.PPO.EpsilonClip
         self.K_epochs=conf.Models.Agent.PPO.K_epochs
-        
         self.minibatch_size=conf.Models.Agent.PPO.Minibatch
         self.c1=conf.Models.Agent.PPO.CriticCoef
         self.c2=conf.Models.Agent.PPO.EntropyCoef
@@ -286,10 +256,8 @@ class PPOAgent(nn.Module):
         self.action_dim = action_dim
         self.unimix_ratio = conf.Models.Agent.Unimix_ratio
         self.device = device
-
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
         act = getattr(nn, conf.Models.Agent.PPO.Act)
-
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
@@ -306,7 +274,6 @@ class PPOAgent(nn.Module):
             *actor,
             layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)
         ).to(device)
-
         critic = [
             layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
             RMSNorm(critic_hidden_dim),
@@ -318,17 +285,13 @@ class PPOAgent(nn.Module):
                 RMSNorm(critic_hidden_dim),
                 act()
             ])
-
         self.critic = nn.Sequential(
             *critic,
             layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)
         ).to(device)
-
         self.slow_critic = copy.deepcopy(self.critic)
-
         self.lowerbound_ema = EMAScalar(decay=0.99)
         self.upperbound_ema = EMAScalar(decay=0.99)
-
         if conf.Models.Agent.PPO.Optimiser == 'Laprop':
             self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.PPO.Laprop.LearningRate, eps=conf.Models.Agent.PPO.Laprop.Epsilon)
         elif conf.Models.Agent.PPO.Optimiser == 'Adam':
@@ -351,10 +314,7 @@ class PPOAgent(nn.Module):
         dist = distributions.Categorical(logits=logits)
         logp_prob = dist.log_prob(action)
         entropy = dist.entropy()
-
         return logp_prob, value, entropy
-    
-    
     def unimix(self, logits):
         # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
@@ -363,14 +323,11 @@ class PPOAgent(nn.Module):
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
-
     def sample_as_env_action(self, latent, greedy=False):
             action, _ = self.sample(latent, greedy)
             return action.detach().cpu().squeeze(-1).numpy()    
     def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return):
-
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
-
         ratio = torch.exp(logp - logp_old)
         # KL approximation per joschu.net/blog/kl-approx.html.
         kl_apx = ((ratio - 1) - (logp - logp_old)).mean()
@@ -379,12 +336,8 @@ class PPOAgent(nn.Module):
         actor_loss = -(torch.min(ratio*advs.detach(), clip_advs.detach())).mean()
         slow_critic_loss = self.symlog_twohot_loss(raw_values, slow_return.detach())
         critic_loss = self.symlog_twohot_loss(raw_values, rtgs.detach())
-
         entropy_loss = entropy.mean()
-
         return actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx 
-
-
     def calc_gae_and_reward_to_go(self, rewards, values, termination):
         # Invert termination to have 0 if the episode ended and 1 otherwise.
         inv_termination = (termination * -1) + 1
@@ -402,43 +355,34 @@ class PPOAgent(nn.Module):
         # Add value estimates to advantages to recover the lambda returns.
         returns = advantages[:, :-1] + values[:, :-1]
         return advantages[:, :-1], returns
-    
     def value(self, x):
         value = self.critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
-    
     @torch.no_grad()
     def slow_value(self, x):
         value = self.slow_critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
-
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
         for slow_param, param in zip(self.slow_critic.parameters(), self.critic.parameters()):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
-
-
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             feat_dim = latent.shape[-1]
             dist = distributions.Categorical(logits=old_logits)
             old_logp = dist.log_prob(action)
-
             flatten_latent = latent[:, :-1].reshape(-1, feat_dim)
             flatten_action = action.view(-1)
             flatten_old_logp = old_logp.view(-1).detach()
-
             batch_size = flatten_latent.shape[0]
-
             entropy_loss_list = []
             actor_loss_list = []
             critic_loss_list = []
             total_loss_list = []
             kl_approx_list = []
-            
             for _ in range(self.K_epochs):
                 # Recompute value after each PPO update per Andrychowicz et al. 2020, section 3.5.
                 value = self.value(latent)
@@ -456,12 +400,9 @@ class PPOAgent(nn.Module):
                 # Shuffle minibatch indices each PPO epoch.
                 inds = np.arange(batch_size)
                 np.random.shuffle(inds)
-                
                 for start in range(0, batch_size, self.minibatch_size):
                     end = start + self.minibatch_size
-
                     minibatch_inds = inds[start:end]
-                
                     actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx = self.comput_loss(
                         flatten_latent[minibatch_inds], 
                         flatten_action[minibatch_inds], 
@@ -470,24 +411,19 @@ class PPOAgent(nn.Module):
                         flatten_returns[minibatch_inds],
                         flatten_slow_return[minibatch_inds]
                     )
-                    
                     total_loss = actor_loss + self.c1 * critic_loss + slow_critic_loss - self.c2 * entropy_loss
-
                     entropy_loss_list.append(-entropy_loss.item())
                     actor_loss_list.append(actor_loss.item())
                     critic_loss_list.append(critic_loss.item())
                     total_loss_list.append(total_loss.item())
                     kl_approx_list.append(kl_apx.item())
-
                     self.scaler.scale(total_loss).backward()
                     self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
                     torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                     self.optimizer.zero_grad(set_to_none=True)
-
                     self.update_slow_critic()
-                    
             self.lr_scheduler.step()
             self.warmup_scheduler.dampen()
         if logger is not None:
@@ -498,7 +434,6 @@ class PPOAgent(nn.Module):
             logger.log('ActorCritic/S', S.item(), global_step=global_step)
             logger.log('ActorCritic/norm_ratio', norm_ratio.item(), global_step=global_step)
             logger.log('ActorCritic/total_loss', np.mean(total_loss_list), global_step=global_step)
-
     @torch.no_grad()
     def sample(self, latent, greedy=False):
         self.eval()
@@ -511,4 +446,3 @@ class PPOAgent(nn.Module):
             else:
                 action = dist.sample()
         return action, logits
-

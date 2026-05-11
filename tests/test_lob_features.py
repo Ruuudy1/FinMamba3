@@ -1,11 +1,9 @@
+# region imports
 import sys
 import unittest
 from pathlib import Path
-
 import numpy as np
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
 from envs.lob_features import (  # noqa: E402
     F_LEVEL,
     F_TICK,
@@ -15,6 +13,7 @@ from envs.lob_features import (  # noqa: E402
     fit_normalization,
     normalized_feature_diagnostics,
 )
+# endregion
 
 
 class LOBFeatureNormalizationTest(unittest.TestCase):
@@ -29,7 +28,6 @@ class LOBFeatureNormalizationTest(unittest.TestCase):
         per_level[..., 5] = np.linspace(-1.0, 1.0, K_LEVELS, dtype=np.float32)
         per_level[..., 6] = np.where(np.arange(K_LEVELS) < 5, 1.0, -1.0)
         per_level[..., 7] = 6.0
-
         per_tick = np.zeros((t, F_TICK), dtype=np.float32)
         per_tick[:, 0] = 0.5
         per_tick[:, 1] = 0.02
@@ -40,7 +38,6 @@ class LOBFeatureNormalizationTest(unittest.TestCase):
         per_tick[:, 7] = 4.0
         per_tick[-1, 11] = 10_000.0
         per_tick[-1, 12] = 10_000.0
-
         seq = LOBSequence(
             market_slug="btc-updown-5m-0",
             per_level=per_level,
@@ -48,17 +45,13 @@ class LOBFeatureNormalizationTest(unittest.TestCase):
             midprice=np.full(t, 0.5, dtype=np.float32),
             ts_sec=np.arange(t, dtype=np.int64),
         )
-
         stats = fit_normalization(seq, clip_value=4.0)
         norm = apply_normalization(seq, stats)
         diag = normalized_feature_diagnostics(norm, stats.clip_value)
-
         self.assertTrue(diag["finite"])
         self.assertTrue(diag["within_clip"])
         self.assertLessEqual(diag["max_abs"], 4.0 + 1e-5)
         np.testing.assert_allclose(norm.per_level[..., 5], per_level[..., 5])
         np.testing.assert_allclose(norm.per_level[..., 6], per_level[..., 6])
-
-
 if __name__ == "__main__":
     unittest.main()

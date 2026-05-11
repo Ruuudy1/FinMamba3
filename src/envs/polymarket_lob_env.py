@@ -1,26 +1,21 @@
 """Gymnasium trading environment over Polymarket LOB backtest data."""
-
+# region imports
 from __future__ import annotations
-
 import math
 from dataclasses import dataclass
 from typing import Any
-
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-
 from lob.backtester.data_loader import BacktestData, TickData
 from lob.backtester.strategy import Fill, OrderBookSnapshot, Settlement, Side, Token
-
-
+# endregion
 ACTION_SPECS = (
     (Side.BUY, Token.YES),
     (Side.BUY, Token.NO),
     (Side.SELL, Token.YES),
     (Side.SELL, Token.NO),
 )
-
 OBS_FEATURE_NAMES = (
     "yes_mid",
     "yes_spread",
@@ -83,7 +78,6 @@ class PolymarketLOBEnv(gym.Env):
     ``t + latency_ticks``. The default one-tick latency matches the DATAHACKS
     backtester contract.
     """
-
     metadata = {"render_modes": []}
 
     def __init__(
@@ -129,7 +123,6 @@ class PolymarketLOBEnv(gym.Env):
         self.reward_inventory_coef = float(reward_inventory_coef)
         self.reward_drawdown_coef = float(reward_drawdown_coef)
         self._return_buffer: list[float] = []
-
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -137,22 +130,19 @@ class PolymarketLOBEnv(gym.Env):
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(1 + len(ACTION_SPECS) * len(self.size_buckets))
-
         self._lifecycle_by_slug = {lc.market_slug: lc for lc in data.lifecycles}
         self._i = 0
         self.cash = self.initial_cash
         self.positions: dict[str, PositionState] = {}
-        self._settled: set[str] = set()
+        self._settled: list[str] = []
         self._high_water = self.initial_cash
         self._drawdown = 0.0
         self._prev_top: dict[tuple[str, Token], tuple[float, float]] = {}
         self._prev_binance_mid: dict[str, float] = {}
         self._done = False
-
     @property
     def tick(self) -> TickData:
         return self.data.timeline[self._i]
-
     def decode_action(self, action: int) -> tuple[Side | None, Token | None, float]:
         action = int(action)
         if action == 0:
@@ -164,7 +154,6 @@ class PolymarketLOBEnv(gym.Env):
             raise ValueError(f"Invalid action {action + 1}")
         side, token = ACTION_SPECS[spec_idx]
         return side, token, self.size_buckets[size_idx]
-
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         super().reset(seed=seed)
         options = options or {}
@@ -174,7 +163,7 @@ class PolymarketLOBEnv(gym.Env):
             self._i = self._first_active_index()
         self.cash = float(options.get("cash", self.initial_cash))
         self.positions = {}
-        self._settled = set()
+        self._settled = []
         self._high_water = self.cash
         self._drawdown = 0.0
         self._prev_top = {}
@@ -182,29 +171,23 @@ class PolymarketLOBEnv(gym.Env):
         self._done = False
         obs = self._observation(self.tick)
         return obs, self._info(fill=None, invalid_action=False, settlements=[])
-
     def step(self, action: int):
         if self._done:
             raise RuntimeError("step() called after episode termination; call reset()")
-
         value_before = self._portfolio_value(self.tick)
         submit_ts = self.tick.ts_sec
         self._i = min(self._i + self.latency_ticks, len(self.data.timeline) - 1)
         tick = self.tick
-
         settlements = self._settle_expired(tick.ts_sec)
         fill, invalid_action = self._execute_action(action, tick)
-
         value_after = self._portfolio_value(tick)
         turnover = (fill.cost / max(value_before, 1e-6)) if fill is not None else 0.0
         inventory_frac = self._inventory_fraction(tick, value_after)
         delta_log = math.log(max(value_after, 1e-6)) - math.log(max(value_before, 1e-6))
-
         self._high_water = max(self._high_water, value_after)
         drawdown = max(0.0, (self._high_water - value_after) / max(self._high_water, 1e-6))
         drawdown_increment = max(0.0, drawdown - self._drawdown)
         self._drawdown = drawdown
-
         reward = self._compute_reward(
             delta_log=delta_log,
             turnover=turnover,
@@ -212,7 +195,6 @@ class PolymarketLOBEnv(gym.Env):
             drawdown_increment=drawdown_increment,
             settlements=settlements,
         )
-
         self._done = self._i >= len(self.data.timeline) - 1
         info = self._info(
             fill=fill,
@@ -229,7 +211,6 @@ class PolymarketLOBEnv(gym.Env):
             }
         )
         return self._observation(tick), float(reward), self._done, False, info
-
     def _compute_reward(
         self,
         *,
@@ -276,13 +257,11 @@ class PolymarketLOBEnv(gym.Env):
             variance_penalty = self.reward_risk_budget * realized
             return risk_scaled - variance_penalty - cost
         raise RuntimeError(f"Unhandled reward_kind: {self.reward_kind}")
-
     def _first_active_index(self) -> int:
         for idx, tick in enumerate(self.data.timeline[:-1]):
             if self._active_slugs(tick):
                 return idx
         return 0
-
     def _active_slugs(self, tick: TickData) -> list[str]:
         out: list[str] = []
         for slug, stored in tick.order_books.items():
@@ -293,11 +272,9 @@ class PolymarketLOBEnv(gym.Env):
                 out.append(slug)
         out.sort(key=lambda s: (self._lifecycle_by_slug[s].end_ts, s))
         return out
-
     def _target_slug(self, tick: TickData) -> str | None:
         active = self._active_slugs(tick)
         return active[0] if active else None
-
     def _execute_action(self, action: int, tick: TickData) -> tuple[Fill | None, bool]:
         side, token, size = self.decode_action(action)
         if side is None or token is None:
@@ -314,7 +291,6 @@ class PolymarketLOBEnv(gym.Env):
         if filled <= 0.0:
             return None, True
         avg_price = cost / filled
-
         pos = self.positions.get(slug, PositionState())
         if side == Side.BUY:
             if cost > self.cash + 1e-9:
@@ -340,7 +316,6 @@ class PolymarketLOBEnv(gym.Env):
                 self.positions.pop(slug, None)
             else:
                 self.positions[slug] = pos
-
         return (
             Fill(
                 market_slug=slug,
@@ -353,7 +328,6 @@ class PolymarketLOBEnv(gym.Env):
             ),
             False,
         )
-
     @staticmethod
     def _take_levels(levels, requested_size: float) -> tuple[float, float]:
         remaining = float(requested_size)
@@ -369,7 +343,6 @@ class PolymarketLOBEnv(gym.Env):
             if remaining <= 1e-9:
                 break
         return filled, notional
-
     def _settle_expired(self, ts_sec: int) -> list[Settlement]:
         settled_now: list[Settlement] = []
         for slug in list(self.positions):
@@ -383,10 +356,9 @@ class PolymarketLOBEnv(gym.Env):
                 self.cash += pos.yes_shares
             else:
                 self.cash += pos.no_shares
-            self._settled.add(slug)
+            self._settled.append(slug)
             settled_now.append(settlement)
         return settled_now
-
     def _portfolio_value(self, tick: TickData) -> float:
         value = self.cash
         for slug, pos in self.positions.items():
@@ -400,7 +372,6 @@ class PolymarketLOBEnv(gym.Env):
             value += pos.yes_shares * max(stored.yes_book.best_bid, 0.0)
             value += pos.no_shares * max(stored.no_book.best_bid, 0.0)
         return float(value)
-
     def _inventory_fraction(self, tick: TickData, portfolio_value: float) -> float:
         exposure = 0.0
         for slug, pos in self.positions.items():
@@ -410,7 +381,6 @@ class PolymarketLOBEnv(gym.Env):
             exposure += pos.yes_shares * _book_mid(stored.yes_book)
             exposure += pos.no_shares * _book_mid(stored.no_book)
         return float(exposure / max(portfolio_value, 1e-6))
-
     def _observation(self, tick: TickData) -> np.ndarray:
         obs = np.zeros(self.observation_space.shape, dtype=np.float32)
         active = self._active_slugs(tick)[: self.max_markets]
@@ -441,7 +411,6 @@ class PolymarketLOBEnv(gym.Env):
             yes_ofi = self._ofi(slug, Token.YES, stored.yes_book)
             no_book = stored.no_book
             yes_book = stored.yes_book
-
             exposure_frac = self._inventory_fraction(tick, portfolio_value)
             obs[row] = np.asarray(
                 [
@@ -467,7 +436,6 @@ class PolymarketLOBEnv(gym.Env):
                 dtype=np.float32,
             )
         return obs
-
     def _ofi(self, slug: str, token: Token, book: OrderBookSnapshot) -> float:
         bid = float(book.bids[0].size) if book.bids else 0.0
         ask = float(book.asks[0].size) if book.asks else 0.0
@@ -476,7 +444,6 @@ class PolymarketLOBEnv(gym.Env):
         self._prev_top[key] = (bid, ask)
         denom = max(bid + ask + prev_bid + prev_ask, 1.0)
         return float(np.clip(((bid - prev_bid) - (ask - prev_ask)) / denom, -8.0, 8.0))
-
     def _info(
         self,
         *,

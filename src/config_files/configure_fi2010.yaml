@@ -1,0 +1,203 @@
+BasicSettings:
+  ObsMode: features
+  FeatureDim: 46          # K(10) * F_level(4) + F_tick(6)
+  ReplayBufferOnGPU: True
+  Seed: 3710
+  Env_name: LOB
+  Device: cuda:0
+  Use_amp: True
+  NormClip: 8.0
+  Use_cg: False
+  Compile: False
+  SavePath: None
+
+Dataset:
+  Kind: fi2010
+  FI2010:
+    Horizon: 10              # Events ahead for direction labels. One of 10, 20, 30, 50, 100.
+    MaxEvents: 0             # 0 = use the full file; positive caps to the most recent N events.
+
+Evaluate:
+  EpisodeNum: 10
+  NumEnvs: 1
+  DuringTraining: False
+  EverySteps: 1000
+
+JointTrainAgent:
+  SampleMaxSteps: 20000
+  BufferMaxLength: 50000
+  WorldModelWarmUp: 64
+  BehaviourWarmUp: 1000000
+  NumEnvs: 1
+  BatchSize: 64
+  AccumSteps: 2
+  BatchLength: 64
+  ImagineBatchSize: 64
+  ImagineContextLength: 8
+  ImagineBatchLength: 16
+  RealityContextLength: 16
+  TrainDynamicsEverySteps: 1
+  TrainDynamicsEpoch: 1
+  TrainAgentEverySteps: 1
+  FreezeWorldModelAfterSteps: 20000
+  FreezeBehaviourAfterSteps: 0
+  SaveEverySteps: 2000
+  SaveModels: True
+  Tau: 10
+  ImaginationTau: 10
+  Alpha: 1.0
+  Beta: 1.0
+
+Models:
+  WorldModel:
+    dtype: float32
+    Backbone: Mamba3
+    Act: SiLU
+    CategoricalDim: 16
+    ClassDim: 16
+    HiddenStateDim: 512
+    Optimiser: Laprop
+    LatentDiscreteType: naive
+    Max_grad_norm: 1000
+    Warmup_steps: 500
+    LRSchedule: cosine
+    LRMinRatio: 0.1
+    UseActionInput: True
+    DirectionThresholds: null
+    Dropout: 0.1
+    Unimix_ratio: 0.01
+    Weight_decay: 1.0e-4
+    RepresentationLossWeight: 0.1
+    FreeBits: 1.0
+    Adam:
+      LearningRate: 1.0e-4
+    Laprop:
+      LearningRate: 4.0e-5
+      Epsilon: 1.0e-20
+    Encoder:
+      Type: lob
+      K: 10
+      FeatureDimLevel: 4         # FI-2010 levels: (ask_price, ask_size, bid_price, bid_size).
+      FeatureDimTick: 6          # Derived aggregates: mid, spread, log_spread, imbalance, microprice, log_total_vol.
+      DModel: 128
+      NumLayers: 2
+      NumHeads: 4
+      DimFeedforward: 256
+      OutputFlattenDim: 1024
+      AggregateOnly: False
+      GradientCheckpointing: False
+    Decoder:
+      Kind: mse
+      HiddenDim: 512
+      NumLayers: 3
+      NuInit: 5.0
+      LearnableNu: True
+      SizeWeight: 1.0                  # FI-2010 features are pre-normalized; no size/price asymmetry to correct.
+      LevelSizeIndices: [1, 3]         # ask_size, bid_size.
+      TickSizeIndices: [5]             # log_total_vol.
+    Reward:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Termination:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Transformer:
+      FinalFeatureWidth: 4
+      NumLayers: 2
+      NumHeads: 8
+    Mamba:
+      n_layer: 2
+      d_intermediate: 0
+      ssm_cfg:
+        d_state: 16
+    Mamba3:
+      Enabled: true
+      n_layer: 4
+      is_mimo: true
+      mimo_rank: 4
+      d_state: 128
+      headdim: 64
+      chunk_size: 16
+      is_outproj_norm: false
+      rope_fraction: 0.5
+    Direction:
+      Enabled: True
+      NumClasses: 3
+      Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
+      LossWeight: 0.5
+      Dropout: 0.0
+      UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
+    Regime:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+    EpisodicMemory:
+      Enabled: False
+      Capacity: 50000
+      TopK: 4
+      MinFillBeforeRetrieve: 1024
+      RetrieveEvery: 4
+      UseNovelty: False
+      NoveltyThreshold: 0.0
+    Hawkes:
+      Enabled: False
+      LossWeight: 0.1
+    Settlement:
+      Enabled: False
+      LossWeight: 0.25
+
+  Agent:
+    dtype: float32
+    Policy: AC
+    Unimix_ratio: 0
+    AC:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EntropyCoef: 3.e-4
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.0e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+    PPO:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EpsilonClip: 0.2
+      K_epochs: 3
+      Minibatch: 16384
+      CriticCoef: 1
+      EntropyCoef: 3.e-4
+      KL_threshold: 0.01
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+
+Wandb:
+  Init:
+    Mode: offline
+    Project: Drama_LOB_pretrain
+n: lob

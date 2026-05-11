@@ -4,13 +4,12 @@ Centralizes the snapshot_download and upload calls that the notebook and
 the local smoke test both need so the migration from Google Drive to the
 HF dataset repo is one line in either context.
 """
-
+# region imports
 from __future__ import annotations
-
 import os
 from pathlib import Path
-
-DEFAULT_REPO_ID = "ruuudy/FinDrama"
+# endregion
+DEFAULT_REPO_ID = "sj-hryi/FinDrama"
 DEFAULT_REPO_TYPE = "dataset"
 
 
@@ -28,7 +27,6 @@ def download_data(
     paths of the two downloaded files.
     """
     from huggingface_hub import snapshot_download
-
     target = Path(local_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
     snapshot_download(
@@ -51,7 +49,6 @@ def upload_checkpoints(
 ) -> None:
     """Upload a local checkpoint directory to the FinDrama HF dataset repo."""
     from huggingface_hub import HfApi
-
     HfApi().upload_folder(
         folder_path=str(Path(local_dir).resolve()),
         repo_id=repo_id,

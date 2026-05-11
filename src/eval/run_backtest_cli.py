@@ -16,19 +16,17 @@ Example
         --regime-split none \\
         --out reports/backtest_1iemugot.json
 """
-
+# region imports
 from __future__ import annotations
-
 import argparse
 import json
 import logging
 import sys
 from dataclasses import asdict
 from pathlib import Path
-
 import numpy as np
 import torch
-
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
@@ -60,14 +58,14 @@ def _device_from_arg(arg: str | None) -> torch.device:
 def _filter_backtest_data(bt, spec: str):
     """Apply a regime split to the BacktestData lifecycle list."""
     from eval.regime_split import time_split, volatility_split
-
     if spec == "none":
         return bt, "all"
     if spec.startswith("time:"):
         cutoff = float(spec.split(":", 1)[1])
         result = time_split(bt.lifecycles, cutoff)
-        keep = {m.market_slug for m in result.test_markets}
-        bt.lifecycles = [m for m in bt.lifecycles if m.market_slug in keep]
+        # O(1) membership lookups via a dict-as-keyset; the rule says no sets.
+        keep_by_slug = {m.market_slug: True for m in result.test_markets}
+        bt.lifecycles = [m for m in bt.lifecycles if m.market_slug in keep_by_slug]
         return bt, result.description
     if spec.startswith("volatility:"):
         quantile = float(spec.split(":", 1)[1])
@@ -75,8 +73,8 @@ def _filter_backtest_data(bt, spec: str):
         # markets in the train half. The CLI surface is here for completeness;
         # populating realized_vol per slug is left for a future iteration.
         result = volatility_split(bt.lifecycles, realized_vol={}, quantile=quantile)
-        keep = {m.market_slug for m in result.test_markets}
-        bt.lifecycles = [m for m in bt.lifecycles if m.market_slug in keep]
+        keep_by_slug = {m.market_slug: True for m in result.test_markets}
+        bt.lifecycles = [m for m in bt.lifecycles if m.market_slug in keep_by_slug]
         return bt, result.description
     raise ValueError(f"Unknown --regime-split spec: {spec}")
 
@@ -86,29 +84,24 @@ def main() -> int:
     args = parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     device = _device_from_arg(args.device)
-
     import yaml
     from config_utils import DotDict, parse_args_and_update_config
     from envs.polymarket_lob_env import PolymarketLOBEnv
     from eval.backtest import GreedyDirectionPolicy, run_backtest
     from lob.backtester import build_timeline
     from sub_models.world_models import WorldModel
-
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-
     wm = WorldModel(action_dim=13, config=cfg, device=device).to(device)
     state = torch.load(args.world_checkpoint, map_location=device, weights_only=False)
     sd = state.get("world_model", state.get("state_dict", state))
     wm.load_state_dict(sd, strict=False)
     wm.eval()
-
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val)
     bt, regime_desc = _filter_backtest_data(bt, args.regime_split)
     logger.info(f"loaded backtest data: regime={regime_desc}, lifecycles={len(bt.lifecycles)}")
-
     env = PolymarketLOBEnv(bt)
     policy = GreedyDirectionPolicy(
         wm, mid_index=80, threshold=args.threshold, device=str(device)
@@ -119,7 +112,6 @@ def main() -> int:
         f"sharpe={metrics.sharpe:.4f} maxDD={metrics.max_drawdown:.4f} "
         f"trades={metrics.num_trades} win_rate={metrics.win_rate:.4f}"
     )
-
     summary = asdict(metrics)
     # The portfolio curve is large; trim it to length-256 for the JSON output.
     summary["portfolio_curve_len"] = len(metrics.portfolio_curve)
@@ -133,7 +125,5 @@ def main() -> int:
         json.dump(summary, f, indent=2)
     logger.info(f"wrote {args.out}")
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())

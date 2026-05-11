@@ -5,9 +5,8 @@ predict LOB feature sequences for a single market. No agent, no live env,
 no reward signal. Produces a world-model checkpoint suitable for warm-
 starting a downstream RL loop.
 """
-
+# region imports
 from __future__ import annotations
-
 import argparse
 import logging
 import os
@@ -16,14 +15,11 @@ import threading
 import time
 import warnings
 from pathlib import Path
-
 import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
-
 warnings.filterwarnings("ignore")
-
 from envs.lob_features import (
     FLAT_FEATURE_NAMES,
     FEATURE_DIM_FLAT,
@@ -40,11 +36,12 @@ from envs.lob_features import (
     pick_longest_market,
     save_normalization,
 )
+from envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010, load_fi2010_split
 from config_utils import DotDict, parse_args_and_update_config
 from lob.backtester import build_timeline
 from replay_buffer import ReplayBuffer
 from training_steps import train_world_model_step
-
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parent
 
@@ -138,7 +135,6 @@ def imagine_rollout(
         for step in range(horizon):
             if world_model.model == "Transformer":
                 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
-
                 temporal_mask = get_subsequent_mask_with_batch_length(
                     prefix_latent.shape[1], prefix_latent.device
                 )
@@ -169,15 +165,16 @@ def _imagine_and_log(
     decoded = imagine_rollout(world_model, val_seq, context_len, horizon)
     if decoded is None:
         return
-    LEVEL_FLAT = 10 * 8
-    mid_norm = decoded[:, LEVEL_FLAT + 0]
-    spread_norm = decoded[:, LEVEL_FLAT + 1]
-    imbalance_norm = decoded[:, LEVEL_FLAT + 3]
+    # midprice_index points at the start of the per-tick block; offsets 0/1/3 are
+    # mid / spread / imbalance under both the Polymarket and FI-2010 schemas.
+    level_flat = world_model.midprice_index
+    mid_norm = decoded[:, level_flat + 0]
+    spread_norm = decoded[:, level_flat + 1]
+    imbalance_norm = decoded[:, level_flat + 3]
     wlogger.log("Imagine/mid_norm_mean", float(mid_norm.mean()), global_step=global_step)
     wlogger.log("Imagine/mid_norm_std", float(mid_norm.std()), global_step=global_step)
     wlogger.log("Imagine/spread_norm_mean", float(spread_norm.mean()), global_step=global_step)
     wlogger.log("Imagine/imbalance_norm_mean", float(imbalance_norm.mean()), global_step=global_step)
-
     ckpt_dir = Path(f"saved_models/lob/LOB/{wlogger.run.id}/imagine")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     np.save(ckpt_dir / f"rollout_step_{global_step}.npy", decoded)
@@ -210,10 +207,8 @@ def _validation_metrics(
         flattened_sample = world_model.flatten_sample(sample)
         obs_hat = world_model.obs_decoder(flattened_sample)
         reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
-
         if world_model.model == "Transformer":
             from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
-
             temporal_mask = get_subsequent_mask_with_batch_length(
                 batch_length, flattened_sample.device
             )
@@ -224,24 +219,20 @@ def _validation_metrics(
         prior_sample = world_model.stright_throught_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
         next_hat = world_model.obs_decoder(prior_flat)
-
     target_next = obs[:, 1:].detach().float()
     pred_next = next_hat.detach().float()
     diff = pred_next - target_next
     feature_mse = (diff ** 2).mean(dim=(0, 1)).cpu().numpy()
-
     pred_np = pred_next.cpu().numpy()
     target_np = target_next.cpu().numpy()
     prev_np = obs[:, :-1].detach().float().cpu().numpy()
     pred_raw = denormalize_flat(pred_np, stats)
     target_raw = denormalize_flat(target_np, stats)
     prev_raw = denormalize_flat(prev_np, stats)
-
-    level_flat = K_LEVELS * F_LEVEL
+    level_flat = world_model.midprice_index
     mid_idx = level_flat + 0
     spread_idx = level_flat + 1
     imbalance_idx = level_flat + 3
-
     true_delta = target_raw[..., mid_idx] - prev_raw[..., mid_idx]
     pred_delta = pred_raw[..., mid_idx] - prev_raw[..., mid_idx]
     nonzero = np.abs(true_delta) > 1e-7
@@ -251,12 +242,10 @@ def _validation_metrics(
         )
     else:
         mid_direction_accuracy = float("nan")
-
     spread_mae = float(np.abs(pred_raw[..., spread_idx] - target_raw[..., spread_idx]).mean())
     imbalance_mae = float(
         np.abs(pred_raw[..., imbalance_idx] - target_raw[..., imbalance_idx]).mean()
     )
-
     pred_yes = np.clip(pred_raw[..., mid_idx], 1e-6, 1.0 - 1e-6)
     outcome = val_seq.yes_outcome
     brier = float("nan")
@@ -272,7 +261,6 @@ def _validation_metrics(
             yy = y[mask]
             brier = float(np.mean((p - yy) ** 2))
             log_loss = float(-np.mean(yy * np.log(p) + (1.0 - yy) * np.log(1.0 - p)))
-
     max_abs_norm = float(np.abs(flat).max()) if flat.size else 0.0
     metrics = {
         "Val/reconstruction_loss": float(reconstruction_loss.item()),
@@ -284,11 +272,42 @@ def _validation_metrics(
         "Val/spread_mae": spread_mae,
         "Val/imbalance_mae": imbalance_mae,
     }
+    # Pick the feature-name tuple matching the active schema. Polymarket flat
+    # feature dim is 94; FI-2010 flat is 46. Anything else falls back to indices.
+    name_table = FLAT_FEATURE_NAMES
+    if flat.shape[1] == len(FLAT_FEATURE_NAMES_FI2010):
+        name_table = FLAT_FEATURE_NAMES_FI2010
+    elif flat.shape[1] != len(FLAT_FEATURE_NAMES):
+        name_table = tuple(f"feature_{i}" for i in range(flat.shape[1]))
     top_idx = np.argsort(feature_mse)[-5:][::-1]
-    top_features = [(FLAT_FEATURE_NAMES[int(i)], float(feature_mse[int(i)])) for i in top_idx]
+    top_features = [(name_table[int(i)], float(feature_mse[int(i)])) for i in top_idx]
     return metrics, top_features
 
 
+def _build_fi2010_sequences(
+    data_dir: Path,
+    split: str,
+    horizon: int,
+    norm_path: Path,
+    fit_stats: bool,
+    norm_clip: float,
+    max_events: int | None = None,
+) -> tuple[LOBSequence, str, object]:
+    """FI-2010 mirror of _build_sequences. Returns (sequence, slug, stats).
+
+    Fits z-score normalization on the training split and reuses it for validation,
+    matching the Polymarket flow. Works for both DecPre and ZScore source files.
+    """
+    bundle = load_fi2010_split(data_dir, split=split, horizon=horizon, max_events=max_events)
+    seq = bundle.sequence
+    if fit_stats:
+        stats = fit_normalization(seq, clip_value=norm_clip)
+        save_normalization(stats, norm_path)
+        logger.info(f"FI-2010 normalization fit on {seq.market_slug}, saved to {norm_path}")
+    else:
+        stats = load_normalization(norm_path)
+    seq_norm = apply_normalization(seq, stats)
+    return seq_norm, seq.market_slug, stats
 # Public aliases for use by external eval scripts. The underscored names remain
 # the implementation; the public names mirror the API the eval CLIs import.
 validate = _validation_metrics
@@ -310,7 +329,6 @@ def _gpu_monitor(interval: int = 30) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=SRC_DIR / "config_files" / "configure_lob.yaml")
     pre_parser.add_argument("--data-train", type=Path,
@@ -322,45 +340,72 @@ def main() -> None:
     pre_parser.add_argument("--hours-val", type=float, default=1.0)
     pre_parser.add_argument("--norm-path", type=Path,
                             default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
+    pre_parser.add_argument(
+        "--dataset", choices=("polymarket", "fi2010"), default=None,
+        help="Override Dataset.Kind from the config file.",
+    )
     pre_args, remaining = pre_parser.parse_known_args()
-
     with open(pre_args.config, "r") as f:
         config = yaml.safe_load(f)
     config = parse_args_and_update_config(config, argv=remaining)
     config = DotDict(config)
-
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
-
     device = torch.device(config.BasicSettings.Device)
     from utils import WandbLogger, seed_np_torch
-
     seed_np_torch(seed=config.BasicSettings.Seed)
-
-    logger.info(f"building train features from {pre_args.data_train}")
+    # Pick the data pipeline. Polymarket reads SQLite + per-tick CSV books;
+    # FI-2010 reads a single space-separated text matrix per split.
+    dataset_cfg = getattr(config, "Dataset", None)
+    config_dataset_kind = getattr(dataset_cfg, "Kind", "polymarket") if dataset_cfg is not None else "polymarket"
+    dataset_kind = pre_args.dataset or config_dataset_kind
+    logger.info(f"dataset pipeline: {dataset_kind}")
     norm_clip = getattr(config.BasicSettings, "NormClip", 8.0)
     aggregate_only = getattr(config.Models.WorldModel.Encoder, "AggregateOnly", False)
-    train_seq, slug, stats = _build_sequences(
-        pre_args.data_train,
-        pre_args.market_slug,
-        pre_args.hours_train,
-        pre_args.norm_path,
-        fit_stats=True,
-        norm_clip=norm_clip,
-        aggregate_only=aggregate_only,
-    )
-    logger.info(f"building val features from {pre_args.data_val}")
-    val_seq, _, _ = _build_sequences(
-        pre_args.data_val,
-        slug,
-        pre_args.hours_val,
-        pre_args.norm_path,
-        fit_stats=False,
-        norm_clip=norm_clip,
-        aggregate_only=aggregate_only,
-    )
-
+    if dataset_kind == "polymarket":
+        logger.info(f"building train features from {pre_args.data_train}")
+        train_seq, slug, stats = _build_sequences(
+            pre_args.data_train,
+            pre_args.market_slug,
+            pre_args.hours_train,
+            pre_args.norm_path,
+            fit_stats=True,
+            norm_clip=norm_clip,
+            aggregate_only=aggregate_only,
+        )
+        logger.info(f"building val features from {pre_args.data_val}")
+        val_seq, _, _ = _build_sequences(
+            pre_args.data_val,
+            slug,
+            pre_args.hours_val,
+            pre_args.norm_path,
+            fit_stats=False,
+            norm_clip=norm_clip,
+            aggregate_only=aggregate_only,
+        )
+    elif dataset_kind == "fi2010":
+        fi2010_cfg = getattr(dataset_cfg, "FI2010", None) if dataset_cfg is not None else None
+        horizon = int(getattr(fi2010_cfg, "Horizon", 10)) if fi2010_cfg is not None else 10
+        max_events_cfg = getattr(fi2010_cfg, "MaxEvents", None) if fi2010_cfg is not None else None
+        max_events = int(max_events_cfg) if max_events_cfg else None
+        logger.info(f"loading FI-2010 train split from {pre_args.data_train}")
+        train_seq, slug, stats = _build_fi2010_sequences(
+            pre_args.data_train, split="train", horizon=horizon,
+            norm_path=pre_args.norm_path, fit_stats=True,
+            norm_clip=norm_clip, max_events=max_events,
+        )
+        logger.info(f"loading FI-2010 validation split from {pre_args.data_val}")
+        val_seq, _, _ = _build_fi2010_sequences(
+            pre_args.data_val, split="validation", horizon=horizon,
+            norm_path=pre_args.norm_path, fit_stats=False,
+            norm_clip=norm_clip, max_events=max_events,
+        )
+        if aggregate_only:
+            train_seq = make_aggregate_only(train_seq)
+            val_seq = make_aggregate_only(val_seq)
+    else:
+        raise ValueError(f"Unknown dataset kind: {dataset_kind!r}")
     for split_name, seq in (("train", train_seq), ("val", val_seq)):
         diag = normalized_feature_diagnostics(seq, stats.clip_value)
         top = ", ".join(f"{name}={value:.3f}" for name, value in diag["top_features"])
@@ -373,20 +418,17 @@ def main() -> None:
                 f"{split_name} normalized features exceed clip "
                 f"{diag['clip_value']}: max_abs={diag['max_abs']}"
             )
-
-    assert train_seq.to_flat().shape[1] == FEATURE_DIM_FLAT
+    # The config-driven assertion handles both Polymarket (94-dim) and FI-2010 (46-dim).
+    # The legacy FEATURE_DIM_FLAT constant only applies to the Polymarket schema.
     assert train_seq.to_flat().shape[1] == config.BasicSettings.FeatureDim, (
         f"Feature dim mismatch: computed {train_seq.to_flat().shape[1]} "
         f"vs config {config.BasicSettings.FeatureDim}"
     )
-
     action_dim = 1
     from sub_models.world_models import WorldModel
-
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
-
     # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows
     # up before a 6-hour training run instead of after.
     try:
@@ -413,7 +455,6 @@ def main() -> None:
             )
     except Exception as exc:
         logger.warning(f"dtype probe failed: {exc}")
-
     # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
     # kernels; torch.compile would fight them and risks recompilations every
     # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
@@ -428,10 +469,8 @@ def main() -> None:
             logger.info("torch.compile enabled for encoder + obs_decoder")
         except Exception as exc:
             logger.warning(f"torch.compile unavailable, running eager: {exc}")
-
     replay_buffer = ReplayBuffer(config, device=device)
     _populate_buffer(replay_buffer, train_seq)
-
     wlogger = WandbLogger(
         config=config,
         project=config.Wandb.Init.Project,
@@ -439,15 +478,12 @@ def main() -> None:
     )
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{wlogger.run.id}"
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
-
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
-
     accum_steps = getattr(config.JointTrainAgent, 'AccumSteps', 1)
     max_steps = config.JointTrainAgent.SampleMaxSteps
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
     imagine_every = save_every
-
     pbar = tqdm(range(max_steps), desc="pretrain")
     for step in pbar:
         train_world_model_step(
@@ -488,7 +524,6 @@ def main() -> None:
                  "optimizer": world_model.optimizer.state_dict()},
                 f"{logdir}/ckpt/world_model.pth",
             )
-
     torch.save(
         {"step": max_steps, "world_model": world_model.state_dict(),
          "optimizer": world_model.optimizer.state_dict()},
@@ -496,7 +531,5 @@ def main() -> None:
     )
     logger.info(f"final checkpoint written to {logdir}/ckpt/world_model.pth")
     wlogger.close()
-
-
 if __name__ == "__main__":
     main()

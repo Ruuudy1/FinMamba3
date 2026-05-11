@@ -16,13 +16,12 @@ Each bar yields the same 94-dim flat feature vector as the raw-tick path so
 the rest of the pipeline (encoder, replay buffer) is agnostic to the
 aggregation choice.
 """
-
+# region imports
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator
-
 import numpy as np
+# endregion
 
 
 @dataclass
@@ -32,7 +31,6 @@ class BarConfig:
     The `kind` selects the sampling rule. Only the field matching `kind` is
     consulted; the others are ignored.
     """
-
     kind: str = "time"
     time_seconds: float = 5.0
     volume_threshold: float = 200.0
@@ -49,7 +47,6 @@ class _BarAccumulator:
     bar (close-of-bar semantics). Volume and OFI fields are summed across the
     bar. Other tick-level fields are averaged across the bar.
     """
-
     feature_dim: int
     sum_buf: np.ndarray
     last_buf: np.ndarray
@@ -68,7 +65,6 @@ class _BarAccumulator:
             sum_buf=np.zeros(feature_dim, dtype=np.float32),
             last_buf=np.zeros(feature_dim, dtype=np.float32),
         )
-
     def reset(self) -> None:
         self.sum_buf.fill(0.0)
         self.last_buf.fill(0.0)
@@ -123,11 +119,9 @@ def aggregate_to_bars(
     config
         BarConfig describing which sampling rule to apply.
     """
-
     acc: _BarAccumulator | None = None
     last_mid: float | None = None
     feature_dim: int | None = None
-
     for x, ts in zip(feature_stream, timestamps):
         if feature_dim is None:
             feature_dim = int(x.shape[0])
@@ -138,7 +132,6 @@ def aggregate_to_bars(
         acc.count += 1
         if acc.bar_start_ts is None:
             acc.bar_start_ts = float(ts)
-
         mid = float(x[mid_index])
         signed_tick = 0.0
         if last_mid is not None:
@@ -148,12 +141,10 @@ def aggregate_to_bars(
             acc.cusum_neg = min(0.0, acc.cusum_neg + dmid)
         last_mid = mid
         acc.cum_signed_tick += signed_tick
-
         if volume_index is not None:
             vol_term = float(x[volume_index])
             acc.cum_volume += vol_term
             acc.cum_dollar += vol_term * mid
-
         triggered = _bar_triggered(acc, ts, config)
         if triggered:
             yield _emit(acc, sum_indices), float(ts)
@@ -203,8 +194,6 @@ def aggregate_array(
     feats = np.stack([b[0] for b in bars], axis=0).astype(np.float32)
     ts = np.array([b[1] for b in bars], dtype=np.float64)
     return feats, ts
-
-
 # Default sum-mode indices for the project's 94-dim feature layout.
 # Layout: K=10 levels times F_LEVEL=8 equals 80, then F_TICK=14 tick features.
 # Tick offsets after 80: 0 mid, 1 spread, 2 log_spread, 3 imbalance, 4 microprice, 5 weighted_mid_disp, 6 log_bid_vol, 7 log_ask_vol, 8 dmid, 9 dspread, 10 dimbalance, 11 ofi_top, 12 trade_intensity, 13 rolling_vol.

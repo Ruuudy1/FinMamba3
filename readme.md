@@ -1,9 +1,14 @@
 # FinDrama
 
-FinDrama is the Polymarket limit-order-book version of Drama. The old Atari and
-MemoryMaze paths have been removed; this repository now supports one workflow:
-offline world-model pretraining on Polymarket LOB data, plus the first
-Gymnasium trading environment for Phase B.
+FinDrama is the limit-order-book version of Drama. The old Atari and
+MemoryMaze paths have been removed; this repository supports two
+interchangeable workflows for offline world-model pretraining:
+
+1. Polymarket LOB tick data (the original pipeline, 94-dim features).
+2. FI-2010 Nasdaq Helsinki LOB data (Ntakaris et al. 2018, 46-dim features).
+   This branch ships the loader, config, and HuggingFace mirror so the model
+   can be benchmarked on a public LOB dataset whenever Polymarket data runs
+   short.
 
 The key novelty axis vs. the upstream Drama paper (Wang et al., ICLR 2025) is
 the Mamba-3 MIMO sequence backbone (Lahoti et al., ICLR 2026) applied to LOB
@@ -17,42 +22,62 @@ Use exactly one notebook:
 
 `notebooks/colab_lob_pretrain.ipynb`
 
-The notebook works on any CUDA GPU (H100, L4, A100, T4). H100 is recommended.
+The notebook works on any CUDA GPU (H100, A100, L4, T4). H100 is recommended
+for the Mamba-3 MIMO TileLang kernel; other GPUs fall back to the Python
+reference path automatically with a log warning.
 
-In Colab:
+Open in Colab in one click:
 
-1. Set the runtime to a GPU instance (Runtime, Change runtime type).
-2. Open `notebooks/colab_lob_pretrain.ipynb`.
-3. Confirm `REPO_URL = "https://github.com/Ruuudy1/FinDrama.git"` and
-   `BRANCH = "improvements-research-review"` (or `master`) in the first code cell.
-4. Add your `HF_TOKEN` to Colab Secrets (key icon, left sidebar). The token
-   needs write access to upload compiled wheels and (optionally) checkpoints.
-5. Run cells top to bottom.
-6. Start with `SMOKE_TEST = True`. After one short update and validation print
-   complete, set it to `False` for the full 20,000-step run.
+https://colab.research.google.com/github/Ruuudy1/FinDrama/blob/synthetic-order-book-train/notebooks/colab_lob_pretrain.ipynb
 
-The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
-`mamba-ssm` from source, downloads the data bundle automatically, and runs:
+Then:
 
-```bash
-python -B src/train_lob.py --hours-train 6 --hours-val 1 --JointTrainAgent.SampleMaxSteps 20000
+1. Set the runtime to a GPU instance (Runtime, Change runtime type). Pick the
+   highest-tier GPU your plan exposes; H100 if available.
+2. Add your `HF_TOKEN` to Colab Secrets (key icon, left sidebar). The token
+   needs write access for compiled wheels, checkpoints, and run logs.
+3. Hit Run all.
+
+By default the first cell sets:
+
+```python
+DATASET = "fi2010"   # pulls the FI-2010 NoAuction DecPre CF files from HF Hub
+RUN_PROBES = False   # full 20,000-step Mamba-3 MIMO pretrain
+SMOKE_TEST = False
 ```
 
-Checkpoints are written under:
+To reproduce the original Polymarket workflow, switch `DATASET = "polymarket"`.
+To run the three collapse-diagnosis probes instead of a full pretrain, set
+`RUN_PROBES = True`. To verify plumbing in roughly 20 seconds before a real
+run, set `SMOKE_TEST = True` and re-run all cells.
+
+The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
+`mamba-ssm` from source (or pulls from the HF wheel cache when keys match),
+downloads the chosen dataset, and runs:
+
+```bash
+python -B src/train_lob.py \
+    --config src/config_files/configure_fi2010.yaml \
+    --dataset fi2010 \
+    --JointTrainAgent.SampleMaxSteps 20000
+```
+
+Checkpoints land under:
 
 ```text
 saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
-The final notebook cell uploads `saved_models/lob` to the HuggingFace dataset
-repo at `ruuudy/FinDrama` under `checkpoints/lob/`.
+The final cells upload checkpoints, stdout logs, and wandb summaries to the
+HuggingFace dataset repo at `sj-hryi/FinDrama` under `checkpoints/lob/` and
+`logs/<run_date>/`.
 
 ## Wheel Cache
 
 Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached on HuggingFace
 so later runtimes skip the source build:
 
-https://huggingface.co/datasets/ruuudy/FinDrama/tree/main
+https://huggingface.co/datasets/sj-hryi/FinDrama/tree/main
 
 Wheels are keyed by Python version, PyTorch version, CUDA version, and GPU
 architecture (for example `wheels-py312-torch260-cu124-sm90`). The first run
@@ -64,24 +89,30 @@ build after updating the dependency stack or if a cached wheel becomes stale.
 
 ## Data
 
-The pretraining dataset is hosted on the HuggingFace dataset repo that also
-hosts the wheel cache. Both splits are stored under `data/`:
+Both supported datasets live under the same HuggingFace dataset repo that
+also hosts the wheel cache:
 
 ```text
-ruuudy/FinDrama
+sj-hryi/FinDrama
   data/
-    train.tar.zip
-    validation.tar.zip
+    train.tar.zip                                            Polymarket train bundle.
+    validation.tar.zip                                       Polymarket val bundle.
+    fi2010/
+      train/Train_Dst_NoAuction_DecPre_CF_7.txt              FI-2010 train (607 MB).
+      validation/Test_Dst_NoAuction_DecPre_CF_7.txt          FI-2010 val (132 MB).
   wheels-py.../
   checkpoints/lob/
+  logs/<run_date>/
 ```
+
+### Polymarket
 
 Download both splits with `huggingface_hub`:
 
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="ruuudy/FinDrama",
+    repo_id="sj-hryi/FinDrama",
     repo_type="dataset",
     allow_patterns=["data/train.tar.zip", "data/validation.tar.zip"],
     local_dir="./",
@@ -95,11 +126,37 @@ from utils_hf import download_data
 train_zip, val_zip = download_data(local_dir="./", revision=None)
 ```
 
+The notebook extracts both archives into `data/train` and `data/validation`.
+
+### FI-2010
+
+The FI-2010 NoAuction DecPre CF files are mirrored alongside the Polymarket
+bundles. Pull them directly:
+
+```python
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id="sj-hryi/FinDrama",
+    repo_type="dataset",
+    allow_patterns=[
+        "data/fi2010/train/Train_Dst_NoAuction_DecPre_CF_7.txt",
+        "data/fi2010/validation/Test_Dst_NoAuction_DecPre_CF_7.txt",
+    ],
+    local_dir="./",
+)
+```
+
+The trainer copies these into `data/train/` and `data/validation/`, then
+`src/envs/fi2010_loader.py` parses the (149, N_events) matrix into a 46-dim
+flat feature vector: 10 levels of (ask_price, ask_size, bid_price, bid_size)
+plus 6 derived tick aggregates (mid, spread, log_spread, imbalance,
+microprice, log_total_vol). The published 5-horizon direction labels are
+loaded alongside and remapped to the world model's {0=down, 1=flat, 2=up}
+convention.
+
 Pin a `revision` in calling code for reproducibility. Authentication: the
 HF token is read from the `HF_TOKEN` environment variable or the standard
 HuggingFace cache. The notebook reads the same token from Colab Secrets.
-
-The notebook extracts both archives into `data/train` and `data/validation`.
 
 ## Local Smoke Test
 
@@ -112,13 +169,22 @@ MAMBA_FORCE_BUILD=TRUE pip install --no-cache-dir --force-reinstall git+https://
 pip install -r requirements.txt
 ```
 
-Then run:
+Polymarket smoke run:
 
 ```bash
 python -B src/train_lob.py --hours-train 1 --hours-val 0.25 --JointTrainAgent.SampleMaxSteps 20
 ```
 
-Expected data layout:
+FI-2010 smoke run:
+
+```bash
+python -B src/train_lob.py \
+    --config src/config_files/configure_fi2010.yaml \
+    --dataset fi2010 \
+    --JointTrainAgent.SampleMaxSteps 20
+```
+
+Expected Polymarket data layout:
 
 ```text
 data/
@@ -130,6 +196,14 @@ data/
     polymarket.db
     polymarket_books/
     binance_lob/
+```
+
+Expected FI-2010 data layout:
+
+```text
+data/
+  train/Train_Dst_NoAuction_DecPre_CF_7.txt
+  validation/Test_Dst_NoAuction_DecPre_CF_7.txt
 ```
 
 ## Repository Layout
@@ -150,7 +224,8 @@ src/
     backtest.py                   PnL/Sharpe/MaxDD harness for a frozen world model
     regime_split.py               Time and volatility splits for non-stationarity tests
   config_files/
-    configure_lob.yaml            Default Mamba-3 MIMO baseline.
+    configure_lob.yaml            Polymarket default. Mamba-3 MIMO baseline, 94-dim features.
+    configure_fi2010.yaml         FI-2010 default. Mamba-3 MIMO, 46-dim features.
     configure_lob_em.yaml         Episodic memory enabled (FIFO writes).
     configure_lob_full_ablation.yaml  Student-t + Hawkes + Settlement + EM-novelty + multi-threshold.
     configure_lob_aggregate_only.yaml Tick-aggregate features only; per-level depth masked.
@@ -159,7 +234,8 @@ src/
     configure_lob_mamba2.yaml     Mamba-2 backbone for the architecture sweep.
     configure_lob_transformer.yaml  Transformer backbone for the architecture sweep.
   envs/
-    lob_features.py               94-dim microstructure-aware feature engineering
+    lob_features.py               94-dim microstructure-aware feature engineering for Polymarket.
+    fi2010_loader.py              FI-2010 NoAuction DecPre/ZScore CF reader (46-dim features).
     lob_aggregation.py            Time/volume/dollar/tick-imbalance/CUSUM bars
     lob_labels.py                 Triple-barrier and multi-threshold direction targets
     polymarket_lob_env.py         Gymnasium trading environment with reward variants
@@ -170,6 +246,7 @@ src/
     fin_mamba.py                  FinDrama sequence wrapper for upstream Mamba
     world_models.py               Mamba3 MIMO world model
 tests/
+  test_fi2010_pipeline.py           60 tests covering the full FI-2010 path end-to-end.
   test_lob_features.py
   test_lob_aggregation.py
   test_lob_labels.py
@@ -407,7 +484,15 @@ configs remain backward compatible.
 ## Notes
 
 - `train_lob.py` no longer imports `gym` or the removed Atari path.
-- Normalized LOB features are clipped and checked before training.
+- Dataset switching is driven by the `--dataset` CLI flag or the top-level
+  `Dataset.Kind` config key. Both `Polymarket` and `FI-2010` paths return
+  the same `LOBSequence` dataclass, so the rest of the training loop is
+  schema-agnostic. The `LOBReconstructionLoss` accepts custom
+  `LevelSizeIndices` and `TickSizeIndices` so the weighted-MSE term respects
+  whichever schema is active.
+- Normalized LOB features are clipped and checked before training. The FI-2010
+  loader fits z-score stats on the training split and reuses them for
+  validation, identical to the Polymarket flow.
 - `Backbone: Mamba3` is the default. Full-sequence Phase A pretraining is the
   supported path; Phase B imagination uses full-prefix recomputation rather
   than Mamba3 step/inference-cache kernels.
@@ -417,3 +502,20 @@ configs remain backward compatible.
 - Action input is enabled by default for backwards compatibility, but
   `Models.WorldModel.UseActionInput: False` removes the dead one-hot
   pathway during Phase A pretraining.
+
+## Project Conventions
+
+Style rules enforced across `src/` and `tests/`:
+
+- Comments are full sentences, capitalized, ending with a period. No em
+  dashes, no emojis.
+- Two blank lines above each class or top-level function. One blank line
+  between a class signature and its first method. Zero blank lines anywhere
+  else, including between consecutive methods inside a class and inside
+  method bodies.
+- No Python sets. Use lists with `append` and `remove`, or a dict-as-keyset
+  (`{key: True for key in iterable}`) when O(1) membership is needed.
+- Dictionaries are named `value_by_key` (for example `last_books_by_slug`).
+- List comprehensions are used only when the result is assigned to a name
+  or passed directly to a constructor that consumes it. Use a for-loop or
+  generator expression otherwise.

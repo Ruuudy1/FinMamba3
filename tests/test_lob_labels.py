@@ -1,26 +1,21 @@
 """Tests for triple-barrier and multi-threshold labeling helpers."""
-
+# region imports
 from __future__ import annotations
-
 import os
 import sys
-
 import numpy as np
 import torch
-
-
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_PATH = os.path.join(REPO_ROOT, "src")
 if SRC_PATH not in sys.path:
     sys.path.insert(0, SRC_PATH)
-
-
 from envs.lob_labels import (  # noqa: E402
     TripleBarrierConfig,
     multi_threshold_direction_labels,
     triple_barrier_labels_numpy,
     triple_barrier_labels_torch,
 )
+# endregion
 
 
 def test_triple_barrier_uniformly_rising_hits_profit():

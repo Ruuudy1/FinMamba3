@@ -1,8 +1,9 @@
+# region imports
 import torch
 import os
 import numpy as np
 import random
-
+# endregion
 try:
     import wandb
 except ImportError:
@@ -43,8 +44,6 @@ class WandbLogger():
             self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
             self.run.name = f"{self.run.name}_{self.run.id}"
         self.tag_step = {}
-
-
     def log(self, tag, value, global_step):
         """
         Log data to Weights & Biases.
@@ -69,7 +68,6 @@ class WandbLogger():
         else:
             # Log scalar value.
             wandb.log({tag: value}, step=global_step)
-
     def update_config(self, update_dict):
         """
         Update the configuration with the given parameters.
@@ -80,7 +78,6 @@ class WandbLogger():
         # Update the configuration using wandb.config.update.
         if wandb is not None:
             wandb.config.update(update_dict)
-
     def close(self):
         """
         Finalize and close the W&B run.
@@ -90,18 +87,14 @@ class WandbLogger():
             wandb.finish()
 
 
-
 class EMAScalar():
     def __init__(self, decay) -> None:
         self.scalar = 0.0
         self.decay = decay
-
     def __call__(self, value):
         self.update(value)
         return self.get()
-
     def update(self, value):
         self.scalar = self.scalar * self.decay + value * (1 - self.decay)
-
     def get(self):
         return self.scalar

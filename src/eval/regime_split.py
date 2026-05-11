@@ -13,14 +13,12 @@ two complementary splits over a sequence of resolved markets:
 Both splits return the same MarketLifecycle objects already used by the
 backtester, so no data-format change is required downstream.
 """
-
+# region imports
 from __future__ import annotations
-
 from dataclasses import dataclass
-
 import numpy as np
-
 from lob.backtester.strategy import MarketLifecycle
+# endregion
 
 
 @dataclass
@@ -57,8 +55,11 @@ def volatility_split(
     """
     if not markets:
         return RegimeSplitResult(train_markets=[], test_markets=[], description="empty")
-    vols = np.array(
-        [realized_vol.get(m.market_slug, np.nan) for m in markets], dtype=np.float64
+    vol_by_market = realized_vol
+    vols = np.fromiter(
+        (vol_by_market.get(m.market_slug, np.nan) for m in markets),
+        dtype=np.float64,
+        count=len(markets),
     )
     finite = vols[np.isfinite(vols)]
     if finite.size == 0:

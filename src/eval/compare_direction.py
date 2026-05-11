@@ -16,19 +16,17 @@ Example
         --thresholds 0.001,0.005,0.01 \\
         --baselines world_model,deeplob,linear_ar
 """
-
+# region imports
 from __future__ import annotations
-
 import argparse
 import logging
 import math
 import sys
 from pathlib import Path
-
 import numpy as np
 import torch
 import torch.nn.functional as F
-
+# endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
 if str(SRC_DIR) not in sys.path:
@@ -90,7 +88,6 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     import yaml
     from config_utils import DotDict, parse_args_and_update_config
     from sub_models.world_models import WorldModel
-
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -103,7 +100,6 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     if not getattr(wm, "use_direction_head", False):
         logger.warning("World model has no direction head; world_model arm will be skipped.")
         return {"accuracy": float("nan"), "brier": float("nan")}
-
     flat = val_seq.to_flat()
     T = flat.shape[0]
     L = 64
@@ -128,7 +124,6 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
         dist_feat = wm.condition_dist_feat(dist_feat)
         direction_logits = wm.direction_head(dist_feat[:, :-1])
         direction_probs = torch.softmax(direction_logits.float(), dim=-1)
-
     LEVEL_FLAT = 10 * 8
     mid_norm = obs[..., LEVEL_FLAT + 0]
     labels = []
@@ -145,18 +140,15 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
     """Train DeepLOB on the train flat features and evaluate on val."""
     from baselines.deeplob import DeepLOB
     from envs.lob_features import F_LEVEL, K_LEVELS
-
     flat_train = train_seq.to_flat()
     flat_val = val_seq.to_flat()
     LEVEL_WIDTH = K_LEVELS * F_LEVEL
     train_per_level = flat_train[:, :LEVEL_WIDTH]
     val_per_level = flat_val[:, :LEVEL_WIDTH]
     L = 32
-
     def _windows(arr, L):
         starts = np.arange(0, arr.shape[0] - L)
         return np.stack([arr[s : s + L] for s in starts], axis=0)
-
     Xtr = _windows(train_per_level, L)
     Xva = _windows(val_per_level, L)
     if Xtr.shape[0] == 0 or Xva.shape[0] == 0:
@@ -169,12 +161,10 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
     yva = np.stack(
         [_label_directions(val_mid[s : s + L], threshold) for s in range(Xva.shape[0])], axis=0
     )
-
     model = DeepLOB(k_levels=K_LEVELS, f_level=F_LEVEL).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_deeplob)
     Xtr_t = torch.from_numpy(Xtr).float().to(device)
     ytr_t = torch.from_numpy(ytr).long().to(device)
-
     model.train()
     for _ in range(args.epochs_deeplob):
         idx = torch.randperm(Xtr_t.shape[0], device=device)
@@ -199,7 +189,6 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
 def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float]:
     """Fit LinearAR on train and evaluate direction labels on val."""
     from baselines.linear_ar import LinearAR, LinearARConfig
-
     flat_train = train_seq.to_flat().astype(np.float32)
     flat_val = val_seq.to_flat().astype(np.float32)
     cfg = LinearARConfig(lookback=16, threshold=threshold, midprice_index=80)
@@ -235,14 +224,12 @@ def main() -> int:
     device = _device_from_arg(args.device)
     thresholds = [float(t) for t in args.thresholds.split(",") if t.strip()]
     methods = [m.strip() for m in args.baselines.split(",") if m.strip()]
-
     import yaml
     from config_utils import DotDict, parse_args_and_update_config
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-
     from train_lob import build_sequences
     norm_clip = getattr(cfg.BasicSettings, "NormClip", 8.0)
     aggregate_only = getattr(cfg.Models.WorldModel.Encoder, "AggregateOnly", False)
@@ -255,7 +242,6 @@ def main() -> int:
         fit_stats=False, norm_clip=norm_clip, aggregate_only=aggregate_only,
     )
     logger.info(f"train ticks: {train_seq.per_tick.shape[0]}, val ticks: {val_seq.per_tick.shape[0]}")
-
     rows = []
     for thr in thresholds:
         if "linear_ar" in methods:
@@ -273,14 +259,11 @@ def main() -> int:
                 metrics = _evaluate_world_model(args, thr, val_seq, device)
                 rows.append({"method": "world_model", "threshold": thr, **metrics})
                 logger.info(f"world_model threshold={thr}: {metrics}")
-
     table = _format_table(rows)
     print(table)
     with open(args.out, "w") as f:
         f.write(table + "\n")
     logger.info(f"wrote {args.out}")
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())

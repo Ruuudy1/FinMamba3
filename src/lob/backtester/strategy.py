@@ -4,9 +4,8 @@ Strategy Interface - What participants implement.
 Contains all dataclasses (MarketState, Order, Fill, etc.) and the BaseStrategy ABC.
 Participants subclass BaseStrategy and implement on_tick().
 """
-
+# region imports
 from __future__ import annotations
-
 import json
 try:  # orjson is ~5x faster; fall back to stdlib if not installed
     import orjson as _fast_json
@@ -19,8 +18,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NamedTuple
-
-
+# endregion
 # - Enums -
 
 
@@ -38,8 +36,6 @@ class MarketStatus(str, Enum):
     UPCOMING = "UPCOMING"
     ACTIVE = "ACTIVE"
     SETTLED = "SETTLED"
-
-
 # - Order Book -
 
 
@@ -67,8 +63,6 @@ class StoredBook(NamedTuple):
     yes_book: "OrderBookSnapshot"
     no_book: "OrderBookSnapshot"
     book_ts: int
-
-
 _EMPTY_BIDS: tuple[OrderBookLevel, ...] = ()
 _EMPTY_ASKS: tuple[OrderBookLevel, ...] = ()
 
@@ -85,31 +79,25 @@ class OrderBookSnapshot(NamedTuple):
     @property
     def best_bid(self) -> float:
         return self.bids[0].price if self.bids else 0.0
-
     @property
     def best_ask(self) -> float:
         return self.asks[0].price if self.asks else 0.0
-
     @property
     def mid(self) -> float:
         if self.best_bid > 0 and self.best_ask > 0:
             return (self.best_bid + self.best_ask) / 2
         return self.best_bid or self.best_ask or 0.0
-
     @property
     def spread(self) -> float:
         if self.best_bid > 0 and self.best_ask > 0:
             return self.best_ask - self.best_bid
         return 0.0
-
     @property
     def total_bid_size(self) -> float:
         return sum(lvl.size for lvl in self.bids)
-
     @property
     def total_ask_size(self) -> float:
         return sum(lvl.size for lvl in self.asks)
-
     @staticmethod
     def from_json(bids_json: str, asks_json: str) -> OrderBookSnapshot:
         """Parse from JSON strings like '[[price, size], ...]'.
@@ -127,8 +115,6 @@ class OrderBookSnapshot(NamedTuple):
         bids = tuple(OrderBookLevel(float(p), float(s)) for p, s in raw_bids)
         asks = tuple(OrderBookLevel(float(p), float(s)) for p, s in raw_asks)
         return OrderBookSnapshot(bids, asks)
-
-
 # - Market View -
 
 
@@ -141,10 +127,8 @@ class MarketView:
     end_ts: int    # unix epoch seconds
     time_remaining_s: float
     time_remaining_frac: float  # 1.0 at start, 0.0 at end
-
     yes_book: OrderBookSnapshot = field(default_factory=OrderBookSnapshot)
     no_book: OrderBookSnapshot = field(default_factory=OrderBookSnapshot)
-
     # Top-of-book convenience (from market_prices table)
     yes_price: float = 0.0
     no_price: float = 0.0
@@ -152,8 +136,6 @@ class MarketView:
     yes_ask: float = 0.0
     no_bid: float = 0.0
     no_ask: float = 0.0
-
-
 # - Portfolio View -
 
 
@@ -164,8 +146,6 @@ class PositionView:
     yes_shares: float = 0.0
     no_shares: float = 0.0
     cost_basis: float = 0.0
-
-
 # - Market State (main object passed each tick) -
 
 
@@ -179,10 +159,8 @@ class MarketState:
     """
     timestamp: int       # Unix epoch seconds.
     timestamp_utc: str   # ISO 8601 string.
-
     # All currently active markets, keyed by slug.
     markets: dict[str, MarketView] = field(default_factory=dict)
-
     # Binance reference prices per asset (top-of-book mid and spread).
     btc_mid: float = 0.0
     btc_spread: float = 0.0
@@ -190,18 +168,14 @@ class MarketState:
     eth_spread: float = 0.0
     sol_mid: float = 0.0
     sol_spread: float = 0.0
-
     # Chainlink on-chain oracle prices per asset (used for settlement).
     chainlink_btc: float = 0.0
     chainlink_eth: float = 0.0
     chainlink_sol: float = 0.0
-
     # Read-only portfolio view.
     cash: float = 0.0
     positions: dict[str, PositionView] = field(default_factory=dict)
     total_portfolio_value: float = 0.0
-
-
 # - Orders and Fills -
 
 
@@ -244,8 +218,6 @@ class Settlement:
     end_ts: int
     chainlink_open: float = 0.0
     chainlink_close: float = 0.0
-
-
 # - Market Lifecycle -
 
 
@@ -257,8 +229,6 @@ class MarketLifecycle:
     start_ts: int
     end_ts: int
     status: MarketStatus = MarketStatus.UPCOMING
-
-
 # - Base Strategy ABC -
 
 
@@ -279,15 +249,12 @@ class BaseStrategy(ABC):
         and executed against the recorded order book at the NEXT tick (1s latency).
         """
         ...
-
     def on_fill(self, fill: Fill) -> None:
         """Optional: called when an order is filled."""
         pass
-
     def on_settlement(self, settlement: Settlement) -> None:
         """Optional: called when a market settles."""
         pass
-
     def get_forecasts(self, state: MarketState) -> dict[str, float]:
         """
         Optional: return model's P(YES) forecast for active markets.
