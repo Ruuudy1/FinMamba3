@@ -246,6 +246,7 @@ src/
     fin_mamba.py                  FinDrama sequence wrapper for upstream Mamba
     world_models.py               Mamba3 MIMO world model
 tests/
+  test_fi2010_pipeline.py           60 tests covering the full FI-2010 path end-to-end.
   test_lob_features.py
   test_lob_aggregation.py
   test_lob_labels.py
