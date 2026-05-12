@@ -115,7 +115,7 @@ Models:
     Mamba3:
       Enabled: true
       n_layer: 4
-      is_mimo: true
+      is_mimo: false
       mimo_rank: 4
       d_state: 128
       headdim: 64
