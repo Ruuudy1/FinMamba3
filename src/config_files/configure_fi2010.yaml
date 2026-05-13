@@ -68,7 +68,7 @@ Models:
     DirectionThresholds: null
     Dropout: 0.1
     Unimix_ratio: 0.01
-    Weight_decay: 1.0e-2
+    Weight_decay: 1.0e-3
     RepresentationLossWeight: 0.1
     FreeBits: 1.0
     Adam:
