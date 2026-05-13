@@ -29,10 +29,10 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000
   NumEnvs: 1
-  BatchSize: 256
+  BatchSize: 64
   EarlyStoppingPatience: 5
   SaveBestOnly: true
-  AccumSteps: 1
+  AccumSteps: 2
   BatchLength: 64
   ImagineBatchSize: 64
   ImagineContextLength: 8
@@ -68,7 +68,7 @@ Models:
     DirectionThresholds: null
     Dropout: 0.1
     Unimix_ratio: 0.01
-    Weight_decay: 1.0e-3
+    Weight_decay: 1.0e-4
     RepresentationLossWeight: 0.1
     FreeBits: 1.0
     Adam:
