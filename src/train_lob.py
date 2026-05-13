@@ -484,6 +484,16 @@ def main() -> None:
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
     imagine_every = save_every
+
+    # Early stopping config
+    early_stopping_patience = getattr(config.JointTrainAgent, 'EarlyStoppingPatience', 0)
+    save_best_only = getattr(config.JointTrainAgent, 'SaveBestOnly', False)
+
+    # Tracking variables
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_step = 0
+
     pbar = tqdm(range(max_steps), desc="pretrain")
     for step in pbar:
         train_world_model_step(
@@ -513,9 +523,33 @@ def main() -> None:
                     "validation top feature MSE: "
                     + ", ".join(f"{name}={value:.4g}" for name, value in top_mse)
                 )
-            pbar.set_postfix(
-                val_loss=f"{val_metrics.get('Val/reconstruction_loss', float('nan')):.4f}"
-            )
+
+            # --- Early stopping & best checkpoint logic ---
+            current_val_loss = val_metrics.get('Val/reconstruction_loss', float('inf'))
+
+            if current_val_loss < best_val_loss:
+                best_val_loss = current_val_loss
+                best_step = step
+                patience_counter = 0
+                if save_best_only:
+                    torch.save(
+                        {"step": step, "world_model": world_model.state_dict(),
+                         "optimizer": world_model.optimizer.state_dict(),
+                         "best_val_loss": best_val_loss},
+                        f"{logdir}/ckpt/world_model_best.pth",
+                    )
+                    logger.info(f"new best val_loss={best_val_loss:.4f} at step {step}, checkpoint saved")
+            else:
+                patience_counter += 1
+                if early_stopping_patience > 0:
+                    logger.info(f"no improvement for {patience_counter}/{early_stopping_patience} validations")
+
+            pbar.set_postfix(val_loss=f"{current_val_loss:.4f}", best=f"{best_val_loss:.4f}")
+
+            # Early stopping check
+            if early_stopping_patience > 0 and patience_counter >= early_stopping_patience:
+                logger.info(f"early stopping triggered at step {step}, best was {best_val_loss:.4f} at step {best_step}")
+                break
         if step > 0 and step % imagine_every == 0:
             _imagine_and_log(world_model, val_seq, wlogger, step)
         if step > 0 and step % save_every == 0:
@@ -524,12 +558,16 @@ def main() -> None:
                  "optimizer": world_model.optimizer.state_dict()},
                 f"{logdir}/ckpt/world_model.pth",
             )
+    # Save final checkpoint
     torch.save(
-        {"step": max_steps, "world_model": world_model.state_dict(),
+        {"step": step, "world_model": world_model.state_dict(),
          "optimizer": world_model.optimizer.state_dict()},
-        f"{logdir}/ckpt/world_model.pth",
+        f"{logdir}/ckpt/world_model_final.pth",
     )
-    logger.info(f"final checkpoint written to {logdir}/ckpt/world_model.pth")
+    logger.info(f"final checkpoint written to {logdir}/ckpt/world_model_final.pth")
+    logger.info(f"best val_loss={best_val_loss:.4f} at step {best_step}")
+    if save_best_only:
+        logger.info(f"best checkpoint: {logdir}/ckpt/world_model_best.pth")
     wlogger.close()
 if __name__ == "__main__":
     main()

@@ -24,13 +24,15 @@ Evaluate:
   EverySteps: 1000
 
 JointTrainAgent:
-  SampleMaxSteps: 20000
+  SampleMaxSteps: 8000
   BufferMaxLength: 50000
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000
   NumEnvs: 1
-  BatchSize: 64
-  AccumSteps: 2
+  BatchSize: 256
+  EarlyStoppingPatience: 5
+  SaveBestOnly: true
+  AccumSteps: 1
   BatchLength: 64
   ImagineBatchSize: 64
   ImagineContextLength: 8
@@ -66,7 +68,7 @@ Models:
     DirectionThresholds: null
     Dropout: 0.1
     Unimix_ratio: 0.01
-    Weight_decay: 1.0e-4
+    Weight_decay: 1.0e-2
     RepresentationLossWeight: 0.1
     FreeBits: 1.0
     Adam:
