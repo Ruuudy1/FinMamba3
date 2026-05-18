@@ -81,9 +81,10 @@ Models:
       K: 10
       FeatureDimLevel: 4         # FI-2010 levels: (ask_price, ask_size, bid_price, bid_size).
       FeatureDimTick: 6          # Derived aggregates: mid, spread, log_spread, imbalance, microprice, log_total_vol.
-      DModel: 128
-      NumLayers: 2
-      NumHeads: 4
+      DModel: 256
+      NumLayers: 4
+      NumHeads: 8
+      Dropout: 0.2
       DimFeedforward: 256
       OutputFlattenDim: 1024
       AggregateOnly: False
