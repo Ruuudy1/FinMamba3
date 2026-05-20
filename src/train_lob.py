@@ -67,8 +67,9 @@ def _build_sequences(
     fit_stats: bool,
     norm_clip: float,
     aggregate_only: bool,
+    intervals: list[str] | None = None,
 ) -> tuple[LOBSequence, str, object]:
-    bt = build_timeline(data_dir=data_dir, hours=hours)
+    bt = build_timeline(data_dir=data_dir, hours=hours, intervals=intervals)
     slug = market_slug or pick_longest_market(bt)
     settlement = bt.settlements.get(slug)
     yes_outcome = _settlement_yes_outcome(settlement)
@@ -338,6 +339,10 @@ def main() -> None:
     pre_parser.add_argument("--market-slug", default=None)
     pre_parser.add_argument("--hours-train", type=float, default=6.0)
     pre_parser.add_argument("--hours-val", type=float, default=1.0)
+    pre_parser.add_argument(
+        "--intervals", default=None,
+        help="Comma-separated list of market intervals to use (e.g., '5m' or '5m,15m'). Default: all.",
+    )
     pre_parser.add_argument("--norm-path", type=Path,
                             default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     pre_parser.add_argument(
@@ -363,6 +368,12 @@ def main() -> None:
     logger.info(f"dataset pipeline: {dataset_kind}")
     norm_clip = getattr(config.BasicSettings, "NormClip", 8.0)
     aggregate_only = getattr(config.Models.WorldModel.Encoder, "AggregateOnly", False)
+    # Parse intervals if provided
+    intervals = None
+    if pre_args.intervals:
+        intervals = [i.strip() for i in pre_args.intervals.split(",")]
+        logger.info(f"filtering markets to intervals: {intervals}")
+
     if dataset_kind == "polymarket":
         logger.info(f"building train features from {pre_args.data_train}")
         train_seq, slug, stats = _build_sequences(
@@ -373,6 +384,7 @@ def main() -> None:
             fit_stats=True,
             norm_clip=norm_clip,
             aggregate_only=aggregate_only,
+            intervals=intervals,
         )
         logger.info(f"building val features from {pre_args.data_val}")
         val_seq, _, _ = _build_sequences(
@@ -382,6 +394,7 @@ def main() -> None:
             pre_args.norm_path,
             fit_stats=False,
             norm_clip=norm_clip,
+            intervals=intervals,
             aggregate_only=aggregate_only,
         )
     elif dataset_kind == "fi2010":
