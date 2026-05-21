@@ -60,7 +60,7 @@ Models:
     HiddenStateDim: 512
     Optimiser: Laprop
     LatentDiscreteType: naive
-    Max_grad_norm: 1000     # DreamerV3 default; loose by design for cross-domain robustness.
+    Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
     Warmup_steps: 500
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
