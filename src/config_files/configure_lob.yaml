@@ -19,13 +19,15 @@ Evaluate:
 
 JointTrainAgent:
   SampleMaxSteps: 20000
+  EarlyStoppingPatience: 5
+  SaveBestOnly: true
   BufferMaxLength: 50000
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
   BatchSize: 64
   AccumSteps: 2        # effective batch = BatchSize * AccumSteps = 128
-  BatchLength: 64
+  BatchLength: 32
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
@@ -58,7 +60,7 @@ Models:
     HiddenStateDim: 512
     Optimiser: Laprop
     LatentDiscreteType: naive
-    Max_grad_norm: 1000     # DreamerV3 default; loose by design for cross-domain robustness.
+    Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
     Warmup_steps: 500
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.

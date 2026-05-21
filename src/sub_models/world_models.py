@@ -517,6 +517,9 @@ class WorldModel(nn.Module):
                 termination_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=torch.bool)
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, conditioned_dist_feat
     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
+        # Sanitize logits before building the categorical distribution.
+        logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
+        logits = torch.clamp(logits, min=-20.0, max=20.0)
         dist = OneHotCategorical(logits=logits)
         if sample_mode == "random_sample":
             sample = dist.sample() + dist.probs - dist.probs.detach()
@@ -524,6 +527,8 @@ class WorldModel(nn.Module):
             sample = dist.mode
         elif sample_mode == "probs":
             sample = dist.probs
+        else:
+            raise ValueError(f"Unknown sample_mode: {sample_mode}")
         return sample
     def flatten_sample(self, sample):
         return rearrange(sample, "B L K C -> B L (K C)")
