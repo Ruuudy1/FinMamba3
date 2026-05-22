@@ -62,7 +62,7 @@ Models:
     Optimiser: Laprop
     LatentDiscreteType: naive
     Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
-    Warmup_steps: 500
+    Warmup_steps: 1000     # Longer warmup to stabilize the higher LR under the larger 512 batch.
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
@@ -73,9 +73,9 @@ Models:
     RepresentationLossWeight: 0.1   # Beta on the representation-side KL term in the split KL.
     FreeBits: 1.0                   # Per-step KL floor in nats; KL is clipped to zero below this.
     Adam:
-      LearningRate: 1.0e-4
+      LearningRate: 3.0e-4   # ~3x for the 512 batch (was 1e-4 at effective batch 128).
     Laprop:
-      LearningRate: 4.0e-5
+      LearningRate: 1.2e-4   # Active optimizer; ~3x for the 512 batch (was 4e-5).
       Epsilon: 1.0e-20
     Encoder:
       Type: lob
