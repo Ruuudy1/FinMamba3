@@ -155,8 +155,36 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        # 8 base losses + direction + hawkes + settlement = 11 total.
-        self.assertEqual(len(losses), 11)
+        # 8 base losses + direction + hawkes + settlement + regime = 12 total.
+        self.assertEqual(len(losses), 12)
+        self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+    def test_regime_film_identity_at_init_and_update_finite(self):
+        from sub_models.world_models import WorldModel
+        config = _small_config("Mamba3")
+        config.Models.WorldModel.RegimeFiLM.Enabled = True
+        config.Models.WorldModel.RegimeFiLM.NumRegimes = 4
+        config.Models.WorldModel.RegimeFiLM.EmbedDim = 8
+        model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
+        self.assertTrue(model.use_regime_film)
+        self.assertIsNotNone(model.sequence_model.regime_modulator)
+        latent = torch.randn(2, 4, model.stoch_flattened_dim)
+        action = torch.zeros(2, 4)
+        model.sequence_model.eval()
+        with torch.no_grad():
+            out_on = model.sequence_model(latent, action)
+            model.sequence_model.use_regime_film = False
+            out_off = model.sequence_model(latent, action)
+            model.sequence_model.use_regime_film = True
+            out_again, regime_logits = model.sequence_model(latent, action, return_regime=True)
+        # At init the hypernetwork emits gamma=1, beta=0, so FiLM is the identity and the
+        # regime-on output must exactly match the regime-off output (clean baseline parity).
+        torch.testing.assert_close(out_on, out_off, rtol=1e-4, atol=1e-5)
+        self.assertEqual(tuple(regime_logits.shape), (2, 4, 4))
+        obs = torch.randn(2, 4, config.BasicSettings.FeatureDim)
+        reward = torch.zeros(2, 4)
+        termination = torch.zeros(2, 4)
+        losses = model.update(obs, action, reward, termination, 0, 0)
+        self.assertEqual(len(losses), 12)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 if __name__ == "__main__":
     unittest.main()

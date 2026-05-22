@@ -10,6 +10,7 @@ from sub_models.functions_losses import SymLogTwoHotLoss
 from sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from sub_models.transformer_model import StochasticTransformerKVCache
 from sub_models.fin_mamba import FinMambaSequenceModel
+from sub_models.regime_modulation import regime_load_balance_loss
 from sub_models.lob_auxiliary import (
     DirectionHead,
     EpisodicMemory,
@@ -137,6 +138,14 @@ class WorldModel(nn.Module):
             raise ValueError("FinDrama only supports Models.WorldModel.Encoder.Type='lob'")
         regime_cfg = getattr(config.Models.WorldModel, 'Regime', None)
         self.use_regime = bool(regime_cfg is not None and getattr(regime_cfg, 'Enabled', False))
+        # RegimeFiLM is the in-scan modulation path: a regime hypernetwork emits per-block
+        # FiLM applied to each Mamba block input, distinct from the post-hoc self.use_regime
+        # conditioner. Config reads mirror the sibling Regime block for cross-config safety.
+        regime_film_cfg = getattr(config.Models.WorldModel, 'RegimeFiLM', None)
+        self.use_regime_film = bool(regime_film_cfg is not None and getattr(regime_film_cfg, 'Enabled', False))
+        self.regime_film_num_regimes = int(getattr(regime_film_cfg, 'NumRegimes', 8)) if regime_film_cfg is not None else 8
+        self.regime_film_embed_dim = int(getattr(regime_film_cfg, 'EmbedDim', 32)) if regime_film_cfg is not None else 32
+        self.regime_film_entropy_coef = float(getattr(regime_film_cfg, 'EntropyCoef', 0.01)) if regime_film_cfg is not None else 0.01
         self.max_grad_norm = config.Models.WorldModel.Max_grad_norm
         max_seq_length = max(config.JointTrainAgent.BatchLength,
                              config.JointTrainAgent.ImagineContextLength + config.JointTrainAgent.ImagineBatchLength,
@@ -177,6 +186,9 @@ class WorldModel(nn.Module):
                 ssm_cfg={
                     'd_state': config.Models.WorldModel.Mamba.ssm_cfg.d_state,
                 },
+                use_regime_film=self.use_regime_film,
+                num_regimes=self.regime_film_num_regimes,
+                regime_embed_dim=self.regime_film_embed_dim,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -191,6 +203,9 @@ class WorldModel(nn.Module):
                 ssm_cfg={
                     'd_state': config.Models.WorldModel.Mamba.ssm_cfg.d_state,
                 },
+                use_regime_film=self.use_regime_film,
+                num_regimes=self.regime_film_num_regimes,
+                regime_embed_dim=self.regime_film_embed_dim,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -220,6 +235,9 @@ class WorldModel(nn.Module):
                     'rope_fraction': mamba3_cfg.rope_fraction,
                 },
                 use_action_input=bool(getattr(config.Models.WorldModel, 'UseActionInput', True)),
+                use_regime_film=self.use_regime_film,
+                num_regimes=self.regime_film_num_regimes,
+                regime_embed_dim=self.regime_film_embed_dim,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -652,9 +670,12 @@ class WorldModel(nn.Module):
             else:
                 obs_hat = decoder_out
             # Compute sequence-model hidden states.
+            regime_logits = None
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
                 dist_feat = self.sequence_model(flattened_sample, action, temporal_mask)
+            elif self.use_regime_film:
+                dist_feat, regime_logits = self.sequence_model(flattened_sample, action, return_regime=True)
             else:
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
@@ -746,12 +767,18 @@ class WorldModel(nn.Module):
                 settlement_loss = SettlementHead.bce(settle_logits, outcome_flat, ttf_flat)
             else:
                 settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            # Regime-FiLM load-balance regularizer keeps the inferred regime distribution from collapsing.
+            if self.use_regime_film and regime_logits is not None:
+                regime_loss = (self.regime_film_entropy_coef * regime_load_balance_loss(regime_logits)).to(reconstruction_loss.dtype)
+            else:
+                regime_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             total_loss = (
                 reconstruction_loss + reward_loss + termination_loss
                 + dynamics_loss + self.representation_loss_weight * representation_loss
                 + self.direction_loss_weight * direction_loss
                 + self.hawkes_loss_weight * hawkes_loss
                 + self.settlement_loss_weight * settlement_loss
+                + regime_loss
             )
         # Catch bf16 selective_scan blowups during early training.
         # Skipping the backward and optimizer step here keeps the rest of the run salvageable instead of propagating NaN parameters everywhere.
@@ -765,7 +792,7 @@ class WorldModel(nn.Module):
                 )
             self.optimizer.zero_grad(set_to_none=True)
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-            return (zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero)
+            return (zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero)
         self._nan_skip_count = 0
         # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()
@@ -800,5 +827,5 @@ class WorldModel(nn.Module):
             reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
             representation_real_kl_div.detach(), direction_loss.detach(),
-            hawkes_loss.detach(), settlement_loss.detach(), total_loss.detach(),
+            hawkes_loss.detach(), settlement_loss.detach(), regime_loss.detach(), total_loss.detach(),
         )

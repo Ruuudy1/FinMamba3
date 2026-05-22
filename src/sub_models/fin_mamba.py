@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sub_models.regime_modulation import RegimeFiLMModulator
 # endregion
 logger = logging.getLogger(__name__)
 _LOGGED_MAMBA_CLASSES: list[str] = []
@@ -119,6 +120,9 @@ class FinMambaSequenceModel(nn.Module):
         dropout_p: float = 0.0,
         ssm_cfg: dict | None = None,
         use_action_input: bool = True,
+        use_regime_film: bool = False,
+        num_regimes: int = 8,
+        regime_embed_dim: int = 32,
         device=None,
         dtype=None,
     ) -> None:
@@ -169,19 +173,38 @@ class FinMambaSequenceModel(nn.Module):
         self.layers = nn.ModuleList(layers)
         self.dropout = nn.Dropout(dropout_p)
         self.norm_f = nn.RMSNorm(d_model, **factory)
-    def forward(self, samples, action, inference_params=None, **mixer_kwargs):
+        self.use_regime_film = bool(use_regime_film)
+        if self.use_regime_film:
+            self.regime_modulator = RegimeFiLMModulator(
+                hidden_dim=d_model,
+                n_layer=n_layer,
+                num_regimes=num_regimes,
+                embed_dim=regime_embed_dim,
+                dtype=dtype,
+                device=device,
+            )
+        else:
+            self.regime_modulator = None
+    def forward(self, samples, action, inference_params=None, return_regime=False, **mixer_kwargs):
         if self.use_action_input:
             action = F.one_hot(action.long(), self.action_dim).to(dtype=samples.dtype)
             hidden_states = self.stem(torch.cat([samples, action], dim=-1))
         else:
             hidden_states = self.stem(samples)
+        # Infer the latent regime from the stem summary and emit per-block FiLM, so the
+        # regime modulates each block's input and thus its input-dependent Delta, B and C.
+        regime_logits = None
+        if self.use_regime_film:
+            gammas, betas, regime_logits = self.regime_modulator(hidden_states)
         # Mamba3 single-token cache and step kernels are intentionally bypassed on T4 and A100 compatibility runs.
         # Full-prefix recomputation calls this path instead.
         if self.block_type == "Mamba3":
             inference_params = None
-        for norm, layer in zip(self.norms, self.layers):
+        for layer_index, (norm, layer) in enumerate(zip(self.norms, self.layers)):
             residual = hidden_states
             layer_input = norm(hidden_states)
+            if self.use_regime_film:
+                layer_input = gammas[:, :, layer_index, :] * layer_input + betas[:, :, layer_index, :]
             if inference_params is None:
                 layer_out = layer(layer_input, **mixer_kwargs)
             else:
@@ -191,4 +214,7 @@ class FinMambaSequenceModel(nn.Module):
                     **mixer_kwargs,
                 )
             hidden_states = residual + self.dropout(layer_out)
-        return self.norm_f(hidden_states)
+        output = self.norm_f(hidden_states)
+        if return_regime:
+            return output, regime_logits
+        return output

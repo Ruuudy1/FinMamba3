@@ -68,13 +68,14 @@ def _build_sequences(
     norm_clip: float,
     aggregate_only: bool,
     intervals: list[str] | None = None,
+    include_binary_features: bool = False,
 ) -> tuple[LOBSequence, str, object]:
     bt = build_timeline(data_dir=data_dir, hours=hours, intervals=intervals)
     slug = market_slug or pick_longest_market(bt)
     settlement = bt.settlements.get(slug)
     yes_outcome = _settlement_yes_outcome(settlement)
     try:
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome)
+        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
     except RuntimeError:
         # Requested slug has no usable ticks in this split; fall back to the
         # longest market available in this split.
@@ -85,7 +86,7 @@ def _build_sequences(
             f"Market {market_slug!r} has no usable ticks in {data_dir}; "
             f"falling back to {slug!r}"
         )
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome)
+        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
     if fit_stats:
         stats = fit_normalization(seq, clip_value=norm_clip)
         save_normalization(stats, norm_path)
@@ -375,6 +376,7 @@ def main() -> None:
         logger.info(f"filtering markets to intervals: {intervals}")
 
     if dataset_kind == "polymarket":
+        include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
         logger.info(f"building train features from {pre_args.data_train}")
         train_seq, slug, stats = _build_sequences(
             pre_args.data_train,
@@ -385,6 +387,7 @@ def main() -> None:
             norm_clip=norm_clip,
             aggregate_only=aggregate_only,
             intervals=intervals,
+            include_binary_features=include_binary_features,
         )
         logger.info(f"building val features from {pre_args.data_val}")
         val_seq, _, _ = _build_sequences(
@@ -396,6 +399,7 @@ def main() -> None:
             norm_clip=norm_clip,
             intervals=intervals,
             aggregate_only=aggregate_only,
+            include_binary_features=include_binary_features,
         )
     elif dataset_kind == "fi2010":
         fi2010_cfg = getattr(dataset_cfg, "FI2010", None) if dataset_cfg is not None else None

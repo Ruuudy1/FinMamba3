@@ -1,6 +1,6 @@
 BasicSettings:
   ObsMode: features
-  FeatureDim: 94          # K(10) * F_level(8) + F_tick(14)
+  FeatureDim: 100         # K(10) * F_level(8) + F_tick(20: 14 base + 6 binary-market)
   ReplayBufferOnGPU: True
   Seed: 3710
   Env_name: LOB
@@ -80,7 +80,8 @@ Models:
       Type: lob
       K: 10
       FeatureDimLevel: 8
-      FeatureDimTick: 14
+      FeatureDimTick: 20
+      BinaryMarketFeatures: True   # Append boundary/logit/Amihud/variance-ratio tick features (Polymarket only).
       DModel: 128
       NumLayers: 2
       NumHeads: 4
@@ -136,6 +137,11 @@ Models:
       Enabled: False
       NumRegimes: 8
       EmbedDim: 32
+    RegimeFiLM:
+      Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
+      NumRegimes: 8
+      EmbedDim: 32
+      EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
     EpisodicMemory:
       Enabled: False                # Default off; baseline run for the A/B.
       Capacity: 50000               # Number of past hidden states retained on CPU.

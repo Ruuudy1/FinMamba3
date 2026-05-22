@@ -679,7 +679,7 @@ def test_world_model_fi2010_stoch_flattened_dim():
     assert wm.stoch_flattened_dim == 16
 
 
-def test_world_model_fi2010_update_returns_eleven_losses():
+def test_world_model_fi2010_update_returns_twelve_losses():
     from sub_models.world_models import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
@@ -689,7 +689,7 @@ def test_world_model_fi2010_update_returns_eleven_losses():
     reward = torch.zeros(B, L)
     termination = torch.zeros(B, L)
     losses = wm.update(obs, action, reward, termination, global_step=1, epoch_step=0)
-    assert len(losses) == 11
+    assert len(losses) == 12
     for t in losses:
         assert torch.is_tensor(t) and torch.isfinite(t).all()
 
@@ -716,7 +716,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
     action = torch.zeros(B, L, dtype=torch.long)
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
-    assert len(losses) == 11
+    assert len(losses) == 12
     direction_loss = losses[7]
     assert torch.isfinite(direction_loss)
 

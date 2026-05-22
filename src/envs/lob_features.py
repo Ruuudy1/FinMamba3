@@ -54,11 +54,23 @@ TICK_FEATURE_NAMES = (
     "trade_intensity",
     "rolling_vol",
 )
+BINARY_TICK_FEATURE_NAMES = (
+    "boundary_distance",
+    "boundary_scaled_depth",
+    "logit_mid_velocity",
+    "logit_mid_acceleration",
+    "amihud_illiquidity",
+    "variance_ratio",
+)
+F_TICK_BINARY = F_TICK + len(BINARY_TICK_FEATURE_NAMES)
 FLAT_FEATURE_NAMES = tuple(
     f"level{k}.{name}"
     for k in range(K_LEVELS)
     for name in LEVEL_FEATURE_NAMES
 ) + tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES)
+FLAT_FEATURE_NAMES_BINARY = FLAT_FEATURE_NAMES + tuple(
+    f"tick.{name}" for name in BINARY_TICK_FEATURE_NAMES
+)
 LEVEL_DETERMINISTIC_INDICES = (5, 6)
 DEFAULT_NORM_CLIP = 8.0
 DEFAULT_LEVEL_STD_FLOOR = np.asarray(
@@ -72,6 +84,20 @@ DEFAULT_TICK_STD_FLOOR = np.asarray(
     ],
     dtype=np.float32,
 )
+DEFAULT_BINARY_TICK_STD_FLOOR = np.asarray(
+    [1e-3, 1e-2, 1e-3, 1e-3, 1e-6, 1e-2],
+    dtype=np.float32,
+)
+
+
+def _tick_std_floor_for_width(f_tick: int, eps: float) -> np.ndarray:
+    # Polymarket base (14) and binary-extended (20) schemas get pinned floors; other
+    # widths such as FI-2010 fall back to a flat eps floor.
+    if f_tick == DEFAULT_TICK_STD_FLOOR.shape[0]:
+        return DEFAULT_TICK_STD_FLOOR
+    if f_tick == F_TICK_BINARY:
+        return np.concatenate([DEFAULT_TICK_STD_FLOOR, DEFAULT_BINARY_TICK_STD_FLOOR])
+    return np.full(f_tick, eps, dtype=np.float32)
 
 
 @dataclass
@@ -126,11 +152,66 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
     return out
 
 
+def append_binary_market_features(
+    per_tick: np.ndarray,
+    midprice: np.ndarray,
+    vol_window: int = 20,
+) -> np.ndarray:
+    """Append six Polymarket-specific binary-market tick features.
+
+    Polymarket prices are bounded probabilities in [0, 1], so the informative
+    coordinates differ from a generic LOB: distance to the 0/1 boundary, the
+    log-odds (logit) velocity and acceleration of the implied probability, and
+    structural-break statistics (Amihud illiquidity, variance ratio) that double
+    as the regime-inference structural prior. Input per_tick is (T, F_TICK) raw
+    (unnormalized) and midprice is the raw mid in (0, 1); returns (T, F_TICK_BINARY).
+    """
+    eps = 1.0e-6
+    mid = np.clip(midprice.astype(np.float64), eps, 1.0 - eps)
+    boundary_distance = np.minimum(mid, 1.0 - mid)
+    log_depth_sum = per_tick[:, 6].astype(np.float64) + per_tick[:, 7].astype(np.float64)
+    boundary_scaled_depth = log_depth_sum * (2.0 * boundary_distance)
+    logit_mid = np.log(mid / (1.0 - mid))
+    logit_velocity = np.zeros_like(logit_mid)
+    logit_velocity[1:] = logit_mid[1:] - logit_mid[:-1]
+    logit_acceleration = np.zeros_like(logit_mid)
+    logit_acceleration[1:] = logit_velocity[1:] - logit_velocity[:-1]
+    depth_proxy = log_depth_sum + eps
+    amihud_instant = np.abs(logit_velocity) / depth_proxy
+    amihud_cumsum = np.concatenate([[0.0], np.cumsum(amihud_instant)])
+    amihud_rolling = np.zeros_like(logit_mid)
+    variance_ratio = np.ones_like(logit_mid)
+    num_ticks = logit_mid.shape[0]
+    for t in range(num_ticks):
+        window_start = max(0, t + 1 - vol_window)
+        window_count = t + 1 - window_start
+        amihud_rolling[t] = (amihud_cumsum[t + 1] - amihud_cumsum[window_start]) / window_count
+        if window_count >= 4:
+            window_returns = logit_velocity[window_start : t + 1]
+            var_one_step = float(np.var(window_returns))
+            two_step_returns = window_returns[:-1] + window_returns[1:]
+            var_two_step = float(np.var(two_step_returns))
+            variance_ratio[t] = var_two_step / (2.0 * var_one_step + eps) if var_one_step > 0.0 else 1.0
+    binary_block = np.stack(
+        [
+            boundary_distance,
+            boundary_scaled_depth,
+            logit_velocity,
+            logit_acceleration,
+            amihud_rolling,
+            variance_ratio,
+        ],
+        axis=1,
+    ).astype(np.float32)
+    return np.concatenate([per_tick.astype(np.float32), binary_block], axis=1)
+
+
 def extract_features(
     timeline: list[TickData],
     market_slug: str,
     vol_window: int = 20,
     yes_outcome: float | None = None,
+    include_binary_features: bool = False,
 ) -> LOBSequence:
     """Per-tick feature tensors for a single market. Skips ticks with no
     2-sided YES book.
@@ -216,11 +297,16 @@ def extract_features(
         prev_top_ask_size = top_ask_size
     if not per_tick_rows:
         raise RuntimeError(f"No usable ticks for market {market_slug}")
+    per_level_array = np.stack(per_level_rows, axis=0)
+    per_tick_array = np.stack(per_tick_rows, axis=0)
+    midprice_array = np.asarray(mids, dtype=np.float32)
+    if include_binary_features:
+        per_tick_array = append_binary_market_features(per_tick_array, midprice_array, vol_window)
     return LOBSequence(
         market_slug=market_slug,
-        per_level=np.stack(per_level_rows, axis=0),
-        per_tick=np.stack(per_tick_rows, axis=0),
-        midprice=np.asarray(mids, dtype=np.float32),
+        per_level=per_level_array,
+        per_tick=per_tick_array,
+        midprice=midprice_array,
         ts_sec=np.asarray(ts_list, dtype=np.int64),
         yes_outcome=(
             np.full(len(ts_list), float(yes_outcome), dtype=np.float32)
@@ -294,6 +380,10 @@ class NormalizationStats:
     clip_value: float = DEFAULT_NORM_CLIP
 
     def to_json(self) -> dict:
+        f_tick = int(self.per_tick_mean.shape[0])
+        tick_feature_names = list(TICK_FEATURE_NAMES)
+        if f_tick == F_TICK_BINARY:
+            tick_feature_names = list(TICK_FEATURE_NAMES) + list(BINARY_TICK_FEATURE_NAMES)
         return {
             "per_level_mean": self.per_level_mean.tolist(),
             "per_level_std":  self.per_level_std.tolist(),
@@ -301,9 +391,9 @@ class NormalizationStats:
             "per_tick_std":   self.per_tick_std.tolist(),
             "clip_value": self.clip_value,
             "level_feature_names": list(LEVEL_FEATURE_NAMES),
-            "tick_feature_names": list(TICK_FEATURE_NAMES),
+            "tick_feature_names": tick_feature_names,
             "level_std_floor": DEFAULT_LEVEL_STD_FLOOR.tolist(),
-            "tick_std_floor": DEFAULT_TICK_STD_FLOOR.tolist(),
+            "tick_std_floor": _tick_std_floor_for_width(f_tick, 1e-6).tolist(),
             "deterministic_level_indices": list(LEVEL_DETERMINISTIC_INDICES),
         }
     @classmethod
@@ -319,8 +409,8 @@ class NormalizationStats:
             for idx in LEVEL_DETERMINISTIC_INDICES:
                 per_level_mean[idx] = 0.0
                 per_level_std[idx] = 1.0
-        if per_tick_std.shape[0] == DEFAULT_TICK_STD_FLOOR.shape[0]:
-            per_tick_std = np.maximum(per_tick_std, DEFAULT_TICK_STD_FLOOR)
+        if per_tick_std.shape[0] in (DEFAULT_TICK_STD_FLOOR.shape[0], F_TICK_BINARY):
+            per_tick_std = np.maximum(per_tick_std, _tick_std_floor_for_width(per_tick_std.shape[0], 1e-6))
         return cls(
             per_level_mean=per_level_mean,
             per_level_std=per_level_std,
@@ -348,10 +438,7 @@ def fit_normalization(
         DEFAULT_LEVEL_STD_FLOOR if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]
         else np.full(f_level, eps, dtype=np.float32)
     )
-    tick_floor = (
-        DEFAULT_TICK_STD_FLOOR if f_tick == DEFAULT_TICK_STD_FLOOR.shape[0]
-        else np.full(f_tick, eps, dtype=np.float32)
-    )
+    tick_floor = _tick_std_floor_for_width(f_tick, eps)
     pl_std = np.maximum(pl.std(axis=0), level_floor).astype(np.float32)
     pt_std = np.maximum(pt.std(axis=0), tick_floor).astype(np.float32)
     # Polymarket level index and side are deterministic token metadata; pin them
@@ -409,9 +496,12 @@ def normalized_feature_diagnostics(seq: LOBSequence, clip_value: float | None = 
     top_idx = np.argsort(feature_max_abs)[-5:][::-1]
     cap = DEFAULT_NORM_CLIP if clip_value is None else float(clip_value)
     # Pick the schema-appropriate feature-name tuple, defaulting to indices for unknown widths.
-    name_table = FLAT_FEATURE_NAMES if flat_dim == len(FLAT_FEATURE_NAMES) else tuple(
-        f"feature_{i}" for i in range(flat_dim)
-    )
+    if flat_dim == len(FLAT_FEATURE_NAMES):
+        name_table = FLAT_FEATURE_NAMES
+    elif flat_dim == len(FLAT_FEATURE_NAMES_BINARY):
+        name_table = FLAT_FEATURE_NAMES_BINARY
+    else:
+        name_table = tuple(f"feature_{i}" for i in range(flat_dim))
     return {
         "finite": finite,
         "max_abs": max_abs,
