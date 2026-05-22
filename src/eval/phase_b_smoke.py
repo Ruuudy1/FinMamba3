@@ -1,83 +1,110 @@
-"""Phase B smoke test: 1k PPO steps against a frozen world model.
+"""Phase B: warm-start an RL agent in the world model's imagination.
 
-Demonstrates that the latent learned in Phase A is RL-trainable. Not a full
-Phase B run; just enough to catch regressions in the env wiring or the
-agent's interaction with the imagination buffer. Intended to be invoked
-once per checkpoint as a CI-style sanity check, not as a training routine.
+Builds an ActorCriticAgent on top of a Phase-A pretrained world model and trains
+it on imagined rollouts (DreamerV3 style) sampled from the LOB replay buffer. It
+runs entirely in the world model's latent space, so it never touches the env
+observation schema (the env emits a different multi-market vector than the world
+model consumes); imagination is the architecturally correct Phase B path here.
+
+GPU-only (the Mamba backbone needs CUDA). Two prerequisites for *meaningful*
+learning, both tracked in handoff.md:
+  1. The world model must be built with action_dim equal to the agent action
+     space, so imagined actions can be fed back into the dynamics. Pass
+     --agent-action-dim to match. A Phase-A checkpoint trained with a different
+     action_dim loads with strict=False (the action stem is reinitialized).
+  2. A reward signal is required. With Reward.Enabled=false the imagined reward is
+     zero and the agent has nothing to optimize; enable the reward head and train
+     it on env reward before expecting a useful policy.
 
 Example
 -------
     python -m eval.phase_b_smoke \\
-        --checkpoint saved_models/lob/LOB/run_001/ckpt/world_model.pth \\
+        --checkpoint saved_models/lob/LOB/<run>/ckpt/world_model_best.pth \\
         --config src/config_files/configure_lob.yaml \\
-        --max-steps 1000
+        --data-train data/train --steps 200
 """
 # region imports
 from __future__ import annotations
 import argparse
+import logging
 import sys
 from pathlib import Path
 import torch
+import yaml
 # endregion
+logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Phase B smoke test")
-    p.add_argument("--checkpoint", required=True, help="Path to pretrained world_model.pth")
+    p = argparse.ArgumentParser(description="Phase B imagination trainer")
+    p.add_argument("--checkpoint", required=True, help="Path to a Phase-A world_model checkpoint")
     p.add_argument("--config", required=True, help="Path to configure_lob.yaml")
-    p.add_argument("--max-steps", type=int, default=1000)
     p.add_argument("--data-train", default="data/train")
+    p.add_argument("--steps", type=int, default=200)
+    p.add_argument("--hours-train", type=float, default=6.0)
+    p.add_argument(
+        "--agent-action-dim", type=int, default=None,
+        help="Agent action space; defaults to the PolymarketLOBEnv action count.",
+    )
     p.add_argument("--device", default="cuda")
     return p.parse_args()
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    src_dir = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(src_dir))
+    from config_utils import DotDict
+    from replay_buffer import ReplayBuffer
     from agents import ActorCriticAgent
     from envs.polymarket_lob_env import PolymarketLOBEnv
     from lob.backtester.data_loader import build_timeline
     from sub_models.world_models import WorldModel
-    import yaml
+    from train_lob import _build_sequences, _populate_buffer
     with open(args.config) as f:
-        cfg_dict = yaml.safe_load(f)
-    # Convert nested dict to dotted-attribute config consistent with train_lob.
-    from types import SimpleNamespace
-    def _ns(d):
-        if isinstance(d, dict):
-            return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
-        return d
-    cfg = _ns(cfg_dict)
+        config = DotDict(yaml.safe_load(f))
     device = torch.device(args.device)
-    timeline = build_timeline(args.data_train)
-    env = PolymarketLOBEnv(timeline)
-    world_model = WorldModel(action_dim=env.action_space.n, config=cfg, device=device).to(device)
+    backtest_data = build_timeline(data_dir=Path(args.data_train), hours=args.hours_train)
+    env = PolymarketLOBEnv(backtest_data)
+    action_dim = args.agent_action_dim if args.agent_action_dim is not None else int(env.action_space.n)
+    logger.info(f"agent action_dim={action_dim}")
+    world_model = WorldModel(action_dim=action_dim, config=config, device=device).to(device)
     state = torch.load(args.checkpoint, map_location=device)
-    world_model.load_state_dict(state["state_dict"] if "state_dict" in state else state)
+    missing, unexpected = world_model.load_state_dict(state.get("world_model", state), strict=False)
+    if missing or unexpected:
+        logger.warning(
+            f"checkpoint load: {len(missing)} missing, {len(unexpected)} unexpected params "
+            "(expected if the Phase-A action_dim differs; the action stem is reinitialized)."
+        )
     world_model.eval()
-    for p in world_model.parameters():
-        p.requires_grad = False
-    agent = ActorCriticAgent(
-        feat_dim=world_model.hidden_state_dim + world_model.stoch_flattened_dim,
-        action_dim=env.action_space.n,
-        config=cfg,
-        device=device,
+    for param in world_model.parameters():
+        param.requires_grad = False
+    agent = ActorCriticAgent(config, action_dim, device)
+    # Imagination needs real LOB context to encode, so populate a replay buffer from the same data.
+    norm_path = src_dir.parent / "saved_models" / "lob" / "normalization.json"
+    include_binary = config.Models.WorldModel.Encoder.BinaryMarketFeatures
+    train_seq, _, _ = _build_sequences(
+        Path(args.data_train), None, args.hours_train, norm_path,
+        fit_stats=False, norm_clip=config.BasicSettings.NormClip,
+        aggregate_only=False, include_binary_features=include_binary,
     )
-    obs, _ = env.reset()
-    rewards = []
-    for step in range(args.max_steps):
-        flat = torch.from_numpy(obs.reshape(-1)).to(device).float().unsqueeze(0).unsqueeze(0)
-        latent = world_model.encode_obs(flat)
-        seq_in = torch.zeros((1, 1), dtype=torch.long, device=device)
-        dist_feat = world_model.sequence_model(latent, seq_in)
-        feat = torch.cat([latent[:, -1:], dist_feat[:, -1:]], dim=-1)
-        action, _ = agent.sample(feat)
-        obs, reward, done, _, _ = env.step(int(action.item()))
-        rewards.append(float(reward))
-        if done:
-            obs, _ = env.reset()
-    avg = sum(rewards) / max(1, len(rewards))
-    print(f"phase_b_smoke: {len(rewards)} steps, mean reward {avg:.6f}")
+    replay_buffer = ReplayBuffer(config, device=device)
+    _populate_buffer(replay_buffer, train_seq)
+    imagine_batch_size = config.JointTrainAgent.ImagineBatchSize
+    context_len = config.JointTrainAgent.ImagineContextLength
+    imagine_len = config.JointTrainAgent.ImagineBatchLength
+    for step in range(args.steps):
+        sample_obs, sample_action, _, _ = replay_buffer.sample(imagine_batch_size, context_len, imagine=True)
+        imagined, imagined_action, old_logits, context_out, imagined_reward, imagined_term = world_model.imagine_data(
+            agent, sample_obs, sample_action, imagine_batch_size, imagine_len,
+            log_video=False, logger=None, global_step=step,
+        )
+        agent.update(
+            imagined, imagined_action, old_logits, context_out, None, None,
+            imagined_reward, imagined_term.float(), None, step,
+        )
+    logger.info(f"phase B: {args.steps} imagination updates complete")
     return 0
 if __name__ == "__main__":
     sys.exit(main())
