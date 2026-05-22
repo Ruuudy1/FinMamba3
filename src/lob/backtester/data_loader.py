@@ -109,9 +109,17 @@ def load_market_prices(
 
 
 def load_orderbooks(books_dir: Path) -> pd.DataFrame:
-    """Load order book snapshots from CSV files (and legacy JSONL)."""
+    """Load order book snapshots from Parquet or CSV files (and legacy JSONL)."""
     pd = _import_pandas()
     frames = []
+    # Preferred Parquet format. Its schema matches the CSV export column-for-column
+    # (timestamp_us, market_slug, interval, the *_json ladders, and the derived
+    # best-bid/ask, count, and total-size columns), so no remapping is needed.
+    for path in sorted(books_dir.glob("*.parquet")):
+        try:
+            frames.append(pd.read_parquet(path))
+        except Exception:
+            pass
     for path in sorted(books_dir.glob("*.csv")):
         try:
             frames.append(pd.read_csv(path))
