@@ -47,16 +47,19 @@ class ReplayBuffer():
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             counts = self.sampled_counter[:self.length + 1 - batch_length]
             imagine_counts = self.imagined_counter[:self.length + 1 - batch_length] / self.batch_scale_factor
+            # Sample with replacement when the batch exceeds the number of distinct start
+            # positions (short markets), so a large batch does not crash multinomial.
+            replacement = batch_size > counts.shape[0]
             if imagine:
                 linear_penalty = torch.maximum(torch.zeros_like(counts), counts - imagine_counts)
                 score = counts - self.alpha * imagine_counts - self.beta * linear_penalty
                 score = score / self.imagination_tau
                 probabilities = torch.softmax(score, dim=0)
-                start_indexes = torch.multinomial(probabilities, batch_size, replacement=False)
+                start_indexes = torch.multinomial(probabilities, batch_size, replacement=replacement)
             else:
                 logits = -counts / self.tau
                 probabilities = torch.exp(logits) / torch.sum(torch.exp(logits))
-                start_indexes = torch.multinomial(probabilities, batch_size, replacement=False)
+                start_indexes = torch.multinomial(probabilities, batch_size, replacement=replacement)
             if not imagine:
                 self.sampled_counter[start_indexes] += 1
             else:
@@ -83,7 +86,7 @@ class ReplayBuffer():
                     score = -counts / self.tau
                 exp_score = np.exp(score - np.max(score))
                 probabilities = exp_score / np.sum(exp_score)
-                start_indexes = np.random.choice(len(probabilities), size=(batch_size,), replace=False, p=probabilities)
+                start_indexes = np.random.choice(len(probabilities), size=(batch_size,), replace=batch_size > len(probabilities), p=probabilities)
                 if not imagine:
                     self.sampled_counter[start_indexes] += 1
                 else:

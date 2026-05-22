@@ -8,7 +8,7 @@ BasicSettings:
   Use_amp: True
   NormClip: 8.0
   Use_cg: False           # disables CUDA-graph caching in the Mamba decoding path
-  Compile: False          # torch.compile adds startup time; disable for short runs
+  Compile: True           # torch.compile fuses the encoder/decoder; raises GPU utilization (Mamba kernel excluded)
   SavePath: None
 
 Evaluate:
@@ -25,9 +25,9 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
-  BatchSize: 64
-  AccumSteps: 2        # effective batch = BatchSize * AccumSteps = 128
-  BatchLength: 32
+  BatchSize: 512       # Sized to fill the L4/A100 VRAM; the sampler falls back to with-replacement if a market is short.
+  AccumSteps: 1        # No accumulation needed with the big real batch; raises GPU utilization directly.
+  BatchLength: 64
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
@@ -38,6 +38,7 @@ JointTrainAgent:
   FreezeWorldModelAfterSteps: 20000
   FreezeBehaviourAfterSteps: 0
   SaveEverySteps: 2000
+  LogEvery: 50         # World-model losses sync to CPU and log every N steps; avoids a per-step GPU stall.
   SaveModels: True
   Tau: 10
   ImaginationTau: 10

@@ -33,9 +33,11 @@ def train_world_model_step(
     epoch,
     global_step,
     accum_steps: int = 1,
+    log_every: int = 1,
 ):
-    # Accumulate on-device tensors per epoch to avoid per-step GPU-CPU syncs.
-    # Convert to floats once at the end of the function for logging.
+    # Only sync losses to CPU and log on logging steps, so a host transfer does not stall the
+    # GPU every step. On non-logging steps the update runs with no GPU-to-CPU sync at all.
+    should_log = logger is not None and global_step % log_every == 0
     epoch_means: dict[str, list[float]] = {name: [] for name in _LOSS_NAMES}
     for e in range(epoch):
         accum_stacks: list[list[torch.Tensor]] = [[] for _ in _LOSS_NAMES]
@@ -54,14 +56,15 @@ def train_world_model_step(
                 accum_steps=accum_steps,
                 is_last_accum=(a == accum_steps - 1),
             )
-            for i, v in enumerate(losses):
-                accum_stacks[i].append(v)
-        # Single GPU-to-CPU transfer per epoch instead of 8 per accum step.
-        stacked = torch.stack([torch.stack(stack).mean() for stack in accum_stacks])
-        means = stacked.detach().cpu().numpy()
-        for name, value in zip(_LOSS_NAMES, means):
-            epoch_means[name].append(float(value))
-    if logger is not None:
+            if should_log:
+                for i, v in enumerate(losses):
+                    accum_stacks[i].append(v)
+        if should_log:
+            stacked = torch.stack([torch.stack(stack).mean() for stack in accum_stacks])
+            means = stacked.detach().cpu().numpy()
+            for name, value in zip(_LOSS_NAMES, means):
+                epoch_means[name].append(float(value))
+    if should_log:
         for name, values in epoch_means.items():
             logger.log(
                 f"WorldModel/{name}",

@@ -497,6 +497,7 @@ def main() -> None:
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
     accum_steps = getattr(config.JointTrainAgent, 'AccumSteps', 1)
+    log_every = getattr(config.JointTrainAgent, 'LogEvery', 50)
     max_steps = config.JointTrainAgent.SampleMaxSteps
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
@@ -522,6 +523,7 @@ def main() -> None:
             epoch=config.JointTrainAgent.TrainDynamicsEpoch,
             global_step=step,
             accum_steps=accum_steps,
+            log_every=log_every,
         )
         if step > 0 and step % val_every == 0:
             val_metrics, top_mse = _validation_metrics(
