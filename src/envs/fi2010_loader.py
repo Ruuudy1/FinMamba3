@@ -52,7 +52,15 @@ FILENAMES_BY_SPLIT = {
         "Train_Dst_NoAuction_DecPre_CF_7.txt",
         "Train_Dst_NoAuction_ZScore_CF_7.txt",
     ),
+    # Carved 15% validation split. The Test_ names are kept as a fallback for
+    # older mirrors that mapped validation onto the held-out Test file.
     "validation": (
+        "Val_Dst_NoAuction_DecPre_CF_7.txt",
+        "Val_Dst_NoAuction_ZScore_CF_7.txt",
+        "Test_Dst_NoAuction_DecPre_CF_7.txt",
+        "Test_Dst_NoAuction_ZScore_CF_7.txt",
+    ),
+    "test": (
         "Test_Dst_NoAuction_DecPre_CF_7.txt",
         "Test_Dst_NoAuction_ZScore_CF_7.txt",
     ),
