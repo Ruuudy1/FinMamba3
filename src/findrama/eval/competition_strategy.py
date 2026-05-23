@@ -13,8 +13,8 @@ from collections import deque
 import numpy as np
 import torch
 from findrama.envs.lob_features import apply_normalization, extract_features, load_normalization
-from findrama.lob.backtester.data_loader import TickData
-from findrama.lob.backtester.strategy import BaseStrategy, MarketState, Order, Side, StoredBook, Token
+from findrama.backtester.data_loader import TickData
+from findrama.backtester.strategy import BaseStrategy, MarketState, Order, Side, StoredBook, Token
 # endregion
 
 
@@ -103,8 +103,8 @@ def build_competition_strategy(
 ):
     """Construct a strategy from a Phase-A checkpoint, config, and normalization stats."""
     import yaml
-    from findrama.config_utils import DotDict
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.config import DotDict
+    from findrama.models.world_models import WorldModel
     with open(config_path) as f:
         config = DotDict(yaml.safe_load(f))
     world_model = WorldModel(action_dim=1, config=config, device=torch.device(device)).to(device)

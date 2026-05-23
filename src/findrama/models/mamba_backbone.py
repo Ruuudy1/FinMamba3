@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from findrama.sub_models.regime_modulation import RegimeFiLMModulator
+from findrama.models.regime_modulation import RegimeFiLMModulator
 # endregion
 logger = logging.getLogger(__name__)
 _LOGGED_MAMBA_CLASSES: list[str] = []

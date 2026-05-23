@@ -20,7 +20,7 @@ Example
 -------
     python -m eval.phase_b_smoke \\
         --checkpoint saved_models/lob/LOB/<run>/ckpt/world_model_best.pth \\
-        --config src/config_files/configure_lob.yaml \\
+        --config configs/lob.yaml \\
         --data-train data/train --steps 200
 """
 # region imports
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Phase B imagination trainer")
     p.add_argument("--checkpoint", required=True, help="Path to a Phase-A world_model checkpoint")
-    p.add_argument("--config", required=True, help="Path to configure_lob.yaml")
+    p.add_argument("--config", required=True, help="Path to lob.yaml")
     p.add_argument("--data-train", default="data/train")
     p.add_argument("--steps", type=int, default=200)
     p.add_argument("--hours-train", type=float, default=6.0)
@@ -54,12 +54,12 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
     src_dir = Path(__file__).resolve().parents[2]
-    from findrama.config_utils import DotDict
+    from findrama.config import DotDict
     from findrama.replay_buffer import ReplayBuffer
     from findrama.agents import ActorCriticAgent
-    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
-    from findrama.lob.backtester.data_loader import build_timeline
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.envs.lob_env import PolymarketLOBEnv
+    from findrama.backtester.data_loader import build_timeline
+    from findrama.models.world_models import WorldModel
     from findrama.train_lob import _build_sequences, _populate_buffer
     with open(args.config) as f:
         config = DotDict(yaml.safe_load(f))

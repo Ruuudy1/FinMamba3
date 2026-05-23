@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 import torch
-from findrama.sub_models.regime_modulation import (  # noqa: E402
+from findrama.models.regime_modulation import (  # noqa: E402
     RegimeFiLMModulator,
     regime_load_balance_loss,
 )

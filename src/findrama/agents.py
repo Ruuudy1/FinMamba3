@@ -5,11 +5,11 @@ import torch.nn.functional as F
 import torch.distributions as distributions
 import copy
 import numpy as np
-from findrama.sub_models.laprop import LaProp
+from findrama.models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-from findrama.sub_models.functions_losses import SymLogTwoHotLoss
-from findrama.utils import EMAScalar
-from findrama.tools import layer_init
+from findrama.models.losses import SymLogTwoHotLoss
+from findrama.training_utils import EMAScalar
+from findrama.weight_init import layer_init
 # endregion
 RMSNorm = nn.RMSNorm
 

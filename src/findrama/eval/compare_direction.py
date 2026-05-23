@@ -11,7 +11,7 @@ Example
 -------
     python -m eval.compare_direction \\
         --world-checkpoint saved_models/lob/LOB/1iemugot/ckpt/world_model.pth \\
-        --config src/config_files/configure_lob.yaml \\
+        --config configs/lob.yaml \\
         --data-train data/train --data-val data/validation \\
         --thresholds 0.001,0.005,0.01 \\
         --baselines world_model,deeplob,linear_ar
@@ -84,8 +84,8 @@ def _accuracy_brier(pred_probs: np.ndarray, labels: np.ndarray) -> tuple[float, 
 def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:
     """Run the world-model encoder + direction head on the val sequence."""
     import yaml
-    from findrama.config_utils import DotDict, parse_args_and_update_config
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.config import DotDict, parse_args_and_update_config
+    from findrama.models.world_models import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -114,7 +114,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
         sample = wm.stright_throught_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
-            from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+            from findrama.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
         else:
@@ -223,7 +223,7 @@ def main() -> int:
     thresholds = [float(t) for t in args.thresholds.split(",") if t.strip()]
     methods = [m.strip() for m in args.baselines.split(",") if m.strip()]
     import yaml
-    from findrama.config_utils import DotDict, parse_args_and_update_config
+    from findrama.config import DotDict, parse_args_and_update_config
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])

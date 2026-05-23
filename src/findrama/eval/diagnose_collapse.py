@@ -12,7 +12,7 @@ Example
 -------
     python -m eval.diagnose_run \\
         --checkpoint saved_models/lob/LOB/1iemugot/ckpt/world_model.pth \\
-        --config src/config_files/configure_lob.yaml \\
+        --config configs/lob.yaml \\
         --data-val data/validation \\
         --norm-path saved_models/lob/normalization.json \\
         --out-dir notes/
@@ -61,8 +61,8 @@ def _device_from_arg(arg: str | None) -> torch.device:
 def _load_world_model(args: argparse.Namespace, device: torch.device):
     """Build a WorldModel from config and populate weights from checkpoint."""
     import yaml
-    from findrama.config_utils import DotDict, parse_args_and_update_config
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.config import DotDict, parse_args_and_update_config
+    from findrama.models.world_models import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -88,7 +88,7 @@ def _load_val_sequence(args: argparse.Namespace, cfg):
         apply_normalization, extract_features, load_normalization, make_aggregate_only,
         pick_longest_market,
     )
-    from findrama.lob.backtester import build_timeline
+    from findrama.backtester import build_timeline
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val)
     slug = args.market_slug or pick_longest_market(bt)
     seq = extract_features(bt.timeline, slug)
@@ -116,7 +116,7 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
         prefix_action = action
         for step in range(horizon):
             if wm.model == "Transformer":
-                from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+                from findrama.models.attention import get_subsequent_mask_with_batch_length
                 mask = get_subsequent_mask_with_batch_length(prefix_latent.shape[1], prefix_latent.device)
                 feat = wm.sequence_model(prefix_latent, prefix_action, mask)
             else:
@@ -153,7 +153,7 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
         sample = wm.stright_throught_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
-            from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+            from findrama.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
         else:
@@ -197,7 +197,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
         sample = wm.stright_throught_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
-            from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+            from findrama.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
         else:

@@ -8,7 +8,7 @@ paper reports alongside reconstruction MSE and direction accuracy.
 
 Example
 -------
-    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.eval.backtest import run_backtest, GreedyDirectionPolicy
 
     env = PolymarketLOBEnv(test_data)

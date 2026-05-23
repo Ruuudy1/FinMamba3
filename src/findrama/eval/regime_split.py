@@ -17,7 +17,7 @@ backtester, so no data-format change is required downstream.
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
-from findrama.lob.backtester.strategy import MarketLifecycle
+from findrama.backtester.strategy import MarketLifecycle
 # endregion
 
 

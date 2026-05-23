@@ -5,7 +5,7 @@ import os
 import sys
 import numpy as np
 import pytest
-from findrama.envs.lob_aggregation import (  # noqa: E402
+from findrama.envs.bar_aggregation import (  # noqa: E402
     BarConfig,
     DEFAULT_BID_VOL_INDEX,
     DEFAULT_MID_INDEX,

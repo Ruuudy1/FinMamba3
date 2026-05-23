@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 try:
-    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.envs.lob_env import PolymarketLOBEnv
 except ModuleNotFoundError as exc:
     PolymarketLOBEnv = None
     IMPORT_ERROR = exc
@@ -21,8 +21,8 @@ else:
     IMPORT_ERROR = None
 from findrama.eval.backtest import run_backtest  # noqa: E402
 from findrama.eval.run_backtest_cli import _filter_backtest_data  # noqa: E402
-from findrama.lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
-from findrama.lob.backtester.strategy import (  # noqa: E402
+from findrama.backtester.data_loader import BacktestData, TickData  # noqa: E402
+from findrama.backtester.strategy import (  # noqa: E402
     MarketLifecycle,
     OrderBookLevel,
     OrderBookSnapshot,

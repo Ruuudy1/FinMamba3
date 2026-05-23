@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 from findrama.envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
 from findrama.eval.competition_strategy import FinDramaCompetitionStrategy  # noqa: E402
-from findrama.lob.backtester.strategy import (  # noqa: E402
+from findrama.backtester.strategy import (  # noqa: E402
     MarketState,
     MarketView,
     OrderBookLevel,

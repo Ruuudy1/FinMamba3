@@ -5,5 +5,5 @@ from the FinDrama world-model stack and report direction-prediction metrics
 on the same Polymarket validation split.
 """
 # region imports
-from findrama.sub_models.lob_encoder import K_LEVELS  # noqa: F401  re-export for convenience.
+from findrama.models.lob_encoder import K_LEVELS  # noqa: F401  re-export for convenience.
 # endregion

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import torch
 import torch.nn as nn
-from findrama.sub_models.lob_auxiliary import RegimeHead
+from findrama.models.lob_heads import RegimeHead
 # endregion
 
 

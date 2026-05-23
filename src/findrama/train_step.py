@@ -7,7 +7,7 @@ from findrama.replay_buffer import ReplayBuffer
 from typing import TYPE_CHECKING
 # endregion
 if TYPE_CHECKING:
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.models.world_models import WorldModel
 _LOSS_NAMES = (
     "reconstruction_loss",
     "reward_loss",

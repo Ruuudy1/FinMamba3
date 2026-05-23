@@ -18,7 +18,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
-from findrama.lob.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
+from findrama.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
 # endregion
 logger = logging.getLogger(__name__)
 K_LEVELS = 10

@@ -4,14 +4,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import OneHotCategorical
 from einops import rearrange, reduce
-from findrama.sub_models.laprop import LaProp
+from findrama.models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-from findrama.sub_models.functions_losses import SymLogTwoHotLoss
-from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length, get_subsequent_mask
-from findrama.sub_models.transformer_model import StochasticTransformerKVCache
-from findrama.sub_models.fin_mamba import FinMambaSequenceModel
-from findrama.sub_models.regime_modulation import regime_load_balance_loss
-from findrama.sub_models.lob_auxiliary import (
+from findrama.models.losses import SymLogTwoHotLoss
+from findrama.models.attention import get_subsequent_mask_with_batch_length, get_subsequent_mask
+from findrama.models.transformer import StochasticTransformerKVCache
+from findrama.models.mamba_backbone import FinMambaSequenceModel
+from findrama.models.regime_modulation import regime_load_balance_loss
+from findrama.models.lob_heads import (
     DirectionHead,
     EpisodicMemory,
     EpisodicMemoryFuser,
@@ -20,7 +20,7 @@ from findrama.sub_models.lob_auxiliary import (
     RegimeHead,
     SettlementHead,
 )
-from findrama.sub_models.lob_encoder import (
+from findrama.models.lob_encoder import (
     LOBDecoder,
     LOBEncoder,
     LOBReconstructionLoss,
@@ -28,7 +28,7 @@ from findrama.sub_models.lob_encoder import (
     StudentTReconstructionLoss,
 )
 import findrama.agents as agents
-from findrama.tools import weight_init
+from findrama.weight_init import weight_init
 # endregion
 RMSNorm = nn.RMSNorm
 

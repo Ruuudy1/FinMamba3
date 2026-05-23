@@ -10,7 +10,7 @@ Example
 -------
     python -m eval.run_backtest_cli \\
         --world-checkpoint saved_models/lob/LOB/1iemugot/ckpt/world_model.pth \\
-        --config src/config_files/configure_lob.yaml \\
+        --config configs/lob.yaml \\
         --data-val data/validation \\
         --max-steps 5000 \\
         --regime-split none \\
@@ -82,11 +82,11 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     device = _device_from_arg(args.device)
     import yaml
-    from findrama.config_utils import DotDict, parse_args_and_update_config
-    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.config import DotDict, parse_args_and_update_config
+    from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.eval.backtest import GreedyDirectionPolicy, run_backtest
-    from findrama.lob.backtester import build_timeline
-    from findrama.sub_models.world_models import WorldModel
+    from findrama.backtester import build_timeline
+    from findrama.models.world_models import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])

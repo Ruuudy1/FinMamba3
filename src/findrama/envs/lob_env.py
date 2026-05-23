@@ -7,8 +7,8 @@ from typing import Any
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-from findrama.lob.backtester.data_loader import BacktestData, TickData
-from findrama.lob.backtester.strategy import Fill, OrderBookSnapshot, Settlement, Side, Token
+from findrama.backtester.data_loader import BacktestData, TickData
+from findrama.backtester.strategy import Fill, OrderBookSnapshot, Settlement, Side, Token
 # endregion
 ACTION_SPECS = (
     (Side.BUY, Token.YES),
