@@ -12,7 +12,7 @@ completely: the Atari and MemoryMaze paths are gone, the sequence backbone is
 Mamba-3 MIMO (Lahoti et al., ICLR 2026), and the data, features, rewards, and
 evaluation are all rebuilt for financial microstructure.
 
-## The team ✨
+## The Team
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
