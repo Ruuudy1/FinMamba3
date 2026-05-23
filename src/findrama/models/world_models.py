@@ -242,7 +242,7 @@ class WorldModel(nn.Module):
                 device=device,
             )
         else:
-            raise ValueError(f"Unknown dynamics model: {self.model}")               
+            raise ValueError(f"Unknown dynamics model: {self.model}")
         self.dist_head = DistHead(
             image_feat_dim=self.encoder.output_flatten_dim,
             hidden_state_dim=self.hidden_state_dim,
@@ -250,7 +250,7 @@ class WorldModel(nn.Module):
             class_dim=self.class_dim,
             unimix_ratio=config.Models.WorldModel.Unimix_ratio,
             dtype=config.Models.WorldModel.dtype, device=device
-        )      
+        )
         decoder_kind = getattr(config.Models.WorldModel.Decoder, 'Kind', 'mse')
         self.decoder_kind = decoder_kind
         if decoder_kind == 'mse':
@@ -494,7 +494,7 @@ class WorldModel(nn.Module):
             embedding = self.encoder(current_obs)
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
-            flattened_sample = self.flatten_sample(sample)            
+            flattened_sample = self.flatten_sample(sample)
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask(latent)
                 dist_feat = self.sequence_model(latent, action, temporal_mask)
@@ -508,8 +508,8 @@ class WorldModel(nn.Module):
             post_stat = self._obs_stat_layer(post_feat)
             post_logits = post_stat.reshape(list(post_stat.shape[:-1]) + [self.categorical_dim, self.categorical_dim])
             post_sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
-            post_flattened_sample = self.flatten_sample(post_sample)            
-        return post_flattened_sample, post_feat    
+            post_flattened_sample = self.flatten_sample(post_sample)
+        return post_flattened_sample, post_feat
     # Called only when using the Transformer backbone (requires KV cache).
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):

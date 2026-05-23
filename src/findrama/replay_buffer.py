@@ -92,7 +92,7 @@ class ReplayBuffer():
                 if not imagine:
                     self.sampled_counter[start_indexes] += 1
                 else:
-                    self.imagined_counter[start_indexes] += 1 
+                    self.imagined_counter[start_indexes] += 1
                 indexes = start_indexes[:, np.newaxis] + np.arange(batch_length)
                 obs_seq = self.obs_buffer[indexes]
                 action_seq = self.action_buffer[indexes]

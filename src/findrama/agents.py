@@ -139,8 +139,8 @@ class ActorCriticAgent(nn.Module):
             self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon)
         elif conf.Models.Agent.AC.Optimiser == 'Adam':
             self.optimizer = torch.optim.Adam(
-                self.parameters(), 
-                lr=conf.Models.Agent.AC.Adam.LearningRate, 
+                self.parameters(),
+                lr=conf.Models.Agent.AC.Adam.LearningRate,
                 eps=conf.Models.Agent.AC.Adam.Epsilon
             )
         else:
@@ -240,7 +240,7 @@ class PPOAgent(nn.Module):
         feat_dim=conf.Models.WorldModel.CategoricalDim*conf.Models.WorldModel.ClassDim+conf.Models.WorldModel.HiddenStateDim
         num_layers=conf.Models.Agent.PPO.NumLayers
         actor_hidden_dim=conf.Models.Agent.PPO.Actor.HiddenUnits
-        critic_hidden_dim=conf.Models.Agent.PPO.Critic.HiddenUnits      
+        critic_hidden_dim=conf.Models.Agent.PPO.Critic.HiddenUnits
         self.gamma = conf.Models.Agent.PPO.Gamma
         self.lambd = conf.Models.Agent.PPO.Lambda
         self.entropy_coef = conf.Models.Agent.PPO.EntropyCoef
@@ -296,8 +296,8 @@ class PPOAgent(nn.Module):
             self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.PPO.Laprop.LearningRate, eps=conf.Models.Agent.PPO.Laprop.Epsilon)
         elif conf.Models.Agent.PPO.Optimiser == 'Adam':
             self.optimizer = torch.optim.Adam(
-                self.parameters(), 
-                lr=conf.Models.Agent.PPO.Adam.LearningRate, 
+                self.parameters(),
+                lr=conf.Models.Agent.PPO.Adam.LearningRate,
                 eps=conf.Models.Agent.PPO.Adam.Epsilon
             )
         else:
@@ -325,7 +325,7 @@ class PPOAgent(nn.Module):
         return logits
     def sample_as_env_action(self, latent, greedy=False):
             action, _ = self.sample(latent, greedy)
-            return action.detach().cpu().squeeze(-1).numpy()    
+            return action.detach().cpu().squeeze(-1).numpy()
     def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return):
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
         ratio = torch.exp(logp - logp_old)
@@ -337,7 +337,7 @@ class PPOAgent(nn.Module):
         slow_critic_loss = self.symlog_twohot_loss(raw_values, slow_return.detach())
         critic_loss = self.symlog_twohot_loss(raw_values, rtgs.detach())
         entropy_loss = entropy.mean()
-        return actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx 
+        return actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx
     def calc_gae_and_reward_to_go(self, rewards, values, termination):
         # Invert termination to have 0 if the episode ended and 1 otherwise.
         inv_termination = (termination * -1) + 1
@@ -404,10 +404,10 @@ class PPOAgent(nn.Module):
                     end = start + self.minibatch_size
                     minibatch_inds = inds[start:end]
                     actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx = self.comput_loss(
-                        flatten_latent[minibatch_inds], 
-                        flatten_action[minibatch_inds], 
-                        flatten_old_logp[minibatch_inds], 
-                        flatten_advantages[minibatch_inds], 
+                        flatten_latent[minibatch_inds],
+                        flatten_action[minibatch_inds],
+                        flatten_old_logp[minibatch_inds],
+                        flatten_advantages[minibatch_inds],
                         flatten_returns[minibatch_inds],
                         flatten_slow_return[minibatch_inds]
                     )

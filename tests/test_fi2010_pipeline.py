@@ -76,12 +76,10 @@ def _install_fake_mamba() -> None:
     for name in list(sys.modules):
         if name == "mamba_ssm" or name.startswith("mamba_ssm."):
             del sys.modules[name]
-
     pkg = types.ModuleType("mamba_ssm")
     pkg.__path__ = []
     mods = types.ModuleType("mamba_ssm.modules")
     mods.__path__ = []
-
     class _FakeBlock(torch.nn.Module):
         def __init__(self, d_model, **kwargs):
             super().__init__()
@@ -89,7 +87,6 @@ def _install_fake_mamba() -> None:
 
         def forward(self, x, **kwargs):
             return self.proj(x)
-
     for sub in ("mamba3", "mamba2", "mamba_simple"):
         m = types.ModuleType(f"mamba_ssm.modules.{sub}")
         m.Mamba3 = _FakeBlock
@@ -139,12 +136,10 @@ def split_dir(tmp_path):
 def _fi2010_world_model_config():
     """Minimal WorldModel config for FI-2010 (CPU, fake Mamba, 46-dim obs)."""
     from types import SimpleNamespace
-
     def _ns(d):
         if isinstance(d, dict):
             return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
         return d
-
     return _ns({
         "BasicSettings": {
             "ObsMode": "features",
@@ -752,18 +747,14 @@ def test_world_model_fi2010_studentt_decoder_loss_finite():
 
 def test_e2e_loader_to_normalized_flat(split_dir, tmp_path):
     from findrama.envs.lob_features import save_normalization, load_normalization
-
     bundle = load_fi2010_split(split_dir, split="train", horizon=10)
     seq = bundle.sequence
-
     stats = fit_normalization(seq, clip_value=8.0)
     norm_path = tmp_path / "norm.json"
     save_normalization(stats, norm_path)
     stats_reloaded = load_normalization(norm_path)
-
     seq_norm = apply_normalization(seq, stats_reloaded)
     flat = seq_norm.to_flat()
-
     assert flat.shape == (_N_EVENTS, FI2010_FEATURE_DIM)
     assert np.isfinite(flat).all()
     assert float(np.abs(flat).max()) <= 8.0 + 1e-4
@@ -771,14 +762,11 @@ def test_e2e_loader_to_normalized_flat(split_dir, tmp_path):
 
 def test_e2e_normalization_stats_survive_serialization(split_dir, tmp_path):
     from findrama.envs.lob_features import save_normalization, load_normalization
-
     bundle = load_fi2010_split(split_dir, split="train", horizon=10)
     stats = fit_normalization(bundle.sequence)
-
     norm_path = tmp_path / "norm.json"
     save_normalization(stats, norm_path)
     stats2 = load_normalization(norm_path)
-
     np.testing.assert_allclose(stats.per_level_mean, stats2.per_level_mean, rtol=1e-6)
     np.testing.assert_allclose(stats.per_level_std, stats2.per_level_std, rtol=1e-6)
     np.testing.assert_allclose(stats.per_tick_mean, stats2.per_tick_mean, rtol=1e-6)

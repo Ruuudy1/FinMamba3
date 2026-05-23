@@ -75,7 +75,7 @@ class LaProp(Optimizer):
                         mean = exp_mean_avg_beta2 ** 2
                         denom = denom - mean
                 if amsgrad:
-                    if not (centered and state['step'] <= self.steps_before_using_centered): 
+                    if not (centered and state['step'] <= self.steps_before_using_centered):
                         # Maintains the maximum of all (centered) 2nd moment running avg. till now.
                         torch.max(max_exp_avg_sq, denom, out=max_exp_avg_sq)
                         # Use the max for normalizing running avg. of gradient.

@@ -374,7 +374,6 @@ def main() -> None:
     if pre_args.intervals:
         intervals = [i.strip() for i in pre_args.intervals.split(",")]
         logger.info(f"filtering markets to intervals: {intervals}")
-
     if dataset_kind == "polymarket":
         include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
         logger.info(f"building train features from {pre_args.data_train}")
@@ -502,16 +501,13 @@ def main() -> None:
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
     imagine_every = save_every
-
     # Early stopping config
     early_stopping_patience = getattr(config.JointTrainAgent, 'EarlyStoppingPatience', 0)
     save_best_only = getattr(config.JointTrainAgent, 'SaveBestOnly', False)
-
     # Tracking variables
     best_val_loss = float('inf')
     patience_counter = 0
     best_step = 0
-
     pbar = tqdm(range(max_steps), desc="pretrain", miniters=50, mininterval=0)
     for step in pbar:
         train_world_model_step(
