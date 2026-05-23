@@ -57,8 +57,10 @@ class ReplayBuffer():
                 probabilities = torch.softmax(score, dim=0)
                 start_indexes = torch.multinomial(probabilities, batch_size, replacement=replacement)
             else:
-                logits = -counts / self.tau
-                probabilities = torch.exp(logits) / torch.sum(torch.exp(logits))
+                # Numerically stable softmax over visit counts. The manual exp/sum form
+                # underflows to all-zeros (then NaN) once counts grow large on big batches,
+                # which crashes multinomial mid-training with a device-side assert.
+                probabilities = torch.softmax(-counts / self.tau, dim=0)
                 start_indexes = torch.multinomial(probabilities, batch_size, replacement=replacement)
             if not imagine:
                 self.sampled_counter[start_indexes] += 1
