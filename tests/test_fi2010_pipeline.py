@@ -368,7 +368,7 @@ def test_load_returns_fi2010sequence_type(split_dir):
 
 def test_load_invalid_split_raises(split_dir):
     with pytest.raises(ValueError, match="split"):
-        load_fi2010_split(split_dir, split="test")
+        load_fi2010_split(split_dir, split="bogus")
 
 
 def test_load_invalid_horizon_raises(split_dir):
