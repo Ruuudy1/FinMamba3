@@ -8,7 +8,7 @@ BasicSettings:
   Use_amp: True
   NormClip: 8.0
   Use_cg: False           # disables CUDA-graph caching in the Mamba decoding path
-  Compile: True           # torch.compile fuses the encoder/decoder; raises GPU utilization (Mamba kernel excluded)
+  Compile: False          # The batch-64 config is fast without it; torch.compile only adds startup here.
   SavePath: None
 
 Evaluate:
@@ -25,9 +25,9 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
-  BatchSize: 512       # Sized to fill the L4/A100 VRAM; the sampler falls back to with-replacement if a market is short.
-  AccumSteps: 1        # No accumulation needed with the big real batch; raises GPU utilization directly.
-  BatchLength: 64
+  BatchSize: 64        # Reverted from 512: the big batch converged worse (val 390 vs 368) and ran ~5x slower.
+  AccumSteps: 2        # Effective batch 128; the known-good config that reached val 368 in ~38 min.
+  BatchLength: 32
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
@@ -62,7 +62,7 @@ Models:
     Optimiser: Laprop
     LatentDiscreteType: naive
     Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
-    Warmup_steps: 1000     # Longer warmup to stabilize the higher LR under the larger 512 batch.
+    Warmup_steps: 500
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
@@ -73,9 +73,9 @@ Models:
     RepresentationLossWeight: 0.1   # Beta on the representation-side KL term in the split KL.
     FreeBits: 1.0                   # Per-step KL floor in nats; KL is clipped to zero below this.
     Adam:
-      LearningRate: 2.0e-4   # ~2x (sqrt-scaling) for the 4x larger 512 batch.
+      LearningRate: 1.0e-4
     Laprop:
-      LearningRate: 8.0e-5   # Active optimizer; ~2x sqrt-scaling for the 512 batch (3x diverged: best 415 > 368).
+      LearningRate: 4.0e-5   # Reverted: the proven LR for the batch-64 config (reached val 368).
       Epsilon: 1.0e-20
     Encoder:
       Type: lob

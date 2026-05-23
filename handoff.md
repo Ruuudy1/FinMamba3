@@ -93,6 +93,14 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
   and the tvm_ffi "Field duplicates ancestor" warnings (harmless tilelang/tvm import noise;
   re-comment the tilelang install if staying on SISO to drop them and save install time).
 
+- Run 3 (crash fixed, LR 8e-5): completed all 20000 steps in ~3h09m, best val **390** @ 19k.
+  **Key finding / pivot:** 390 is worse than Run 1's **368** (batch 64) AND ~5x slower wall
+  clock. For this small model + single-market dataset, 100% GPU util was a vanity metric: the
+  large batch reduced the gradient noise that was helping and wasted hours. **Reverted** batch
+  64 / AccumSteps 2 / len 32 / LR 4e-5 / Compile off (the proven config). Kept the crash fix,
+  LogEvery=50, tqdm throttle, and warning fixes. Lesson: optimize time-to-target-val-loss, not
+  utilization %.
+
 ## How to run (Colab)
 - Open the notebook from this branch and Run All (baseline, high-util defaults already set).
 - Treatment: add `'--Models.WorldModel.RegimeFiLM.Enabled', 'true'` to the notebook's `run_train`
