@@ -73,6 +73,26 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
    `Mamba3.is_mimo true` and measure; on L4 it may still fall back (tuned for H100).
 5. Optional: fix the pre-existing FI-2010 split-validation test.
 
+## Iteration log (Colab L4)
+- Run 1 (pre-tuning): batch 64, eff 128, LR 4e-5, len 32 -> GPU util ~38%, mem 1.8/23 GB,
+  best val 368, early-stopped 18k. Diagnosis: GPU was starved, not I/O- or kernel-bound.
+- Util fix: batch 512, AccumSteps 1, len 64, Compile on, log every 50 -> Run 2 hit GPU util
+  100%, mem 13/22 GB. (Compute util 100% with memory headroom is the goal; 13/22 GB is fine,
+  could push batch higher but there is no need once compute-bound.)
+- Run 2 CRASHED at step 7189 with a CUDA device-side assert ("probability tensor contains
+  inf/nan"). Root cause: the replay buffer's non-imagine sampler used an unstable manual
+  softmax over visit counts; on the big batch the counts grow large, exp underflows to
+  all-zeros -> NaN probs -> torch.multinomial assert (surfaced async in the encoder, a red
+  herring). Fixed with a numerically stable torch.softmax. The batch-64 run never hit it
+  because counts grew 8x slower and it early-stopped first.
+- LR re-tuned 3x -> 2x (sqrt-scaling, Laprop 8e-5). Run 2 best 415 > Run 1 best 368 indicated
+  the 3x bump was too hot for the 4x batch (it also crashed before converging).
+- Cosmetic: tqdm throttled to every 50 steps (miniters); datetime.utcnow -> now(UTC);
+  TransformerEncoder enable_nested_tensor=False to silence the startup warning.
+- Ignore: the W&B "Weave" suggestion (generic wandb promo, irrelevant to non-LLM training)
+  and the tvm_ffi "Field duplicates ancestor" warnings (harmless tilelang/tvm import noise;
+  re-comment the tilelang install if staying on SISO to drop them and save install time).
+
 ## How to run (Colab)
 - Open the notebook from this branch and Run All (baseline, high-util defaults already set).
 - Treatment: add `'--Models.WorldModel.RegimeFiLM.Enabled', 'true'` to the notebook's `run_train`

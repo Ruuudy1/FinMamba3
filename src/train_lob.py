@@ -512,7 +512,7 @@ def main() -> None:
     patience_counter = 0
     best_step = 0
 
-    pbar = tqdm(range(max_steps), desc="pretrain")
+    pbar = tqdm(range(max_steps), desc="pretrain", miniters=50, mininterval=0)
     for step in pbar:
         train_world_model_step(
             replay_buffer=replay_buffer,

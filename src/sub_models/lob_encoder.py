@@ -70,7 +70,8 @@ class LOBEncoder(nn.Module):
             norm_first=True,
             **factory,
         )
-        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers)
+        # norm_first makes the nested-tensor fast path a no-op anyway; disable it to silence the startup warning.
+        self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.norm = RMSNorm(d_model, **factory)
         self.out_proj = nn.Linear(d_model, output_flatten_dim, **factory)
     def _split_input(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
