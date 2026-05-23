@@ -56,7 +56,7 @@ def main() -> int:
     src_dir = Path(__file__).resolve().parents[2]
     from findrama.config import DotDict
     from findrama.replay_buffer import ReplayBuffer
-    from findrama.agents import ActorCriticAgent
+    from findrama.rl.actor_critic import ActorCriticAgent
     from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.backtester.data_loader import build_timeline
     from findrama.models.world_model import WorldModel

@@ -28,7 +28,7 @@ from findrama.models.lob_encoder import (
     StudentTLOBDecoder,
     StudentTReconstructionLoss,
 )
-import findrama.agents as agents
+from findrama.rl.actor_critic import ActorCriticAgent
 from findrama.weight_init import weight_init
 from findrama.models.activations import ACTIVATION_BY_NAME
 # endregion
@@ -478,7 +478,7 @@ class WorldModel(nn.Module):
             self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
-    def _imagine_data_full_prefix(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
+    def _imagine_data_full_prefix(self, agent: ActorCriticAgent, sample_obs, sample_action,
                                   imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         context_latent = self.encode_obs(sample_obs)
@@ -526,7 +526,7 @@ class WorldModel(nn.Module):
         context_out = torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1)
         imagined_out = torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1)
         return imagined_out, self.action_buffer, old_logits_tensor, context_out, self.reward_hat_buffer, self.termination_hat_buffer
-    def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
+    def imagine_data(self, agent: ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         if self.model != 'Transformer':
             return self._imagine_data_full_prefix(
