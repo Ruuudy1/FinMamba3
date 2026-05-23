@@ -83,7 +83,7 @@ def _load_world_model(args: argparse.Namespace, device: torch.device):
 
 
 def _load_val_sequence(args: argparse.Namespace, cfg):
-    """Build the validation LOBSequence using the same path train_lob takes."""
+    """Build the validation LOBSequence using the same path train takes."""
     from findrama.envs.lob_features import (
         apply_normalization, extract_features, load_normalization, make_aggregate_only,
         pick_longest_market,
@@ -100,7 +100,7 @@ def _load_val_sequence(args: argparse.Namespace, cfg):
 
 
 def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
-    """Replicates train_lob._imagine_and_log decoding without wandb side-effects."""
+    """Replicates train._imagine_and_log decoding without wandb side-effects."""
     device = wm.device
     flat = val_seq.to_flat()
     T = flat.shape[0]

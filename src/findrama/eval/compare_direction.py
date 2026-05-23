@@ -228,7 +228,7 @@ def main() -> int:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-    from findrama.train_lob import build_sequences
+    from findrama.sequence_builder import build_sequences
     norm_clip = cfg.BasicSettings.get("NormClip", 8.0)
     aggregate_only = cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
     train_seq, slug, _stats = build_sequences(

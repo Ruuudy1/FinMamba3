@@ -23,91 +23,19 @@ warnings.filterwarnings("ignore")
 from findrama.envs.lob_features import (
     FLAT_FEATURE_NAMES,
     FEATURE_DIM_FLAT,
-    F_LEVEL,
-    K_LEVELS,
     LOBSequence,
-    apply_normalization,
     denormalize_flat,
-    extract_features,
-    fit_normalization,
-    load_normalization,
     make_aggregate_only,
     normalized_feature_diagnostics,
-    pick_longest_market,
-    save_normalization,
 )
-from findrama.envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010, load_fi2010_split
+from findrama.envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010
 from findrama.config import DotDict, parse_args_and_update_config
-from findrama.backtester import build_timeline
 from findrama.replay_buffer import ReplayBuffer
 from findrama.train_step import train_world_model_step
+from findrama.sequence_builder import build_fi2010_sequences, build_sequences, populate_buffer
 # endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
-
-
-def _populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
-    flat = seq.to_flat()
-    T = flat.shape[0]
-    for t in range(T):
-        buffer.append(
-            obs=flat[t],
-            action=0,
-            reward=0.0,
-            termination=0.0,
-        )
-    logger.info(f"replay buffer: loaded {T} ticks for market {seq.market_slug}")
-
-
-def _build_sequences(
-    data_dir: Path,
-    market_slug: str | None,
-    hours: float,
-    norm_path: Path,
-    fit_stats: bool,
-    norm_clip: float,
-    aggregate_only: bool,
-    intervals: list[str] | None = None,
-    include_binary_features: bool = False,
-) -> tuple[LOBSequence, str, object]:
-    bt = build_timeline(data_dir=data_dir, hours=hours, intervals=intervals)
-    slug = market_slug or pick_longest_market(bt)
-    settlement = bt.settlements.get(slug)
-    yes_outcome = _settlement_yes_outcome(settlement)
-    try:
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
-    except RuntimeError:
-        # Requested slug has no usable ticks in this split; fall back to the
-        # longest market available in this split.
-        slug = pick_longest_market(bt)
-        settlement = bt.settlements.get(slug)
-        yes_outcome = _settlement_yes_outcome(settlement)
-        logger.warning(
-            f"Market {market_slug!r} has no usable ticks in {data_dir}; "
-            f"falling back to {slug!r}"
-        )
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
-    if fit_stats:
-        stats = fit_normalization(seq, clip_value=norm_clip)
-        save_normalization(stats, norm_path)
-        logger.info(f"normalization fit on {slug}, saved to {norm_path}")
-    else:
-        stats = load_normalization(norm_path)
-    seq_norm = apply_normalization(seq, stats)
-    if aggregate_only:
-        seq_norm = make_aggregate_only(seq_norm)
-    return seq_norm, slug, stats
-
-
-def _settlement_yes_outcome(settlement) -> float | None:
-    if settlement is None:
-        return None
-    outcome = settlement.outcome.value
-    if outcome == "YES":
-        return 1.0
-    if outcome == "NO":
-        return 0.0
-    return None
 
 
 def imagine_rollout(
@@ -286,34 +214,9 @@ def _validation_metrics(
     return metrics, top_features
 
 
-def _build_fi2010_sequences(
-    data_dir: Path,
-    split: str,
-    horizon: int,
-    norm_path: Path,
-    fit_stats: bool,
-    norm_clip: float,
-    max_events: int | None = None,
-) -> tuple[LOBSequence, str, object]:
-    """FI-2010 mirror of _build_sequences. Returns (sequence, slug, stats).
-
-    Fits z-score normalization on the training split and reuses it for validation,
-    matching the Polymarket flow. Works for both DecPre and ZScore source files.
-    """
-    bundle = load_fi2010_split(data_dir, split=split, horizon=horizon, max_events=max_events)
-    seq = bundle.sequence
-    if fit_stats:
-        stats = fit_normalization(seq, clip_value=norm_clip)
-        save_normalization(stats, norm_path)
-        logger.info(f"FI-2010 normalization fit on {seq.market_slug}, saved to {norm_path}")
-    else:
-        stats = load_normalization(norm_path)
-    seq_norm = apply_normalization(seq, stats)
-    return seq_norm, seq.market_slug, stats
 # Public aliases for use by external eval scripts. The underscored names remain
 # the implementation; the public names mirror the API the eval CLIs import.
 validate = _validation_metrics
-build_sequences = _build_sequences
 
 
 def _gpu_monitor(interval: int = 30) -> None:
@@ -377,7 +280,7 @@ def main() -> None:
     if dataset_kind == "polymarket":
         include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
         logger.info(f"building train features from {pre_args.data_train}")
-        train_seq, slug, stats = _build_sequences(
+        train_seq, slug, stats = build_sequences(
             pre_args.data_train,
             pre_args.market_slug,
             pre_args.hours_train,
@@ -389,7 +292,7 @@ def main() -> None:
             include_binary_features=include_binary_features,
         )
         logger.info(f"building val features from {pre_args.data_val}")
-        val_seq, _, _ = _build_sequences(
+        val_seq, _, _ = build_sequences(
             pre_args.data_val,
             slug,
             pre_args.hours_val,
@@ -406,13 +309,13 @@ def main() -> None:
         max_events_cfg = fi2010_cfg.get("MaxEvents", None) if fi2010_cfg is not None else None
         max_events = int(max_events_cfg) if max_events_cfg else None
         logger.info(f"loading FI-2010 train split from {pre_args.data_train}")
-        train_seq, slug, stats = _build_fi2010_sequences(
+        train_seq, slug, stats = build_fi2010_sequences(
             pre_args.data_train, split="train", horizon=horizon,
             norm_path=pre_args.norm_path, fit_stats=True,
             norm_clip=norm_clip, max_events=max_events,
         )
         logger.info(f"loading FI-2010 validation split from {pre_args.data_val}")
-        val_seq, _, _ = _build_fi2010_sequences(
+        val_seq, _, _ = build_fi2010_sequences(
             pre_args.data_val, split="validation", horizon=horizon,
             norm_path=pre_args.norm_path, fit_stats=False,
             norm_clip=norm_clip, max_events=max_events,
@@ -486,7 +389,7 @@ def main() -> None:
         except Exception as exc:
             logger.warning(f"torch.compile unavailable, running eager: {exc}")
     replay_buffer = ReplayBuffer(config, device=device)
-    _populate_buffer(replay_buffer, train_seq)
+    populate_buffer(replay_buffer, train_seq)
     wlogger = make_logger(
         config=config,
         project=config.Wandb.Init.Project,

@@ -60,7 +60,7 @@ def main() -> int:
     from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.backtester.data_loader import build_timeline
     from findrama.models.world_model import WorldModel
-    from findrama.train_lob import _build_sequences, _populate_buffer
+    from findrama.sequence_builder import build_sequences, populate_buffer
     with open(args.config) as f:
         config = DotDict(yaml.safe_load(f))
     device = torch.device(args.device)
@@ -83,13 +83,13 @@ def main() -> int:
     # Imagination needs real LOB context to encode, so populate a replay buffer from the same data.
     norm_path = src_dir.parent / "saved_models" / "lob" / "normalization.json"
     include_binary = config.Models.WorldModel.Encoder.BinaryMarketFeatures
-    train_seq, _, _ = _build_sequences(
+    train_seq, _, _ = build_sequences(
         Path(args.data_train), None, args.hours_train, norm_path,
         fit_stats=False, norm_clip=config.BasicSettings.NormClip,
         aggregate_only=False, include_binary_features=include_binary,
     )
     replay_buffer = ReplayBuffer(config, device=device)
-    _populate_buffer(replay_buffer, train_seq)
+    populate_buffer(replay_buffer, train_seq)
     imagine_batch_size = config.JointTrainAgent.ImagineBatchSize
     context_len = config.JointTrainAgent.ImagineContextLength
     imagine_len = config.JointTrainAgent.ImagineBatchLength

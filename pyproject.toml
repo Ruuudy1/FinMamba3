@@ -26,7 +26,7 @@ dependencies = [
 # omitted: they are provided by the environment (Colab) and the prebuilt WHEELS_REPO flow.
 
 [project.scripts]
-findrama-train = "findrama.train_lob:main"
+findrama-train = "findrama.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
