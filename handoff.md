@@ -3,6 +3,41 @@
 Living log of what changed, what was tried, what was pivoted, and what is left.
 For the architecture/design rationale see `research_notes.md`.
 
+## 2026-05-23 - Code-quality rework (branch `code-quality-rework`)
+Full pass to the PEP8-based style rules + SOLID/YAGNI principles, in six verified
+stages (CPU suite held at 89 passed / 4 CUDA-skipped / 1 pre-existing FI-2010 fail
+throughout):
+1. **Packaging.** Everything moved under `src/findrama/`; added `pyproject.toml`
+   (editable install). All intra-repo imports are absolute `findrama.*`; the ~17
+   `sys.path.insert` bootstraps are gone. Train with `python -m findrama.train`
+   (was `python src/train_lob.py`); the notebook now does `pip install -e .`.
+2. **Renames.** `sub_models/`->`models/`, `lob/backtester/`->`backtester/`,
+   `src/config_files/configure_*.yaml`->`configs/*.yaml`; modules renamed for
+   clarity (`fin_mamba`->`mamba_backbone`, `lob_auxiliary`->`lob_heads`,
+   `tools`->`weight_init`, `utils`->`training_utils`, `utils_hf`->`hf_hub`,
+   `config_utils`->`config`, `training_steps`->`train_step`,
+   `polymarket_lob_env`->`lob_env`, `lob_aggregation`->`bar_aggregation`,
+   `diagnose_run`->`diagnose_collapse`, `phase_b_smoke`->`imagination_smoke`).
+3. **Style.** Region-imported, no trailing whitespace, no blank lines in bodies.
+4. **Rule-8 purge.** ~70 `getattr(cfg,'X',d)`->`cfg.get('X',d)`; weight-init
+   isinstance/hasattr -> type registry + `bias is not None`; `getattr(nn,name)`
+   -> `ACTIVATION_BY_NAME`; wandb try-import -> `WandbLogger`/`NoOpLogger` chosen
+   by a `UseWandb` flag; orjson try-import dropped; sets -> dict-keyset/list.
+   Carve-outs kept (documented in commits): `mamba_backbone.py` mamba_ssm/triton
+   import machinery (GPU-only, fail-fast); `config.py` isinstance for the
+   auto-wrapping DotDict + argparse type dispatch; boundary I/O try/except.
+5. **God-module splits.** `world_models.py`->`world_model.py` + `world_model_heads.py`
+   (KL loss to `losses.py`, dead `imagine_data2` removed); `train_lob.py`->`train.py`
+   + `sequence_builder.py`; `agents.py`->`rl/{actor_critic,ppo,returns,normalization}.py`.
+   Fixed typos `stright_throught_gradient`->`straight_through_gradient`,
+   `comput_loss`->`compute_loss`.
+6. **Docs/notebook** reconciled to the new paths and the HF 3-repo split.
+
+**Flagged for the owner (rule-8 "ask, don't guess"):** the `lob_env` reward kind
+`settlement_calibrated` reads `Settlement.payoff`/`position_value`, which the
+dataclass does not define (dead placeholder). `PPOAgent` is unused, and its dead
+`calc_gae_and_reward_to_go` references `self.lamb` (should be `self.lambd`).
+
 ## Branch & remotes
 - Work branch: `regime-film-binary-features` on `fork` = `https://github.com/Ruuudy1/FinDrama`.
 - `origin` is the upstream `realwenlongwang/Drama` (do not push there).
@@ -16,13 +51,13 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
 ## Changes by workstream
 | # | Workstream | Status | Key files |
 |---|-----------|--------|-----------|
-| A | Binary-market features (boundary dist/scaled depth, logit-mid velocity/accel, Amihud, variance ratio); 94->100 dims; width-aware normalization; gated by `Encoder.BinaryMarketFeatures` | Done, CPU-tested | `src/envs/lob_features.py`, `tests/test_lob_features.py`, `configure_lob.yaml`, `src/train_lob.py` |
-| B | Regime inference + FiLM modulator (zero-init hypernetwork, identity at init); wired into the Mamba block loop | Done, CPU-tested | `src/sub_models/regime_modulation.py`, `src/sub_models/fin_mamba.py`, `tests/test_regime_modulation.py` |
-| C | Load-balance regularizer + 12-loss contract + `RegimeFiLM` config | Done, CPU-tested | `src/sub_models/world_models.py`, `src/training_steps.py`, `configure_lob.yaml` |
-| Util | GPU-utilization fixes: batch 64->512, AccumSteps 2->1, BatchLength 32->64, Compile on, log every 50 steps, sampler with-replacement fallback, non-fatal tilelang | Done (config), GPU-validate | `configure_lob.yaml`, `src/training_steps.py`, `src/replay_buffer.py`, notebook |
-| LR | LR bumped ~3x for the 4x effective batch (Laprop 4e-5->1.2e-4, Adam 1e-4->3e-4, warmup 500->1000) | Done | `configure_lob.yaml` |
-| E | Competition adapter `FinDramaCompetitionStrategy` (reuses `extract_features` over a rolling `TickData` window = zero train/serve skew) | Done; feature path CPU-tested, model forward GPU-pending | `src/eval/competition_strategy.py`, `tests/test_competition_strategy.py` |
-| F | Phase B imagination trainer (rewrote the broken `phase_b_smoke.py`) | Scaffold; GPU + prereqs pending | `src/eval/phase_b_smoke.py` |
+| A | Binary-market features (boundary dist/scaled depth, logit-mid velocity/accel, Amihud, variance ratio); 94->100 dims; width-aware normalization; gated by `Encoder.BinaryMarketFeatures` | Done, CPU-tested | `src/findrama/envs/lob_features.py`, `tests/test_lob_features.py`, `lob.yaml`, `src/findrama/train.py` |
+| B | Regime inference + FiLM modulator (zero-init hypernetwork, identity at init); wired into the Mamba block loop | Done, CPU-tested | `src/findrama/models/regime_modulation.py`, `src/findrama/models/mamba_backbone.py`, `tests/test_regime_modulation.py` |
+| C | Load-balance regularizer + 12-loss contract + `RegimeFiLM` config | Done, CPU-tested | `src/findrama/models/world_model.py`, `src/findrama/train_step.py`, `lob.yaml` |
+| Util | GPU-utilization fixes: batch 64->512, AccumSteps 2->1, BatchLength 32->64, Compile on, log every 50 steps, sampler with-replacement fallback, non-fatal tilelang | Done (config), GPU-validate | `lob.yaml`, `src/findrama/train_step.py`, `src/findrama/replay_buffer.py`, notebook |
+| LR | LR bumped ~3x for the 4x effective batch (Laprop 4e-5->1.2e-4, Adam 1e-4->3e-4, warmup 500->1000) | Done | `lob.yaml` |
+| E | Competition adapter `FinDramaCompetitionStrategy` (reuses `extract_features` over a rolling `TickData` window = zero train/serve skew) | Done; feature path CPU-tested, model forward GPU-pending | `src/findrama/eval/competition_strategy.py`, `tests/test_competition_strategy.py` |
+| F | Phase B imagination trainer (rewrote the broken `imagination_smoke.py`) | Scaffold; GPU + prereqs pending | `src/findrama/eval/imagination_smoke.py` |
 | G | Architecture/design write-up | Done | `research_notes.md` |
 | D | Baseline-vs-treatment + distribution-shift eval | Pending (Colab GPU) | commands in `research_notes.md` |
 
@@ -36,7 +71,7 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
   boundary distance) live in the obs, so the regime head reading the stem summary reads them.
 - **Features appended, not interleaved**, to keep tick indices, `midprice_index`, decoder size
   indices, and bar sum-indices valid; gated so FI-2010's separate pipeline is untouched.
-- **Left `lob_aggregation.py` alone (YAGNI):** `DEFAULT_SUM_INDICES` is only referenced by tests;
+- **Left `bar_aggregation.py` alone (YAGNI):** `DEFAULT_SUM_INDICES` is only referenced by tests;
   bar aggregation is not in the live training path.
 - **Low GPU util was starvation, not I/O or kernel speed** (only 1.8/23 GB used). Fix = bigger
   batch + drop accumulation + log less often (removed a per-step GPU->CPU sync) + torch.compile.
@@ -45,9 +80,9 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
   while the world model consumes 100-dim LOB features (schema mismatch), (2) Phase A has no reward
   signal (reward=0), (3) Phase A builds the WM with `action_dim=1`. Pivoted to the **imagination
   path** (DreamerV3 style), which runs entirely in the WM latent space and avoids the obs mismatch.
-  The old `phase_b_smoke.py` was broken (stale agent/checkpoint signatures, wrong obs); it was
+  The old `imagination_smoke.py` was broken (stale agent/checkpoint signatures, wrong obs); it was
   rewritten to the imagination path.
-- **Competition adapter realization:** FinDrama's `src/lob/backtester/strategy.py` *is* the
+- **Competition adapter realization:** FinDrama's `src/findrama/backtester/strategy.py` *is* the
   competition `BaseStrategy` interface, so the adapter targets it directly and reuses the training
   feature pipeline for zero skew.
 
@@ -104,6 +139,6 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
 ## How to run (Colab)
 - Open the notebook from this branch and Run All (baseline, high-util defaults already set).
 - Treatment: add `'--Models.WorldModel.RegimeFiLM.Enabled', 'true'` to the notebook's `run_train`
-  extra args, or set it in `configure_lob.yaml`.
+  extra args, or set it in `lob.yaml`.
 - Phase B (after a Phase-A checkpoint exists, GPU):
-  `python -m eval.phase_b_smoke --checkpoint <ckpt>.pth --config src/config_files/configure_lob.yaml --data-train data/train --steps 200`
+  `python -m findrama.eval.imagination_smoke --checkpoint <ckpt>.pth --config configs/lob.yaml --data-train data/train --steps 200`

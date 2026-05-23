@@ -56,8 +56,8 @@ The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
 downloads the chosen dataset, and runs:
 
 ```bash
-python -B src/train_lob.py \
-    --config src/config_files/configure_fi2010.yaml \
+python -m findrama.train \
+    --config configs/fi2010.yaml \
     --dataset fi2010 \
     --JointTrainAgent.SampleMaxSteps 20000
 ```
@@ -68,16 +68,16 @@ Checkpoints land under:
 saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
-The final cells upload checkpoints, stdout logs, and wandb summaries to the
-HuggingFace dataset repo at `sj-hryi/FinDrama` under `checkpoints/lob/` and
-`logs/<run_date>/`.
+The final cells upload checkpoints to the model repo
+`sj-hryi/FinDrama-checkpoints` under `checkpoints/lob/`, and stdout logs plus
+wandb summaries to the dataset repo `sj-hryi/FinDrama` under `logs/<run_date>/`.
 
 ## Wheel Cache
 
-Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached on HuggingFace
-so later runtimes skip the source build:
+Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached in the dedicated
+wheels dataset repo so later runtimes skip the source build:
 
-https://huggingface.co/datasets/sj-hryi/FinDrama/tree/main
+https://huggingface.co/datasets/sj-hryi/FinDrama-wheels/tree/main
 
 Wheels are keyed by Python version, PyTorch version, CUDA version, and GPU
 architecture (for example `wheels-py312-torch260-cu124-sm90`). The first run
@@ -89,20 +89,21 @@ build after updating the dependency stack or if a cached wheel becomes stale.
 
 ## Data
 
-Both supported datasets live under the same HuggingFace dataset repo that
-also hosts the wheel cache:
+Both supported datasets live in the data-only HuggingFace dataset repo
+`sj-hryi/FinDrama`; checkpoints and prebuilt wheels live in separate repos:
 
 ```text
-sj-hryi/FinDrama
+sj-hryi/FinDrama                                             (dataset: data + logs)
   data/
-    train.tar.zip                                            Polymarket train bundle.
-    validation.tar.zip                                       Polymarket val bundle.
+    polymarket/
+      train.tar.gz                                          Polymarket train bundle.
+      validation.tar.gz                                     Polymarket val bundle.
     fi2010/
-      train/Train_Dst_NoAuction_DecPre_CF_7.txt              FI-2010 train (607 MB).
-      validation/Test_Dst_NoAuction_DecPre_CF_7.txt          FI-2010 val (132 MB).
-  wheels-py.../
-  checkpoints/lob/
+      train/Train_Dst_NoAuction_DecPre_CF_7.txt             FI-2010 train.
+      validation/Val_Dst_NoAuction_DecPre_CF_7.txt          FI-2010 val.
   logs/<run_date>/
+sj-hryi/FinDrama-checkpoints                                 (model: checkpoints/lob + world_model.pth)
+sj-hryi/FinDrama-wheels                                      (dataset: prebuilt CUDA wheels)
 ```
 
 ### Polymarket
@@ -114,15 +115,15 @@ from huggingface_hub import snapshot_download
 snapshot_download(
     repo_id="sj-hryi/FinDrama",
     repo_type="dataset",
-    allow_patterns=["data/train.tar.zip", "data/validation.tar.zip"],
+    allow_patterns=["data/polymarket/train.tar.gz", "data/polymarket/validation.tar.gz"],
     local_dir="./",
 )
 ```
 
-Or use the helper in `src/utils_hf.py`:
+Or use the helper in `src/findrama/hf_hub.py`:
 
 ```python
-from utils_hf import download_data
+from findrama.hf_hub import download_data
 train_zip, val_zip = download_data(local_dir="./", revision=None)
 ```
 
@@ -140,14 +141,14 @@ snapshot_download(
     repo_type="dataset",
     allow_patterns=[
         "data/fi2010/train/Train_Dst_NoAuction_DecPre_CF_7.txt",
-        "data/fi2010/validation/Test_Dst_NoAuction_DecPre_CF_7.txt",
+        "data/fi2010/validation/Val_Dst_NoAuction_DecPre_CF_7.txt",
     ],
     local_dir="./",
 )
 ```
 
 The trainer copies these into `data/train/` and `data/validation/`, then
-`src/envs/fi2010_loader.py` parses the (149, N_events) matrix into a 46-dim
+`src/findrama/envs/fi2010_loader.py` parses the (149, N_events) matrix into a 46-dim
 flat feature vector: 10 levels of (ask_price, ask_size, bid_price, bid_size)
 plus 6 derived tick aggregates (mid, spread, log_spread, imbalance,
 microprice, log_total_vol). The published 5-horizon direction labels are
@@ -172,14 +173,14 @@ pip install -r requirements.txt
 Polymarket smoke run:
 
 ```bash
-python -B src/train_lob.py --hours-train 1 --hours-val 0.25 --JointTrainAgent.SampleMaxSteps 20
+python -m findrama.train --hours-train 1 --hours-val 0.25 --JointTrainAgent.SampleMaxSteps 20
 ```
 
 FI-2010 smoke run:
 
 ```bash
-python -B src/train_lob.py \
-    --config src/config_files/configure_fi2010.yaml \
+python -m findrama.train \
+    --config configs/fi2010.yaml \
     --dataset fi2010 \
     --JointTrainAgent.SampleMaxSteps 20
 ```
@@ -211,42 +212,66 @@ data/
 ```text
 notebooks/
   colab_lob_pretrain.ipynb
-src/
-  train_lob.py                    LOB pretraining entrypoint
-  config_utils.py                 dotted CLI config overrides
-  training_steps.py               world-model update loop
+pyproject.toml                  Editable-install packaging (pip install -e .)
+configs/
+  lob.yaml                      Polymarket default. Mamba-3 MIMO baseline, 94-dim features.
+  fi2010.yaml                   FI-2010 default. Mamba-3 MIMO, 46-dim features.
+  lob_em.yaml                   Episodic memory enabled (FIFO writes).
+  lob_full_ablation.yaml        Student-t + Hawkes + Settlement + EM-novelty + multi-threshold.
+  lob_aggregate_only.yaml       Tick-aggregate features only; per-level depth masked.
+  lob_studentt.yaml             Student-t reconstruction likelihood instead of MSE.
+  lob_mamba1.yaml               Mamba-1 backbone for the architecture sweep.
+  lob_mamba2.yaml               Mamba-2 backbone for the architecture sweep.
+  lob_transformer.yaml          Transformer backbone for the architecture sweep.
+  lob_diagnose.yaml             Collapse-diagnosis knobs.
+src/findrama/
+  train.py                      LOB pretraining entrypoint (python -m findrama.train)
+  sequence_builder.py           Build normalized LOB sequences; populate the replay buffer
+  train_step.py                 World-model update step
+  config.py                     DotDict + dotted CLI config overrides
+  training_utils.py             Seeding, wandb / no-op logger, EMA
+  hf_hub.py                     HuggingFace dataset download / checkpoint upload
+  weight_init.py                Layer / weight initializers
   replay_buffer.py
-  agents.py                       actor-critic/PPO code for Phase B
-  baselines/
-    deeplob.py                    DeepLOB CNN+LSTM reference baseline
-    linear_ar.py                  Linear vector autoregression floor baseline
-  eval/
-    backtest.py                   PnL/Sharpe/MaxDD harness for a frozen world model
-    regime_split.py               Time and volatility splits for non-stationarity tests
-  config_files/
-    configure_lob.yaml            Polymarket default. Mamba-3 MIMO baseline, 94-dim features.
-    configure_fi2010.yaml         FI-2010 default. Mamba-3 MIMO, 46-dim features.
-    configure_lob_em.yaml         Episodic memory enabled (FIFO writes).
-    configure_lob_full_ablation.yaml  Student-t + Hawkes + Settlement + EM-novelty + multi-threshold.
-    configure_lob_aggregate_only.yaml Tick-aggregate features only; per-level depth masked.
-    configure_lob_studentt.yaml   Student-t reconstruction likelihood instead of MSE.
-    configure_lob_mamba1.yaml     Mamba-1 backbone for the architecture sweep.
-    configure_lob_mamba2.yaml     Mamba-2 backbone for the architecture sweep.
-    configure_lob_transformer.yaml  Transformer backbone for the architecture sweep.
   envs/
-    lob_features.py               94-dim microstructure-aware feature engineering for Polymarket.
-    fi2010_loader.py              FI-2010 NoAuction DecPre/ZScore CF reader (46-dim features).
-    lob_aggregation.py            Time/volume/dollar/tick-imbalance/CUSUM bars
-    lob_labels.py                 Triple-barrier and multi-threshold direction targets
-    polymarket_lob_env.py         Gymnasium trading environment with reward variants
-  lob/backtester/                 Vendored DATAHACKS data structures + loader
-  sub_models/
-    lob_encoder.py                Transformer-over-depth-tokens encoder + Student-t decoder
-    lob_auxiliary.py              Direction, regime, episodic memory, Hawkes, settlement heads
-    fin_mamba.py                  FinDrama sequence wrapper for upstream Mamba
-    world_models.py               Mamba3 MIMO world model
+    lob_features.py             94-dim microstructure-aware feature engineering
+    fi2010_loader.py            FI-2010 NoAuction DecPre/ZScore CF reader (46-dim)
+    bar_aggregation.py          Time/volume/dollar/tick-imbalance/CUSUM bars
+    lob_labels.py               Triple-barrier and multi-threshold direction targets
+    lob_env.py                  Gymnasium trading environment with reward variants
+  models/
+    world_model.py              Mamba3 MIMO world model (core orchestration)
+    world_model_heads.py        DistHead / RewardHead / TerminationHead
+    lob_encoder.py              Transformer-over-depth-tokens encoder + Student-t decoder
+    mamba_backbone.py           FinDrama sequence wrapper for upstream Mamba
+    transformer.py              Stochastic Transformer backbone
+    attention.py                Attention blocks + KV cache
+    regime_modulation.py        Regime FiLM modulator
+    lob_heads.py                Direction, regime, episodic memory, Hawkes, settlement heads
+    losses.py                   Symlog two-hot + categorical KL (free-bits)
+    activations.py              Config-name -> activation registry
+    laprop.py                   LaProp optimizer
+  rl/
+    actor_critic.py             ActorCriticAgent (Phase B)
+    ppo.py                      PPOAgent (Phase B, currently unused)
+    returns.py                  Lambda-return + percentile helpers
+    normalization.py            RunningMeanStd + VecNormalize
+  baselines/
+    deeplob.py                  DeepLOB CNN+LSTM reference baseline
+    linear_ar.py                Linear vector autoregression floor baseline
+  backtester/
+    data_loader.py              SQLite/CSV/Parquet loader -> timeline + settlements
+    strategy.py                 BaseStrategy ABC + market dataclasses
+  eval/
+    backtest.py                 PnL/Sharpe/MaxDD harness for a frozen world model
+    run_backtest_cli.py         CLI wrapper around backtest
+    compare_direction.py        World-model vs LinearAR vs DeepLOB direction benchmark
+    competition_strategy.py     DATAHACKS BaseStrategy adapter
+    diagnose_collapse.py        Temporal-prior collapse diagnostics
+    imagination_smoke.py        Phase-B imagination smoke test
+    regime_split.py             Time and volatility splits for non-stationarity tests
 tests/
-  test_fi2010_pipeline.py           60 tests covering the full FI-2010 path end-to-end.
+  test_fi2010_pipeline.py       Full FI-2010 path end-to-end
   test_lob_features.py
   test_lob_aggregation.py
   test_lob_labels.py
@@ -254,6 +279,10 @@ tests/
   test_polymarket_lob_env.py
   test_world_model_mamba_backbones.py
   test_train_integration.py
+  test_compare_direction.py
+  test_competition_strategy.py
+  test_regime_modulation.py
+  test_run_backtest_cli.py
 ```
 
 ## Literature Alignment
@@ -288,24 +317,24 @@ The framing for the paper should be "first Mamba-3 MIMO world model on LOB."
 
 To validate the architectural claim we ship five matched-config yamls so the
 ablation table can be produced with one command per backbone:
-`configure_lob.yaml` (Mamba-3 MIMO), `configure_lob_mamba1.yaml`,
-`configure_lob_mamba2.yaml`, `configure_lob_transformer.yaml`, and any
+`lob.yaml` (Mamba-3 MIMO), `lob_mamba1.yaml`,
+`lob_mamba2.yaml`, `lob_transformer.yaml`, and any
 `is_mimo: false` variant of the default for the SISO column.
 
 ### Episodic and retrieval-augmented memory (arxiv 2506.06326, 2602.16192, 2202.08417)
 
-The repo's `EpisodicMemory` (`src/sub_models/lob_auxiliary.py`) is a CPU-side
+The repo's `EpisodicMemory` (`src/findrama/models/lob_heads.py`) is a CPU-side
 top-k cosine retriever with FIFO eviction. New: `UseNovelty` flag turns the
 write policy into a KL-novelty filter so the buffer becomes a regime catalog
-rather than a sliding window of recent states. The `configure_lob_em.yaml`
-ablation enables the FIFO variant; `configure_lob_full_ablation.yaml`
+rather than a sliding window of recent states. The `lob_em.yaml`
+ablation enables the FIFO variant; `lob_full_ablation.yaml`
 enables the novelty-filtered variant. Both compare against the default (off).
 
 ### Modern world-model baselines
 
 - DreamerV3 (Hafner et al., Nature 2025): RSSM with 32x32 categorical latents,
   symlog two-hot reward decoding, single hyperparameter set across domains.
-  We borrow the symlog two-hot decoder (`functions_losses.py`) and shrink the
+  We borrow the symlog two-hot decoder (`losses.py`) and shrink the
   categorical latent to 16x16 because the LOB-aggregate input is only 94 dims.
 - TD-MPC2 (Hansen et al., ICLR 2024): decoder-free trajectory optimization at
   317M params across 80 continuous tasks. Discrete-action LOB does not need
@@ -332,7 +361,7 @@ report numbers on Polymarket so the reviewer can compare regimes.
 median half-spread on Polymarket near 200 bps - one to two orders of
 magnitude wider than equity LOBs. This is why per-tick mid changes are
 dominated by spread-bouncing noise rather than signal, and why the new
-`src/envs/lob_aggregation.py` module is essential for an honest training
+`src/findrama/envs/bar_aggregation.py` module is essential for an honest training
 target. The `SoK: Decentralized Prediction Markets` paper (arxiv 2510.15612)
 is the right taxonomy citation for positioning the dataset.
 
@@ -348,9 +377,9 @@ with Mamba.
 
 Polymarket median half-spread is roughly 200 bps. Raw per-tick mid changes
 on Polymarket are mostly spread-bouncing noise, not signal. Three layered
-denoising tools live in `src/envs/`:
+denoising tools live in `src/findrama/envs/`:
 
-1. **Bar aggregation** (`lob_aggregation.py`). Replace the raw tick stream
+1. **Bar aggregation** (`bar_aggregation.py`). Replace the raw tick stream
    with one of: time bars (5s/30s default), volume bars, dollar bars,
    tick-imbalance bars, or CUSUM bars. Lopez de Prado financial data
    structures applied directly to the 94-dim flat features.
@@ -393,7 +422,7 @@ Three optional heads are available alongside the existing reconstruction +
 KL + DirectionHead stack. Each is gated by a config flag and contributes
 zero loss when its required labels are absent.
 
-- `HawkesIntensityHead` (`lob_auxiliary.py`). Predicts log-intensity for
+- `HawkesIntensityHead` (`lob_heads.py`). Predicts log-intensity for
   buy and sell event arrivals. Trained with Poisson NLL on observed event
   counts in a forward window. Requires `event_counts` to be threaded into
   `WorldModel.update()` via the data pipeline.
@@ -406,24 +435,24 @@ zero loss when its required labels are absent.
   accuracy can be reported as a curve over thresholds rather than pinned
   at one value.
 
-Enable all three at once via `configure_lob_full_ablation.yaml`.
+Enable all three at once via `lob_full_ablation.yaml`.
 
 ## Evaluation
 
-Three CLIs in `src/eval/` consume a trained world-model checkpoint and emit
+Three CLIs in `src/findrama/eval/` consume a trained world-model checkpoint and emit
 the artifacts the paper's evaluation table needs.
 
 ### Diagnose a checkpoint
 
-`src/eval/diagnose_run.py` regenerates the 32-step imagine rollout, computes
+`src/findrama/eval/diagnose_collapse.py` regenerates the 32-step imagine rollout, computes
 posterior and prior categorical entropy on a val batch, and prints the top
 per-feature val MSE. Use after a Phase A run that ended with
 `Imagine/mid_norm_std = 0` or an unexpectedly large `val_loss`.
 
 ```bash
-python -m eval.diagnose_run \
+python -m findrama.eval.diagnose_collapse \
     --checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
-    --config src/config_files/configure_lob.yaml \
+    --config configs/lob.yaml \
     --data-val data/validation \
     --norm-path saved_models/lob/normalization.json \
     --out-dir notes/
@@ -434,15 +463,15 @@ Outputs: `notes/diagnose_rollout_<slug>.npy`,
 
 ### Compare against direction-prediction baselines
 
-`src/eval/compare_direction.py` evaluates the world-model direction head,
+`src/findrama/eval/compare_direction.py` evaluates the world-model direction head,
 DeepLOB (trained from scratch on the train split), and a closed-form LinearAR
 on the same val split, across one or more direction thresholds. Emits a
 markdown table.
 
 ```bash
-python -m eval.compare_direction \
+python -m findrama.eval.compare_direction \
     --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
-    --config src/config_files/configure_lob.yaml \
+    --config configs/lob.yaml \
     --data-train data/train --data-val data/validation \
     --thresholds 0.001,0.005,0.01 \
     --baselines world_model,deeplob,linear_ar \
@@ -452,14 +481,14 @@ python -m eval.compare_direction \
 
 ### Run a backtest with a frozen world model
 
-`src/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen
+`src/findrama/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen
 world model, runs `run_backtest` against `PolymarketLOBEnv`, and writes
 `BacktestMetrics` (PnL, Sharpe, MaxDD, win rate, portfolio curve) as JSON.
 
 ```bash
-python -m eval.run_backtest_cli \
+python -m findrama.eval.run_backtest_cli \
     --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
-    --config src/config_files/configure_lob.yaml \
+    --config configs/lob.yaml \
     --data-val data/validation \
     --max-steps 5000 \
     --regime-split none \
@@ -469,21 +498,21 @@ python -m eval.run_backtest_cli \
 Pass `--regime-split time:<unix_ts>` to evaluate only on markets resolved
 after the cutoff, or `--regime-split volatility:<quantile>` to evaluate on
 the high-volatility tail. Reuse the same checkpoint with
-`configure_lob_em.yaml` (episodic memory enabled) to produce the
+`lob_em.yaml` (episodic memory enabled) to produce the
 non-stationarity A/B numbers.
 
 ### Diagnose hyperparameter levers
 
-`src/config_files/configure_lob_diagnose.yaml` exposes three constants the
+`configs/lob_diagnose.yaml` exposes three constants the
 plain config previously hardcoded: `RepresentationLossWeight` (was 0.1),
 `FreeBits` (was 1.0), and `Decoder.SizeWeight` (was 2.0). These are the
 levers for the prior-collapse hypothesis sweep. Default values in
-`configure_lob.yaml` are preserved when the keys are absent, so existing
+`lob.yaml` are preserved when the keys are absent, so existing
 configs remain backward compatible.
 
 ## Notes
 
-- `train_lob.py` no longer imports `gym` or the removed Atari path.
+- `train.py` no longer imports `gym` or the removed Atari path.
 - Dataset switching is driven by the `--dataset` CLI flag or the top-level
   `Dataset.Kind` config key. Both `Polymarket` and `FI-2010` paths return
   the same `LOBSequence` dataclass, so the rest of the training loop is

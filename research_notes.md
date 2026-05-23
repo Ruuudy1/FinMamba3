@@ -13,13 +13,13 @@ Offline world-model pretraining (DreamerV3-style, Phase A):
 
 ```
 obs (B, L, 100)                      flat LOB features (K=10 levels x 8 + 20 tick)
-   |  LOBEncoder (Transformer over depth tokens + CLS)        src/sub_models/lob_encoder.py
+   |  LOBEncoder (Transformer over depth tokens + CLS)        src/findrama/models/lob_encoder.py
    v
 embedding (B, L, 1024)
-   |  DistHead.forward_post -> 16x16 categorical posterior    src/sub_models/world_models.py
+   |  DistHead.forward_post -> 16x16 categorical posterior    src/findrama/models/world_model.py
    v
 posterior sample -> flatten -> latent (B, L, 256)
-   |  FinMambaSequenceModel  (Mamba3 MIMO, n_layer=4, d_model=512)   src/sub_models/fin_mamba.py
+   |  FinMambaSequenceModel  (Mamba3 MIMO, n_layer=4, d_model=512)   src/findrama/models/mamba_backbone.py
    |    stem:  [latent (+ optional action)] -> RMSNorm -> SiLU -> (B, L, 512)
    |    >>> RegimeFiLMModulator infers regime from the stem summary <<<
    |    per block i:  x = RMSNorm(h);  x = gamma_i * x + beta_i;  h = h + Mamba_i(x)
@@ -30,7 +30,7 @@ hidden (B, L, 512)
    |  aux heads: Direction (3-class), Hawkes, Settlement (binary outcome)
    v
 losses: reconstruction + reward + termination + dynamics_kl + representation_kl
-        + direction + hawkes + settlement + regime  (12-tuple, src/training_steps.py)
+        + direction + hawkes + settlement + regime  (12-tuple, src/findrama/train_step.py)
 ```
 
 Phase B (RL): `ActorCriticAgent` / `PPOAgent` (`src/agents.py`) learn in imagination rolled
@@ -42,7 +42,7 @@ out by `WorldModel.imagine_data`. Because imagination calls the same FiLM-modula
 The brief asks for the inferred regime to "dynamically alter the Delta, B, or C matrices" of
 the Mamba selective scan, rather than concatenating a regime id. The key constraint: the
 Mamba blocks come from the upstream `mamba_ssm` package, and FinDrama deliberately refuses
-vendored copies (`src/sub_models/fin_mamba.py:34-78`) and runs CUDA/TileLang kernels. Editing
+vendored copies (`src/findrama/models/mamba_backbone.py:34-78`) and runs CUDA/TileLang kernels. Editing
 the kernel to scale dt/B/C directly would be fragile and would force rebuilding all five
 prebuilt HF arch wheels.
 
@@ -51,15 +51,15 @@ block's input. So applying a per-block FiLM transform `x -> gamma * x + beta` to
 input propagates into Delta, B and C **through the selection mechanism itself**, while leaving
 the CUDA kernel untouched and the wheels valid. This is the FiLM-on-block-inputs design.
 
-Implementation (`src/sub_models/regime_modulation.py`):
-- `RegimeFiLMModulator` wraps a `RegimeHead` (reused from `lob_auxiliary.py`) that infers a
+Implementation (`src/findrama/models/regime_modulation.py`):
+- `RegimeFiLMModulator` wraps a `RegimeHead` (reused from `lob_heads.py`) that infers a
   soft regime distribution and embedding from the stem summary (causal, per timestep), and a
   hypernetwork mapping the embedding to per-block `(gamma, beta)` over `d_model` channels.
 - The hypernetwork is **zero-initialized** and gated as `gamma = 1 + tanh(.)`, `beta = tanh(.)`,
   so at init `gamma=1, beta=0` (exact identity). An untrained modulator therefore reproduces
   the unmodulated backbone bit-for-bit, which makes the regime-off baseline a clean control
   and stabilizes warm-start. `tanh` also bounds gamma in (0, 2) for bf16 safety.
-- Wired into `FinMambaSequenceModel.forward` (`fin_mamba.py`): regime is inferred once from
+- Wired into `FinMambaSequenceModel.forward` (`mamba_backbone.py`): regime is inferred once from
   the stem output, then `(gamma_i, beta_i)` are applied to each block's normalized input. A
   `return_regime` flag (only set by `WorldModel.update`) surfaces the regime logits for the loss.
 
@@ -69,7 +69,7 @@ reads. A load-balancing regularizer (`regime_load_balance_loss`, Switch-Transfor
 maximizes the entropy of the batch-averaged regime distribution to prevent collapse onto a
 single regime, while leaving per-step assignments free to be peaky. Weight = `RegimeFiLM.EntropyCoef`.
 
-The pre-existing post-hoc `RegimeConditioner` (`world_models.condition_dist_feat`) is left in
+The pre-existing post-hoc `RegimeConditioner` (`world_model.condition_dist_feat`) is left in
 place and independently config-gated; it conditions the stack *output*, whereas this work
 conditions the scan *input*. They can be combined or ablated independently.
 
@@ -79,7 +79,7 @@ Polymarket prices are bounded probabilities in [0, 1]; liquidity and information
 change violently near the 0/1 boundaries and are sensitive to time-to-expiry. The generic
 94-dim LOB vector ignored this. Six tick features are appended (gated by
 `Encoder.BinaryMarketFeatures`, Polymarket only; FI-2010 is untouched) in
-`append_binary_market_features` (`src/envs/lob_features.py`), taking F_TICK 14 -> 20 and the
+`append_binary_market_features` (`src/findrama/envs/lob_features.py`), taking F_TICK 14 -> 20 and the
 flat dim 94 -> 100:
 
 - `boundary_distance = min(mid, 1-mid)` -- proximity to a probability boundary.
@@ -109,11 +109,11 @@ Baseline (regime off) vs treatment (regime on), both with the new binary feature
 
 ```
 # Baseline.
-python -m src.train_lob --config src/config_files/configure_lob.yaml \
+python -m findrama.train --config configs/lob.yaml \
     --data-train data/train --data-val data/validation
 
 # Treatment (in-scan regime FiLM on).
-python -m src.train_lob --config src/config_files/configure_lob.yaml \
+python -m findrama.train --config configs/lob.yaml \
     --data-train data/train --data-val data/validation \
     --Models.WorldModel.RegimeFiLM.Enabled true
 ```
@@ -121,12 +121,12 @@ python -m src.train_lob --config src/config_files/configure_lob.yaml \
 Distribution-shift evaluation (held-out high-volatility regime) and directional baselines:
 
 ```
-python -m eval.run_backtest_cli --world-checkpoint <ckpt>.pth \
-    --config src/config_files/configure_lob.yaml --data-val data/validation \
+python -m findrama.eval.run_backtest_cli --world-checkpoint <ckpt>.pth \
+    --config configs/lob.yaml --data-val data/validation \
     --regime-split volatility:0.5            # reports return, sharpe, max_drawdown, win_rate
 
-python -m eval.compare_direction --world-checkpoint <ckpt>.pth \
-    --config src/config_files/configure_lob.yaml \
+python -m findrama.eval.compare_direction --world-checkpoint <ckpt>.pth \
+    --config configs/lob.yaml \
     --data-train data/train --data-val data/validation \
     --baselines world_model,deeplob,linear_ar --thresholds 0.001,0.005,0.01
 ```
@@ -149,6 +149,6 @@ this work):
 
 Pending (require Colab GPU or are downstream): end-to-end baseline-vs-treatment training and
 the distribution-shift numbers; the competition-backtester adapter
-(`FinDramaCompetitionStrategy`); the RL Phase B joint loop in `train_lob.py:main()` and a
+(`FinDramaCompetitionStrategy`); the RL Phase B joint loop in `train.py:main()` and a
 held-out env evaluation roll.
 ```
