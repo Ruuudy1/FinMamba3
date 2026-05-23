@@ -1,20 +1,67 @@
-# FinDrama
+# FinDrama3
+<!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
+[![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#the-team-)
+<!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-FinDrama is the limit-order-book version of Drama. The old Atari and
-MemoryMaze paths have been removed; this repository supports two
-interchangeable workflows for offline world-model pretraining:
+This repository contains the research and code behind FinDrama, our team's
+investigation into whether Mamba-3 MIMO state-space models can learn
+limit-order-book (LOB) dynamics offline and warm-start a reinforcement-learning
+agent for Polymarket binary-outcome markets. It began as a fork of the Drama
+world-model framework (Wang et al., ICLR 2025) but has since diverged
+completely: the Atari and MemoryMaze paths are gone, the sequence backbone is
+Mamba-3 MIMO (Lahoti et al., ICLR 2026), and the data, features, rewards, and
+evaluation are all rebuilt for financial microstructure.
+
+## The team ✨
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%">
+        <a href="https://github.com/Ruuudy1">
+          <img src="https://avatars.githubusercontent.com/u/130013367?s=100&v=4" width="100px;" alt="Rudy Osuna"/>
+          <br /><sub><b>Rudy Osuna</b></sub></a>
+        <br /><sub><a href="https://www.linkedin.com/in/rudy-osuna/" title="LinkedIn">🔗 LinkedIn</a></sub>
+        <br /><a href="#research-Ruuudy1" title="Research">🔬</a>
+        <a href="https://github.com/Ruuudy1/FinDrama3/commits?author=Ruuudy1" title="Code">💻</a>
+      </td>
+      <td align="center" valign="top" width="14.28%">
+        <a href="https://github.com/Hamzaq96">
+          <img src="https://avatars.githubusercontent.com/u/30836331?s=100&v=4" width="100px;" alt="Hamza Qureshi"/>
+          <br /><sub><b>Hamza Qureshi</b></sub></a>
+        <br /><a href="#research-Hamzaq96" title="Research">🔬</a>
+        <a href="https://github.com/Ruuudy1/FinDrama3/commits?author=Hamzaq96" title="Code">💻</a>
+      </td>
+      <td align="center" valign="top" width="14.28%">
+        <img src="https://avatars.githubusercontent.com/u/0?v=4" width="100px;" alt="Ivan Radoslavov"/>
+        <br /><sub><b>Ivan Radoslavov</b></sub>
+        <br /><a href="#research-ivan" title="Research">🔬</a>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+## Overview
+
+FinDrama supports two interchangeable workflows for offline world-model
+pretraining:
 
 1. Polymarket LOB tick data (the original pipeline, 94-dim features).
-2. FI-2010 Nasdaq Helsinki LOB data (Ntakaris et al. 2018, 46-dim features).
-   This branch ships the loader, config, and HuggingFace mirror so the model
-   can be benchmarked on a public LOB dataset whenever Polymarket data runs
-   short.
+2. FI-2010 Nasdaq Helsinki LOB data (Ntakaris et al. 2018, 46-dim features),
+   shipped with a loader, config, and HuggingFace mirror so the model can be
+   benchmarked on a public LOB dataset whenever Polymarket data runs short.
 
-The key novelty axis vs. the upstream Drama paper (Wang et al., ICLR 2025) is
-the Mamba-3 MIMO sequence backbone (Lahoti et al., ICLR 2026) applied to LOB
-tick streams, plus a microstructure-aware feature encoder, an episodic-memory
-ablation switch with optional learned write policy, and Lopez de Prado financial
-data structures for tick-stream denoising.
+The key novelty axis vs. the upstream Drama paper is the Mamba-3 MIMO sequence
+backbone applied to LOB tick streams, plus a microstructure-aware feature
+encoder, an episodic-memory ablation switch with optional learned write policy,
+and Lopez de Prado financial data structures for tick-stream denoising.
 
 ## Run On Colab
 
@@ -28,7 +75,7 @@ reference path automatically with a log warning.
 
 Open in Colab in one click:
 
-https://colab.research.google.com/github/Ruuudy1/FinDrama/blob/synthetic-order-book-train/notebooks/colab_lob_pretrain.ipynb
+https://colab.research.google.com/github/Ruuudy1/FinDrama3/blob/main/notebooks/colab_lob_pretrain.ipynb
 
 Then:
 
@@ -348,7 +395,7 @@ enables the novelty-filtered variant. Both compare against the default (off).
 ### LOB-specific deep-learning baselines
 
 We ship a port of DeepLOB (Zhang et al. 2018) and a closed-form linear AR
-baseline at `src/baselines/`. Recent transformer-based competitors worth
+baseline at `src/findrama/baselines/`. Recent transformer-based competitors worth
 adding next: TLOB (Bertini et al., arxiv 2502.15757) with dual spatial/
 temporal attention; LiT (Frontiers AI 2025) with structured patches; HLOB
 (ScienceDirect 2024) with persistence-aware blocks. The shared LOBFrame
