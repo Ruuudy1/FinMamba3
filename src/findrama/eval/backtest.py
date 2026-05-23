@@ -118,7 +118,7 @@ class GreedyDirectionPolicy:
         self._latent = None
     @torch.no_grad()
     def act(self, observation: np.ndarray) -> int:
-        if not hasattr(self.world_model, "direction_head") or self.world_model.direction_head is None:
+        if self.world_model.direction_head is None:
             return 0
         flat = observation.reshape(-1).astype(np.float32)
         if flat.size < self.mid_index + 1:

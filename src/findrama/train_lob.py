@@ -102,7 +102,7 @@ def _build_sequences(
 def _settlement_yes_outcome(settlement) -> float | None:
     if settlement is None:
         return None
-    outcome = getattr(settlement.outcome, "value", settlement.outcome)
+    outcome = settlement.outcome.value
     if outcome == "YES":
         return 1.0
     if outcome == "NO":
@@ -359,16 +359,16 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
     device = torch.device(config.BasicSettings.Device)
-    from findrama.training_utils import WandbLogger, seed_np_torch
+    from findrama.training_utils import make_logger, seed_np_torch
     seed_np_torch(seed=config.BasicSettings.Seed)
     # Pick the data pipeline. Polymarket reads SQLite + per-tick CSV books;
     # FI-2010 reads a single space-separated text matrix per split.
-    dataset_cfg = getattr(config, "Dataset", None)
-    config_dataset_kind = getattr(dataset_cfg, "Kind", "polymarket") if dataset_cfg is not None else "polymarket"
+    dataset_cfg = config.get("Dataset", None)
+    config_dataset_kind = dataset_cfg.get("Kind", "polymarket") if dataset_cfg is not None else "polymarket"
     dataset_kind = pre_args.dataset or config_dataset_kind
     logger.info(f"dataset pipeline: {dataset_kind}")
-    norm_clip = getattr(config.BasicSettings, "NormClip", 8.0)
-    aggregate_only = getattr(config.Models.WorldModel.Encoder, "AggregateOnly", False)
+    norm_clip = config.BasicSettings.get("NormClip", 8.0)
+    aggregate_only = config.Models.WorldModel.Encoder.get("AggregateOnly", False)
     # Parse intervals if provided
     intervals = None
     if pre_args.intervals:
@@ -401,9 +401,9 @@ def main() -> None:
             include_binary_features=include_binary_features,
         )
     elif dataset_kind == "fi2010":
-        fi2010_cfg = getattr(dataset_cfg, "FI2010", None) if dataset_cfg is not None else None
-        horizon = int(getattr(fi2010_cfg, "Horizon", 10)) if fi2010_cfg is not None else 10
-        max_events_cfg = getattr(fi2010_cfg, "MaxEvents", None) if fi2010_cfg is not None else None
+        fi2010_cfg = dataset_cfg.get("FI2010", None) if dataset_cfg is not None else None
+        horizon = int(fi2010_cfg.get("Horizon", 10)) if fi2010_cfg is not None else 10
+        max_events_cfg = fi2010_cfg.get("MaxEvents", None) if fi2010_cfg is not None else None
         max_events = int(max_events_cfg) if max_events_cfg else None
         logger.info(f"loading FI-2010 train split from {pre_args.data_train}")
         train_seq, slug, stats = _build_fi2010_sequences(
@@ -474,7 +474,7 @@ def main() -> None:
     # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
     # kernels; torch.compile would fight them and risks recompilations every
     # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
-    if getattr(config.BasicSettings, "Compile", False):
+    if config.BasicSettings.get("Compile", False):
         try:
             world_model.encoder = torch.compile(
                 world_model.encoder, mode="reduce-overhead", dynamic=False
@@ -487,7 +487,7 @@ def main() -> None:
             logger.warning(f"torch.compile unavailable, running eager: {exc}")
     replay_buffer = ReplayBuffer(config, device=device)
     _populate_buffer(replay_buffer, train_seq)
-    wlogger = WandbLogger(
+    wlogger = make_logger(
         config=config,
         project=config.Wandb.Init.Project,
         mode=config.Wandb.Init.Mode,
@@ -495,15 +495,15 @@ def main() -> None:
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{wlogger.run.id}"
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
-    accum_steps = getattr(config.JointTrainAgent, 'AccumSteps', 1)
-    log_every = getattr(config.JointTrainAgent, 'LogEvery', 50)
+    accum_steps = config.JointTrainAgent.get('AccumSteps', 1)
+    log_every = config.JointTrainAgent.get('LogEvery', 50)
     max_steps = config.JointTrainAgent.SampleMaxSteps
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
     imagine_every = save_every
     # Early stopping config
-    early_stopping_patience = getattr(config.JointTrainAgent, 'EarlyStoppingPatience', 0)
-    save_best_only = getattr(config.JointTrainAgent, 'SaveBestOnly', False)
+    early_stopping_patience = config.JointTrainAgent.get('EarlyStoppingPatience', 0)
+    save_best_only = config.JointTrainAgent.get('SaveBestOnly', False)
     # Tracking variables
     best_val_loss = float('inf')
     patience_counter = 0

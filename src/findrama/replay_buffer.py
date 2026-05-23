@@ -8,7 +8,7 @@ class ReplayBuffer():
     def __init__(self, config, device="cuda") -> None:
         self.store_on_gpu = config.BasicSettings.ReplayBufferOnGPU
         max_length = config.JointTrainAgent.BufferMaxLength
-        self.obs_mode = getattr(config.BasicSettings, 'ObsMode', 'features')
+        self.obs_mode = config.BasicSettings.get('ObsMode', 'features')
         if self.obs_mode != 'features':
             raise ValueError("FinDrama replay buffer only supports ObsMode='features'")
         obs_shape = (config.BasicSettings.FeatureDim,)

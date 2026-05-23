@@ -95,7 +95,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     sd = state.get("world_model", state.get("state_dict", state))
     wm.load_state_dict(sd, strict=False)
     wm.eval()
-    if not getattr(wm, "use_direction_head", False):
+    if not wm.use_direction_head:
         logger.warning("World model has no direction head; world_model arm will be skipped.")
         return {"accuracy": float("nan"), "brier": float("nan")}
     flat = val_seq.to_flat()
@@ -229,8 +229,8 @@ def main() -> int:
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
     from findrama.train_lob import build_sequences
-    norm_clip = getattr(cfg.BasicSettings, "NormClip", 8.0)
-    aggregate_only = getattr(cfg.Models.WorldModel.Encoder, "AggregateOnly", False)
+    norm_clip = cfg.BasicSettings.get("NormClip", 8.0)
+    aggregate_only = cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
     train_seq, slug, _stats = build_sequences(
         args.data_train, args.market_slug, args.hours_train, args.norm_path,
         fit_stats=True, norm_clip=norm_clip, aggregate_only=aggregate_only,

@@ -7,18 +7,15 @@ Participants subclass BaseStrategy and implement on_tick().
 # region imports
 from __future__ import annotations
 import json
-try:  # orjson is ~5x faster; fall back to stdlib if not installed
-    import orjson as _fast_json
-    def _loads(s: str):
-        return _fast_json.loads(s)
-except ImportError:
-    def _loads(s: str):
-        return json.loads(s)
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, NamedTuple
 # endregion
+
+
+def _loads(s: str):
+    return json.loads(s)
 # - Enums -
 
 
@@ -189,10 +186,9 @@ class Order:
     limit_price: float | None = None  # None = market order (take best available)
 
     def __post_init__(self):
-        if isinstance(self.token, str):
-            self.token = Token(self.token)
-        if isinstance(self.side, str):
-            self.side = Side(self.side)
+        # Token/Side accept either a raw string or an already-built enum member.
+        self.token = Token(self.token)
+        self.side = Side(self.side)
 
 
 @dataclass(frozen=True)

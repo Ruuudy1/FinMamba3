@@ -269,7 +269,7 @@ def parse_slug_lifecycle(slug: str) -> MarketLifecycle | None:
     for interval, cfg in INTERVALS.items():
         if interval == "hourly":
             continue
-        prefixes = cfg["prefix"] if isinstance(cfg["prefix"], list) else [cfg["prefix"]]
+        prefixes = cfg["prefix"] if type(cfg["prefix"]) is list else [cfg["prefix"]]
         for prefix in prefixes:
             pattern = rf"^{re.escape(prefix)}-(\d+)$"
             m = re.match(pattern, slug)
@@ -514,9 +514,9 @@ def build_timeline(
         )
     # Filter to requested assets; eliminates SOL/ETH work when the strategy is BTC-only.
     if assets:
-        asset_set = {a.upper() for a in assets}
+        wanted_assets = {a.upper(): True for a in assets}
         prices_df = prices_df[prices_df["market_slug"].apply(
-            lambda s: _asset_from_slug(s) in asset_set
+            lambda s: _asset_from_slug(s) in wanted_assets
         )]
         if prices_df.empty:
             logger.warning(f"No data for assets {assets}")
@@ -620,7 +620,7 @@ def build_timeline(
     # markets the engine will see. Books for any other slug are wasted
     # parse work.
     if not books_df.empty and "market_slug" in books_df.columns:
-        lifecycle_slugs = {lc.market_slug for lc in lifecycles}
+        lifecycle_slugs = [lc.market_slug for lc in lifecycles]
         if lifecycle_slugs:
             books_df = books_df[books_df["market_slug"].isin(lifecycle_slugs)]
     # Build pre-parsed book snapshots indexed by (slug, ts) for O(1)

@@ -17,10 +17,9 @@ class DotDict(dict):
             if isinstance(value, dict):
                 self[key] = DotDict(value)
     def __getattr__(self, item):
-        try:
-            value = self[item]
-        except KeyError as exc:
-            raise AttributeError(f"'DotDict' object has no attribute '{item}'") from exc
+        if item not in self:
+            raise AttributeError(f"'DotDict' object has no attribute '{item}'")
+        value = self[item]
         if isinstance(value, dict):
             value = DotDict(value)
             self[item] = value
@@ -45,12 +44,12 @@ def _dtype_mapper(dtype_value):
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
     }
-    try:
-        return dtype_map[str(dtype_value)]
-    except KeyError as exc:
+    key = str(dtype_value)
+    if key not in dtype_map:
         raise argparse.ArgumentTypeError(
             f"Unknown torch dtype {dtype_value!r}; expected one of {sorted(dtype_map)}"
-        ) from exc
+        )
+    return dtype_map[key]
 
 
 def _bool_mapper(value):

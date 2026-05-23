@@ -1,13 +1,9 @@
 # region imports
-import torch
 import os
-import numpy as np
 import random
+import numpy as np
+import torch
 # endregion
-try:
-    import wandb
-except ImportError:
-    wandb = None
 
 
 def seed_np_torch(seed=20001118):
@@ -22,69 +18,65 @@ def seed_np_torch(seed=20001118):
     torch.backends.cudnn.benchmark = False
 
 
-class WandbLogger():
-    def __init__(self, config, project=None, mode='online'):
-        """
-        Initialize the Logger class.
+def _run_name(config):
+    pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
+    return f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
 
-        Args:
-            path (str): Path to the directory where logs will be saved. This can be used to define the run name in W&B.
-            project (str, optional): Name of the W&B project. Defaults to None.
-        """
-        # Initialize a W&B run with the given project and path as the run name.
-        pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
-        run_name = f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
-        if wandb is None:
-            self.run = type(
-                "NoOpWandbRun",
-                (),
-                {"id": "no-wandb", "name": run_name, "dir": os.getcwd()},
-            )()
-        else:
-            self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
-            self.run.name = f"{self.run.name}_{self.run.id}"
+
+class _NoOpRun():
+    """Mimics the wandb run handle (id/name/dir) when logging is disabled."""
+
+    def __init__(self, run_name):
+        self.id = "no-wandb"
+        self.name = run_name
+        self.dir = os.getcwd()
+
+
+class WandbLogger():
+    """Logs training metrics to Weights & Biases."""
+
+    def __init__(self, config, project=None, mode='online'):
+        import wandb
+        self.run = wandb.init(project=project, config=config, mode=mode, name=_run_name(config))
+        self.run.name = f"{self.run.name}_{self.run.id}"
         self.tag_step = {}
     def log(self, tag, value, global_step):
-        """
-        Log data to Weights & Biases.
-
-        Args:
-            tag (str): The tag or label for the data being logged.
-            value: The data to be logged. It can be a scalar, image, histogram, or video.
-        """
-        # Log data based on the type.
-        if wandb is None:
-            return
+        import wandb
         if "video" in tag:
-            # Log video.
             wandb.log({tag: wandb.Video(value, fps=1, format='gif')}, step=global_step)
         elif "images" in tag:
-            # Log images.
             images = [wandb.Image(img) for img in value]
             wandb.log({tag: images}, step=global_step)
         elif "hist" in tag:
-            # Log histogram.
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
         else:
-            # Log scalar value.
             wandb.log({tag: value}, step=global_step)
     def update_config(self, update_dict):
-        """
-        Update the configuration with the given parameters.
-
-        Args:
-            update_dict (dict): A dictionary containing scalar parameter information to update in the configuration.
-        """
-        # Update the configuration using wandb.config.update.
-        if wandb is not None:
-            wandb.config.update(update_dict)
+        import wandb
+        wandb.config.update(update_dict)
     def close(self):
-        """
-        Finalize and close the W&B run.
-        """
-        # Finish the run.
-        if wandb is not None:
-            wandb.finish()
+        import wandb
+        wandb.finish()
+
+
+class NoOpLogger():
+    """Drop-in logger used when wandb is disabled; same interface, no side effects."""
+
+    def __init__(self, config, project=None, mode='online'):
+        self.run = _NoOpRun(_run_name(config))
+        self.tag_step = {}
+    def log(self, tag, value, global_step):
+        return
+    def update_config(self, update_dict):
+        return
+    def close(self):
+        return
+
+
+def make_logger(config, project=None, mode='online'):
+    if config.BasicSettings.get('UseWandb', True):
+        return WandbLogger(config, project=project, mode=mode)
+    return NoOpLogger(config, project=project, mode=mode)
 
 
 class EMAScalar():

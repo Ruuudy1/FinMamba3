@@ -94,7 +94,7 @@ def _load_val_sequence(args: argparse.Namespace, cfg):
     seq = extract_features(bt.timeline, slug)
     stats = load_normalization(args.norm_path)
     seq_norm = apply_normalization(seq, stats)
-    if getattr(cfg.Models.WorldModel.Encoder, "AggregateOnly", False):
+    if cfg.Models.WorldModel.Encoder.get("AggregateOnly", False):
         seq_norm = make_aggregate_only(seq_norm)
     return seq_norm, stats, slug
 

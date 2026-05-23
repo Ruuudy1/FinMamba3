@@ -10,6 +10,7 @@ from pytorch_warmup import LinearWarmup
 from findrama.models.losses import SymLogTwoHotLoss
 from findrama.training_utils import EMAScalar
 from findrama.weight_init import layer_init
+from findrama.models.activations import ACTIVATION_BY_NAME
 # endregion
 RMSNorm = nn.RMSNorm
 
@@ -100,7 +101,7 @@ class ActorCriticAgent(nn.Module):
         self.unimix_ratio = conf.Models.Agent.Unimix_ratio
         self.device = device
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
-        act = getattr(nn, conf.Models.Agent.AC.Act)
+        act = ACTIVATION_BY_NAME[conf.Models.Agent.AC.Act]
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
@@ -257,7 +258,7 @@ class PPOAgent(nn.Module):
         self.unimix_ratio = conf.Models.Agent.Unimix_ratio
         self.device = device
         self.symlog_twohot_loss = SymLogTwoHotLoss(255, -20, 20)
-        act = getattr(nn, conf.Models.Agent.PPO.Act)
+        act = ACTIVATION_BY_NAME[conf.Models.Agent.PPO.Act]
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),

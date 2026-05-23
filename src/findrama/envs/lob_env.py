@@ -385,13 +385,15 @@ class PolymarketLOBEnv(gym.Env):
         obs = np.zeros(self.observation_space.shape, dtype=np.float32)
         active = self._active_slugs(tick)[: self.max_markets]
         portfolio_value = self._portfolio_value(tick)
+        binance_mid_by_asset = {"BTC": tick.btc_mid, "ETH": tick.eth_mid, "SOL": tick.sol_mid}
+        chainlink_by_asset = {"BTC": tick.chainlink_btc, "ETH": tick.chainlink_eth, "SOL": tick.chainlink_sol}
         for row, slug in enumerate(active):
             stored = tick.order_books[slug]
             lc = self._lifecycle_by_slug[slug]
             pos = self.positions.get(slug, PositionState())
             asset = _asset_from_slug(slug)
-            binance_mid = getattr(tick, f"{asset.lower()}_mid")
-            chainlink = getattr(tick, f"chainlink_{asset.lower()}")
+            binance_mid = binance_mid_by_asset[asset]
+            chainlink = chainlink_by_asset[asset]
             prev_binance = self._prev_binance_mid.get(asset, binance_mid)
             binance_ret = (
                 math.log(binance_mid / prev_binance)

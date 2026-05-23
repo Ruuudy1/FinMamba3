@@ -135,12 +135,8 @@ def split_dir(tmp_path):
 
 def _fi2010_world_model_config():
     """Minimal WorldModel config for FI-2010 (CPU, fake Mamba, 46-dim obs)."""
-    from types import SimpleNamespace
-    def _ns(d):
-        if isinstance(d, dict):
-            return SimpleNamespace(**{k: _ns(v) for k, v in d.items()})
-        return d
-    return _ns({
+    from findrama.config import DotDict
+    return DotDict({
         "BasicSettings": {
             "ObsMode": "features",
             "FeatureDim": FI2010_FEATURE_DIM,
