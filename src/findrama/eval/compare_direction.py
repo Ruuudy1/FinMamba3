@@ -85,7 +85,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     """Run the world-model encoder + direction head on the val sequence."""
     import yaml
     from findrama.config import DotDict, parse_args_and_update_config
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -111,7 +111,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     with torch.no_grad():
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
-        sample = wm.stright_throught_gradient(post_logits)
+        sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
             from findrama.models.attention import get_subsequent_mask_with_batch_length

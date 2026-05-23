@@ -3,10 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import OneHotCategorical
-from einops import rearrange, reduce
+from einops import rearrange
 from findrama.models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
-from findrama.models.losses import SymLogTwoHotLoss
+from findrama.models.losses import CategoricalKLDivLossWithFreeBits, SymLogTwoHotLoss
+from findrama.models.world_model_heads import DistHead, RewardHead, TerminationHead
 from findrama.models.attention import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from findrama.models.transformer import StochasticTransformerKVCache
 from findrama.models.mamba_backbone import FinMambaSequenceModel
@@ -32,90 +33,6 @@ from findrama.weight_init import weight_init
 from findrama.models.activations import ACTIVATION_BY_NAME
 # endregion
 RMSNorm = nn.RMSNorm
-
-
-class DistHead(nn.Module):
-    """Distribution head for posterior and prior categorical logits."""
-    def __init__(self, image_feat_dim, hidden_state_dim, categorical_dim, class_dim, unimix_ratio=0.01, dtype=None, device=None) -> None:
-        super().__init__()
-        self.stoch_dim = categorical_dim
-        self.post_head = nn.Linear(image_feat_dim, categorical_dim*class_dim, dtype=dtype, device=device)
-        self.prior_head = nn.Linear(hidden_state_dim, categorical_dim*class_dim, dtype=dtype, device=device)
-        self.unimix_ratio = unimix_ratio
-        self.dtype=dtype
-        self.device=device
-    def unimix(self, logits, mixing_ratio=0.01):
-        # Mix logits with uniform noise for uniform-prior regularization.
-        if mixing_ratio > 0:
-            probs = F.softmax(logits, dim=-1)
-            mixed_probs = mixing_ratio * torch.ones_like(probs, dtype=self.dtype, device=self.device) / self.stoch_dim + (1-mixing_ratio) * probs
-            logits = torch.log(mixed_probs)
-        return logits
-    def forward_post(self, x):
-        logits = self.post_head(x)
-        logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
-        logits = self.unimix(logits, self.unimix_ratio)
-        return logits
-    def forward_prior(self, x):
-        logits = self.prior_head(x)
-        logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
-        logits = self.unimix(logits, self.unimix_ratio)
-        return logits
-
-
-class RewardHead(nn.Module):
-    def __init__(self, num_classes, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
-        super().__init__()
-        act = ACTIVATION_BY_NAME[act]
-        # Build backbone layers dynamically.
-        layers = []
-        for _ in range(layer_num):
-            layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
-            layers.append(RMSNorm(hidden_units, dtype=dtype, device=device))
-            layers.append(act())
-        self.backbone = nn.Sequential(*layers)
-        self.head = nn.Linear(hidden_units, num_classes, dtype=dtype, device=device)
-    def forward(self, feat):
-        feat = self.backbone(feat)
-        reward = self.head(feat)
-        return reward
-
-
-class TerminationHead(nn.Module):
-    def __init__(self, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
-        super().__init__()
-        act = ACTIVATION_BY_NAME[act]
-        # Build backbone layers dynamically.
-        layers = []
-        for _ in range(layer_num):
-            layers.append(nn.Linear(inp_dim, hidden_units, bias=True, dtype=dtype, device=device))
-            layers.append(RMSNorm(hidden_units, dtype=dtype, device=device))
-            layers.append(act())
-        self.backbone = nn.Sequential(*layers)
-        self.head = nn.Linear(hidden_units, 1, dtype=dtype, device=device)
-    def forward(self, feat):
-        feat = self.backbone(feat)
-        termination = self.head(feat)
-        termination = termination.squeeze(-1)  # Remove the trailing singleton dimension.
-        return termination
-
-
-class CategoricalKLDivLossWithFreeBits(nn.Module):
-    """KL with a per-step free-bits floor. DreamerV3 uses 1.0 nat (Hafner et al. 2023);
-    the floor prevents degenerate posterior=prior solutions where the latent carries no
-    information about the input."""
-    def __init__(self, free_bits) -> None:
-        super().__init__()
-        self.free_bits = free_bits
-    def forward(self, p_logits, q_logits):
-        p_dist = OneHotCategorical(logits=p_logits)
-        q_dist = OneHotCategorical(logits=q_logits)
-        kl_div = torch.distributions.kl.kl_divergence(p_dist, q_dist)
-        kl_div = reduce(kl_div, "B L D -> B L", "sum")
-        kl_div = kl_div.mean()
-        real_kl_div = kl_div
-        kl_div = torch.max(torch.ones_like(kl_div)*self.free_bits, kl_div)
-        return kl_div, real_kl_div
 
 
 class WorldModel(nn.Module):
@@ -397,7 +314,7 @@ class WorldModel(nn.Module):
         # When DirectionThresholds is a list, the direction loss is computed at each threshold and averaged.
         # This replaces the single-threshold (1%) target with a curve over thresholds.
         self.direction_thresholds = config.Models.WorldModel.get('DirectionThresholds', None)
-        if isinstance(self.direction_thresholds, (list, tuple)):
+        if self.direction_thresholds is not None:
             self.direction_thresholds = [float(t) for t in self.direction_thresholds]
         else:
             self.direction_thresholds = None
@@ -470,7 +387,7 @@ class WorldModel(nn.Module):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
     def calc_last_dist_feat(self, latent, action, inference_params=None):
@@ -483,14 +400,14 @@ class WorldModel(nn.Module):
             last_dist_feat = dist_feat[:, -1:]
             conditioned_last_dist_feat = self.condition_dist_feat(last_dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_last_dist_feat)
-            prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
+            prior_sample = self.straight_through_gradient(prior_logits, sample_mode="random_sample")
             prior_flattened_sample = self.flatten_sample(prior_sample)
         return prior_flattened_sample, conditioned_last_dist_feat
     def calc_last_post_feat(self, latent, action, current_obs, inference_params=None):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             embedding = self.encoder(current_obs)
             post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask(latent)
@@ -504,7 +421,7 @@ class WorldModel(nn.Module):
             post_feat = self._obs_out_layers(x)
             post_stat = self._obs_stat_layer(post_feat)
             post_logits = post_stat.reshape(list(post_stat.shape[:-1]) + [self.categorical_dim, self.categorical_dim])
-            post_sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            post_sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             post_flattened_sample = self.flatten_sample(post_sample)
         return post_flattened_sample, post_feat
     # Called only when using the Transformer backbone (requires KV cache).
@@ -514,7 +431,7 @@ class WorldModel(nn.Module):
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
             prior_logits = self.dist_head.forward_prior(conditioned_dist_feat)
             # Decode prior sample into observation.
-            prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
+            prior_sample = self.straight_through_gradient(prior_logits, sample_mode="random_sample")
             prior_flattened_sample = self.flatten_sample(prior_sample)
             if log_video:
                 obs_hat = self.obs_decoder(prior_flattened_sample)
@@ -531,7 +448,7 @@ class WorldModel(nn.Module):
             else:
                 termination_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=torch.bool)
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, conditioned_dist_feat
-    def stright_throught_gradient(self, logits, sample_mode="random_sample"):
+    def straight_through_gradient(self, logits, sample_mode="random_sample"):
         # Sanitize logits before building the categorical distribution.
         logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
         logits = torch.clamp(logits, min=-20.0, max=20.0)
@@ -572,7 +489,7 @@ class WorldModel(nn.Module):
             context_dist_feat = self.sequence_model(context_latent, sample_action)
             conditioned_context_dist_feat = self.condition_dist_feat(context_dist_feat)
             context_prior_logits = self.dist_head.forward_prior(conditioned_context_dist_feat)
-            context_prior_sample = self.stright_throught_gradient(context_prior_logits)
+            context_prior_sample = self.straight_through_gradient(context_prior_logits)
             context_flattened_sample = self.flatten_sample(context_prior_sample)
             current_sample = context_flattened_sample[:, -1:]
             current_dist_feat = conditioned_context_dist_feat[:, -1:]
@@ -591,7 +508,7 @@ class WorldModel(nn.Module):
                 current_dist_feat = self.condition_dist_feat(dist_feat)
                 self.dist_feat_buffer[:, i+1:i+2] = current_dist_feat
                 prior_logits = self.dist_head.forward_prior(current_dist_feat)
-                prior_sample = self.stright_throught_gradient(prior_logits)
+                prior_sample = self.straight_through_gradient(prior_logits)
                 current_sample = self.flatten_sample(prior_sample)
                 generated_samples.append(current_sample)
                 self.sample_buffer[:, i+1:i+2] = current_sample
@@ -639,12 +556,6 @@ class WorldModel(nn.Module):
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
-    def imagine_data2(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
-                     imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
-        return self._imagine_data_full_prefix(
-            agent, sample_obs, sample_action,
-            imagine_batch_size, imagine_batch_length, log_video, logger, global_step
-        )
     def update(self, obs, action, reward, termination, global_step, epoch_step,
                logger=None, accum_steps: int = 1, is_last_accum: bool = True,
                event_counts: torch.Tensor | None = None,
@@ -656,7 +567,7 @@ class WorldModel(nn.Module):
             # Encode observations into posterior samples.
             embedding = self.encoder(obs)
             post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+            sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
             # Reconstruct observations from samples.
             # The decoder returns the flat feature vector under MSE, or (mean, log_scale) under Student-t.

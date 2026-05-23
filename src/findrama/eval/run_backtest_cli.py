@@ -86,7 +86,7 @@ def main() -> int:
     from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.eval.backtest import GreedyDirectionPolicy, run_backtest
     from findrama.backtester import build_timeline
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])

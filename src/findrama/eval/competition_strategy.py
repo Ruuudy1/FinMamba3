@@ -104,7 +104,7 @@ def build_competition_strategy(
     """Construct a strategy from a Phase-A checkpoint, config, and normalization stats."""
     import yaml
     from findrama.config import DotDict
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     with open(config_path) as f:
         config = DotDict(yaml.safe_load(f))
     world_model = WorldModel(action_dim=1, config=config, device=torch.device(device)).to(device)

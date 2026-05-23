@@ -1,6 +1,6 @@
 """Transformer encoder and MLP decoder for Polymarket LOB features.
 
-Pluggable replacement for the image CNN in world_models.py. The encoder
+Pluggable replacement for the image CNN in world_model.py. The encoder
 must expose `output_flatten_dim` so DistHead wires identically.
 
 Input shape: (B, L, F) where F = K*F_level + F_tick (the flat feature

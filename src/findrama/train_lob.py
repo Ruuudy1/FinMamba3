@@ -145,7 +145,7 @@ def imagine_rollout(
                 feat = world_model.sequence_model(prefix_latent, prefix_action)
             feat = world_model.condition_dist_feat(feat[:, -1:])
             prior_logits = world_model.dist_head.forward_prior(feat)
-            prior_sample = world_model.stright_throught_gradient(prior_logits)
+            prior_sample = world_model.straight_through_gradient(prior_logits)
             prior_flat = world_model.flatten_sample(prior_sample)
             decoded.append(world_model.obs_decoder(prior_flat).cpu().numpy()[0, 0])
             if step != horizon - 1:
@@ -205,7 +205,7 @@ def _validation_metrics(
     ):
         embedding = world_model.encoder(obs)
         post_logits = world_model.dist_head.forward_post(embedding)
-        sample = world_model.stright_throught_gradient(post_logits)
+        sample = world_model.straight_through_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
         obs_hat = world_model.obs_decoder(flattened_sample)
         reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
@@ -218,7 +218,7 @@ def _validation_metrics(
         else:
             dist_feat = world_model.sequence_model(flattened_sample, action)
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
-        prior_sample = world_model.stright_throught_gradient(prior_logits, sample_mode="probs")
+        prior_sample = world_model.straight_through_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
         next_hat = world_model.obs_decoder(prior_flat)
     target_next = obs[:, 1:].detach().float()
@@ -441,7 +441,7 @@ def main() -> None:
         f"vs config {config.BasicSettings.FeatureDim}"
     )
     action_dim = 1
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")

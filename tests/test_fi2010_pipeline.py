@@ -651,7 +651,7 @@ def test_studentt_reconstruction_loss_fi2010_scalar_finite():
 # ===========================================================================
 
 def test_world_model_fi2010_constructs():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     assert wm.encoder_type == "lob"
@@ -659,7 +659,7 @@ def test_world_model_fi2010_constructs():
 
 
 def test_world_model_fi2010_stoch_flattened_dim():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     # CategoricalDim=4, ClassDim=4 → stoch_flattened_dim=16.
@@ -667,7 +667,7 @@ def test_world_model_fi2010_stoch_flattened_dim():
 
 
 def test_world_model_fi2010_update_returns_twelve_losses():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     B, L = 2, 8
@@ -682,7 +682,7 @@ def test_world_model_fi2010_update_returns_twelve_losses():
 
 
 def test_world_model_fi2010_encode_obs_shape():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     obs = torch.randn(2, 4, FI2010_FEATURE_DIM)
@@ -692,7 +692,7 @@ def test_world_model_fi2010_encode_obs_shape():
 
 
 def test_world_model_fi2010_direction_head_enabled_loss_finite():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Direction.Enabled = True
     cfg.Models.WorldModel.Direction.LossWeight = 0.5
@@ -709,7 +709,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
 
 
 def test_world_model_fi2010_regime_head_enabled_loss_finite():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Regime.Enabled = True
     cfg.Models.WorldModel.Regime.NumRegimes = 4
@@ -725,7 +725,7 @@ def test_world_model_fi2010_regime_head_enabled_loss_finite():
 
 
 def test_world_model_fi2010_studentt_decoder_loss_finite():
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Decoder.Kind = "studentt"
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))

@@ -59,7 +59,7 @@ def main() -> int:
     from findrama.agents import ActorCriticAgent
     from findrama.envs.lob_env import PolymarketLOBEnv
     from findrama.backtester.data_loader import build_timeline
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     from findrama.train_lob import _build_sequences, _populate_buffer
     with open(args.config) as f:
         config = DotDict(yaml.safe_load(f))

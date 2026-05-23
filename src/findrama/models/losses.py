@@ -2,6 +2,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import reduce
+from torch.distributions import OneHotCategorical
 # endregion
 
 
@@ -48,6 +50,26 @@ class SymLogTwoHotLoss(nn.Module):
         return loss.mean()
     def decode(self, output):
         return symexp(F.softmax(output, dim=-1) @ self.bins)
+
+
+class CategoricalKLDivLossWithFreeBits(nn.Module):
+    """KL with a per-step free-bits floor. DreamerV3 uses 1.0 nat (Hafner et al. 2023);
+    the floor prevents degenerate posterior=prior solutions where the latent carries no
+    information about the input."""
+    def __init__(self, free_bits) -> None:
+        super().__init__()
+        self.free_bits = free_bits
+    def forward(self, p_logits, q_logits):
+        p_dist = OneHotCategorical(logits=p_logits)
+        q_dist = OneHotCategorical(logits=q_logits)
+        kl_div = torch.distributions.kl.kl_divergence(p_dist, q_dist)
+        kl_div = reduce(kl_div, "B L D -> B L", "sum")
+        kl_div = kl_div.mean()
+        real_kl_div = kl_div
+        kl_div = torch.max(torch.ones_like(kl_div)*self.free_bits, kl_div)
+        return kl_div, real_kl_div
+
+
 if __name__ == "__main__":
     loss_func = SymLogTwoHotLoss(255, -20, 20)
     output = torch.randn(1, 1, 255).requires_grad_()

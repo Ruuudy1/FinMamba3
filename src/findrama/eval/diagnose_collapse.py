@@ -62,7 +62,7 @@ def _load_world_model(args: argparse.Namespace, device: torch.device):
     """Build a WorldModel from config and populate weights from checkpoint."""
     import yaml
     from findrama.config import DotDict, parse_args_and_update_config
-    from findrama.models.world_models import WorldModel
+    from findrama.models.world_model import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -123,7 +123,7 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
                 feat = wm.sequence_model(prefix_latent, prefix_action)
             feat = wm.condition_dist_feat(feat[:, -1:])
             prior_logits = wm.dist_head.forward_prior(feat)
-            prior_sample = wm.stright_throught_gradient(prior_logits)
+            prior_sample = wm.straight_through_gradient(prior_logits)
             prior_flat = wm.flatten_sample(prior_sample)
             decoded.append(wm.obs_decoder(prior_flat).cpu().numpy()[0, 0])
             if step != horizon - 1:
@@ -150,7 +150,7 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
     with torch.no_grad():
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
-        sample = wm.stright_throught_gradient(post_logits)
+        sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
             from findrama.models.attention import get_subsequent_mask_with_batch_length
@@ -194,7 +194,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
     with torch.no_grad():
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
-        sample = wm.stright_throught_gradient(post_logits)
+        sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
             from findrama.models.attention import get_subsequent_mask_with_batch_length
@@ -203,7 +203,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
         else:
             dist_feat = wm.sequence_model(flattened_sample, action)
         prior_logits = wm.dist_head.forward_prior(dist_feat[:, :-1])
-        prior_sample = wm.stright_throught_gradient(prior_logits, sample_mode="probs")
+        prior_sample = wm.straight_through_gradient(prior_logits, sample_mode="probs")
         prior_flat = wm.flatten_sample(prior_sample)
         next_hat = wm.obs_decoder(prior_flat)
     target_next = obs[:, 1:].detach().float()
