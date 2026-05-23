@@ -1,9 +1,9 @@
-# FinDrama3
+# FinMamba3
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
 [![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#the-team-)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-This repository contains the research and code behind FinDrama, our team's
+This repository contains the research and code behind FinMamba3, our team's
 investigation into whether Mamba-3 MIMO state-space models can learn
 limit-order-book (LOB) dynamics offline and warm-start a reinforcement-learning
 agent for Polymarket binary-outcome markets. It began as a fork of the Drama
@@ -26,19 +26,21 @@ evaluation are all rebuilt for financial microstructure.
           <br /><sub><b>Rudy Osuna</b></sub></a>
         <br /><sub><a href="https://www.linkedin.com/in/rudy-osuna/" title="LinkedIn">🔗 LinkedIn</a></sub>
         <br /><a href="#research-Ruuudy1" title="Research">🔬</a>
-        <a href="https://github.com/Ruuudy1/FinDrama3/commits?author=Ruuudy1" title="Code">💻</a>
+        <a href="https://github.com/Ruuudy1/FinMamba3/commits?author=Ruuudy1" title="Code">💻</a>
       </td>
       <td align="center" valign="top" width="14.28%">
         <a href="https://github.com/Hamzaq96">
           <img src="https://avatars.githubusercontent.com/u/30836331?s=100&v=4" width="100px;" alt="Hamza Qureshi"/>
           <br /><sub><b>Hamza Qureshi</b></sub></a>
         <br /><a href="#research-Hamzaq96" title="Research">🔬</a>
-        <a href="https://github.com/Ruuudy1/FinDrama3/commits?author=Hamzaq96" title="Code">💻</a>
+        <a href="https://github.com/Ruuudy1/FinMamba3/commits?author=Hamzaq96" title="Code">💻</a>
       </td>
       <td align="center" valign="top" width="14.28%">
-        <img src="https://avatars.githubusercontent.com/u/0?v=4" width="100px;" alt="Ivan Radoslavov"/>
-        <br /><sub><b>Ivan Radoslavov</b></sub>
-        <br /><a href="#research-ivan" title="Research">🔬</a>
+        <a href="https://github.com/iradosla0">
+          <img src="https://avatars.githubusercontent.com/u/229367996?s=100&v=4" width="100px;" alt="Ivan Radoslavov"/>
+          <br /><sub><b>Ivan Radoslavov</b></sub></a>
+        <br /><a href="#research-iradosla0" title="Research">🔬</a>
+        <a href="https://github.com/Ruuudy1/FinMamba3/commits?author=iradosla0" title="Code">💻</a>
       </td>
     </tr>
   </tbody>
@@ -50,7 +52,7 @@ evaluation are all rebuilt for financial microstructure.
 
 ## Overview
 
-FinDrama supports two interchangeable workflows for offline world-model
+FinMamba3 supports two interchangeable workflows for offline world-model
 pretraining:
 
 1. Polymarket LOB tick data (the original pipeline, 94-dim features).
@@ -75,7 +77,7 @@ reference path automatically with a log warning.
 
 Open in Colab in one click:
 
-https://colab.research.google.com/github/Ruuudy1/FinDrama3/blob/main/notebooks/colab_lob_pretrain.ipynb
+https://colab.research.google.com/github/Ruuudy1/FinMamba3/blob/main/notebooks/colab_lob_pretrain.ipynb
 
 Then:
 
