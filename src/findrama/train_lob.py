@@ -20,7 +20,7 @@ import torch
 import yaml
 from tqdm import tqdm
 warnings.filterwarnings("ignore")
-from envs.lob_features import (
+from findrama.envs.lob_features import (
     FLAT_FEATURE_NAMES,
     FEATURE_DIM_FLAT,
     F_LEVEL,
@@ -36,14 +36,14 @@ from envs.lob_features import (
     pick_longest_market,
     save_normalization,
 )
-from envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010, load_fi2010_split
-from config_utils import DotDict, parse_args_and_update_config
-from lob.backtester import build_timeline
-from replay_buffer import ReplayBuffer
-from training_steps import train_world_model_step
+from findrama.envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010, load_fi2010_split
+from findrama.config_utils import DotDict, parse_args_and_update_config
+from findrama.lob.backtester import build_timeline
+from findrama.replay_buffer import ReplayBuffer
+from findrama.training_steps import train_world_model_step
 # endregion
 logger = logging.getLogger(__name__)
-SRC_DIR = Path(__file__).resolve().parent
+SRC_DIR = Path(__file__).resolve().parents[1]
 
 
 def _populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
@@ -136,7 +136,7 @@ def imagine_rollout(
         prefix_action = action
         for step in range(horizon):
             if world_model.model == "Transformer":
-                from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+                from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
                 temporal_mask = get_subsequent_mask_with_batch_length(
                     prefix_latent.shape[1], prefix_latent.device
                 )
@@ -210,7 +210,7 @@ def _validation_metrics(
         obs_hat = world_model.obs_decoder(flattened_sample)
         reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
         if world_model.model == "Transformer":
-            from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+            from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
             temporal_mask = get_subsequent_mask_with_batch_length(
                 batch_length, flattened_sample.device
             )
@@ -359,7 +359,7 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
     device = torch.device(config.BasicSettings.Device)
-    from utils import WandbLogger, seed_np_torch
+    from findrama.utils import WandbLogger, seed_np_torch
     seed_np_torch(seed=config.BasicSettings.Seed)
     # Pick the data pipeline. Polymarket reads SQLite + per-tick CSV books;
     # FI-2010 reads a single space-separated text matrix per split.
@@ -442,7 +442,7 @@ def main() -> None:
         f"vs config {config.BasicSettings.FeatureDim}"
     )
     action_dim = 1
-    from sub_models.world_models import WorldModel
+    from findrama.sub_models.world_models import WorldModel
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")

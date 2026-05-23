@@ -28,9 +28,6 @@ import numpy as np
 import torch
 # endregion
 logger = logging.getLogger(__name__)
-SRC_DIR = Path(__file__).resolve().parents[1]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
 
 
 def parse_args() -> argparse.Namespace:
@@ -57,7 +54,7 @@ def _device_from_arg(arg: str | None) -> torch.device:
 
 def _filter_backtest_data(bt, spec: str):
     """Apply a regime split to the BacktestData lifecycle list."""
-    from eval.regime_split import time_split, volatility_split
+    from findrama.eval.regime_split import time_split, volatility_split
     if spec == "none":
         return bt, "all"
     if spec.startswith("time:"):
@@ -85,11 +82,11 @@ def main() -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     device = _device_from_arg(args.device)
     import yaml
-    from config_utils import DotDict, parse_args_and_update_config
-    from envs.polymarket_lob_env import PolymarketLOBEnv
-    from eval.backtest import GreedyDirectionPolicy, run_backtest
-    from lob.backtester import build_timeline
-    from sub_models.world_models import WorldModel
+    from findrama.config_utils import DotDict, parse_args_and_update_config
+    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.eval.backtest import GreedyDirectionPolicy, run_backtest
+    from findrama.lob.backtester import build_timeline
+    from findrama.sub_models.world_models import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])

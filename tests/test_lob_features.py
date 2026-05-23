@@ -3,8 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 import numpy as np
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from envs.lob_features import (  # noqa: E402
+from findrama.envs.lob_features import (  # noqa: E402
     F_LEVEL,
     F_TICK,
     F_TICK_BINARY,

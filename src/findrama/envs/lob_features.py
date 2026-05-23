@@ -18,10 +18,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
-if __package__ is None or __package__ == "":
-    import sys
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from lob.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
+from findrama.lob.backtester import BacktestData, OrderBookSnapshot, TickData, build_timeline
 # endregion
 logger = logging.getLogger(__name__)
 K_LEVELS = 10

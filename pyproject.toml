@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "findrama"
+version = "0.1.0"
+description = "Regime-modulated Mamba world model for Polymarket binary limit-order-books."
+requires-python = ">=3.10"
+dependencies = [
+    "setuptools==69.5.1",
+    "packaging>=24.0",
+    "ninja>=1.11",
+    "PyYAML>=6.0",
+    "einops==0.8.0",
+    "tqdm==4.66.4",
+    "numpy>=2,<3",
+    "pandas>=2.2,<3",
+    "pyarrow>=15.0",
+    "gymnasium>=1.0,<2",
+    "wandb",
+    "pytorch_warmup==0.1.1",
+]
+
+# The CUDA-built packages (torch, mamba_ssm, causal_conv1d, tilelang) are intentionally
+# omitted: they are provided by the environment (Colab) and the prebuilt WHEELS_REPO flow.
+
+[project.scripts]
+findrama-train = "findrama.train_lob:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

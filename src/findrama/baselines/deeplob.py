@@ -19,7 +19,7 @@ Use this as a benchmarking comparator, not as a component of the world model.
 from __future__ import annotations
 import torch
 import torch.nn as nn
-from envs.lob_features import F_LEVEL, K_LEVELS
+from findrama.envs.lob_features import F_LEVEL, K_LEVELS
 # endregion
 
 

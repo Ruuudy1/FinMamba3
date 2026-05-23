@@ -28,9 +28,7 @@ import torch
 import torch.nn.functional as F
 # endregion
 logger = logging.getLogger(__name__)
-SRC_DIR = Path(__file__).resolve().parents[1]
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
+SRC_DIR = Path(__file__).resolve().parents[2]
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,8 +84,8 @@ def _accuracy_brier(pred_probs: np.ndarray, labels: np.ndarray) -> tuple[float, 
 def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:
     """Run the world-model encoder + direction head on the val sequence."""
     import yaml
-    from config_utils import DotDict, parse_args_and_update_config
-    from sub_models.world_models import WorldModel
+    from findrama.config_utils import DotDict, parse_args_and_update_config
+    from findrama.sub_models.world_models import WorldModel
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
@@ -116,7 +114,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
         sample = wm.stright_throught_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
         if wm.model == "Transformer":
-            from sub_models.attention_blocks import get_subsequent_mask_with_batch_length
+            from findrama.sub_models.attention_blocks import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
         else:
@@ -138,8 +136,8 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
 
 def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torch.device) -> dict[str, float]:
     """Train DeepLOB on the train flat features and evaluate on val."""
-    from baselines.deeplob import DeepLOB
-    from envs.lob_features import F_LEVEL, K_LEVELS
+    from findrama.baselines.deeplob import DeepLOB
+    from findrama.envs.lob_features import F_LEVEL, K_LEVELS
     flat_train = train_seq.to_flat()
     flat_val = val_seq.to_flat()
     LEVEL_WIDTH = K_LEVELS * F_LEVEL
@@ -188,7 +186,7 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
 
 def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float]:
     """Fit LinearAR on train and evaluate direction labels on val."""
-    from baselines.linear_ar import LinearAR, LinearARConfig
+    from findrama.baselines.linear_ar import LinearAR, LinearARConfig
     flat_train = train_seq.to_flat().astype(np.float32)
     flat_val = val_seq.to_flat().astype(np.float32)
     cfg = LinearARConfig(lookback=16, threshold=threshold, midprice_index=80)
@@ -225,12 +223,12 @@ def main() -> int:
     thresholds = [float(t) for t in args.thresholds.split(",") if t.strip()]
     methods = [m.strip() for m in args.baselines.split(",") if m.strip()]
     import yaml
-    from config_utils import DotDict, parse_args_and_update_config
+    from findrama.config_utils import DotDict, parse_args_and_update_config
     with open(args.config, "r") as f:
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-    from train_lob import build_sequences
+    from findrama.train_lob import build_sequences
     norm_clip = getattr(cfg.BasicSettings, "NormClip", 8.0)
     aggregate_only = getattr(cfg.Models.WorldModel.Encoder, "AggregateOnly", False)
     train_seq, slug, _stats = build_sequences(

@@ -53,15 +53,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
-    src_dir = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(src_dir))
-    from config_utils import DotDict
-    from replay_buffer import ReplayBuffer
-    from agents import ActorCriticAgent
-    from envs.polymarket_lob_env import PolymarketLOBEnv
-    from lob.backtester.data_loader import build_timeline
-    from sub_models.world_models import WorldModel
-    from train_lob import _build_sequences, _populate_buffer
+    src_dir = Path(__file__).resolve().parents[2]
+    from findrama.config_utils import DotDict
+    from findrama.replay_buffer import ReplayBuffer
+    from findrama.agents import ActorCriticAgent
+    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.lob.backtester.data_loader import build_timeline
+    from findrama.sub_models.world_models import WorldModel
+    from findrama.train_lob import _build_sequences, _populate_buffer
     with open(args.config) as f:
         config = DotDict(yaml.safe_load(f))
     device = torch.device(args.device)

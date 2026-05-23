@@ -10,11 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import numpy as np
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_PATH = os.path.join(REPO_ROOT, "src")
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
-from eval.compare_direction import (  # noqa: E402
+from findrama.eval.compare_direction import (  # noqa: E402
     _accuracy_brier,
     _format_table,
     _label_directions,

@@ -12,21 +12,17 @@ import sys
 import unittest
 from pathlib import Path
 import numpy as np
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_PATH = os.path.join(REPO_ROOT, "src")
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
 try:
-    from envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
 except ModuleNotFoundError as exc:
     PolymarketLOBEnv = None
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
-from eval.backtest import run_backtest  # noqa: E402
-from eval.run_backtest_cli import _filter_backtest_data  # noqa: E402
-from lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
-from lob.backtester.strategy import (  # noqa: E402
+from findrama.eval.backtest import run_backtest  # noqa: E402
+from findrama.eval.run_backtest_cli import _filter_backtest_data  # noqa: E402
+from findrama.lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
+from findrama.lob.backtester.strategy import (  # noqa: E402
     MarketLifecycle,
     OrderBookLevel,
     OrderBookSnapshot,

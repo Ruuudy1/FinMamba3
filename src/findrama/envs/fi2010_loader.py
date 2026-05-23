@@ -21,7 +21,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
-from envs.lob_features import LOBSequence, compute_basic_tick_features
+from findrama.envs.lob_features import LOBSequence, compute_basic_tick_features
 # endregion
 logger = logging.getLogger(__name__)
 FI2010_K_LEVELS = 10

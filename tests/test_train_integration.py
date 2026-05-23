@@ -15,10 +15,6 @@ import pytest
 import torch
 from types import SimpleNamespace
 # endregion
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_PATH = os.path.join(REPO_ROOT, "src")
-if SRC_PATH not in sys.path:
-    sys.path.insert(0, SRC_PATH)
 
 
 def _make_namespace(d):
@@ -126,7 +122,7 @@ def _build_config(**overrides):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="WorldModel requires CUDA-built mamba_ssm")
 def test_world_model_update_returns_twelve_finite_losses():
-    from sub_models.world_models import WorldModel
+    from findrama.sub_models.world_models import WorldModel
     cfg = _build_config()
     device = torch.device("cuda")
     wm = WorldModel(action_dim=4, config=cfg, device=device).to(device)

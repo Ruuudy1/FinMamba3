@@ -4,10 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
-from eval.competition_strategy import FinDramaCompetitionStrategy  # noqa: E402
-from lob.backtester.strategy import (  # noqa: E402
+from findrama.envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
+from findrama.eval.competition_strategy import FinDramaCompetitionStrategy  # noqa: E402
+from findrama.lob.backtester.strategy import (  # noqa: E402
     MarketState,
     MarketView,
     OrderBookLevel,

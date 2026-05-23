@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint_utils
 from einops import rearrange, reduce
-from envs.lob_features import F_LEVEL, F_TICK, K_LEVELS
+from findrama.envs.lob_features import F_LEVEL, F_TICK, K_LEVELS
 # endregion
 RMSNorm = nn.RMSNorm
 

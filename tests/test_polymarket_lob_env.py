@@ -3,16 +3,15 @@ import math
 import sys
 import unittest
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 try:
-    from envs.polymarket_lob_env import PolymarketLOBEnv
+    from findrama.envs.polymarket_lob_env import PolymarketLOBEnv
 except ModuleNotFoundError as exc:
     PolymarketLOBEnv = None
     IMPORT_ERROR = exc
 else:
     IMPORT_ERROR = None
-from lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
-from lob.backtester.strategy import (  # noqa: E402
+from findrama.lob.backtester.data_loader import BacktestData, TickData  # noqa: E402
+from findrama.lob.backtester.strategy import (  # noqa: E402
     MarketLifecycle,
     OrderBookLevel,
     OrderBookSnapshot,
