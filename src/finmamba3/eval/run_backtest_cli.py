@@ -54,7 +54,11 @@ def _device_from_arg(arg: str | None) -> torch.device:
 
 def _filter_backtest_data(bt, spec: str):
     """Apply a regime split to the BacktestData lifecycle list."""
-    from finmamba3.eval.regime_split import time_split, volatility_split
+    from finmamba3.eval.regime_split import (
+        realized_vol_from_timeline,
+        time_split,
+        volatility_split,
+    )
     if spec == "none":
         return bt, "all"
     if spec.startswith("time:"):
@@ -66,10 +70,10 @@ def _filter_backtest_data(bt, spec: str):
         return bt, result.description
     if spec.startswith("volatility:"):
         quantile = float(spec.split(":", 1)[1])
-        # Use a degenerate empty realized_vol map; volatility_split will keep all
-        # markets in the train half. The CLI surface is here for completeness;
-        # populating realized_vol per slug is left for a future iteration.
-        result = volatility_split(bt.lifecycles, realized_vol={}, quantile=quantile)
+        # Vol is measured per market from the loaded books; the test half is the
+        # high-vol tail above the quantile, isolating the regime-shift split.
+        realized_vol = realized_vol_from_timeline(bt.timeline)
+        result = volatility_split(bt.lifecycles, realized_vol=realized_vol, quantile=quantile)
         keep_by_slug = {m.market_slug: True for m in result.test_markets}
         bt.lifecycles = [m for m in bt.lifecycles if m.market_slug in keep_by_slug]
         return bt, result.description

@@ -142,3 +142,65 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
   extra args, or set it in `lob.yaml`.
 - Phase B (after a Phase-A checkpoint exists, GPU):
   `python -m finmamba3.eval.imagination_smoke --checkpoint <ckpt>.pth --config configs/lob.yaml --data-train data/train --steps 200`
+
+## 2026-05-23 (post-restructure) - Parity verification + volatility-split wiring
+The repo was fully restructured (separation-of-concerns / SRP / DRY / open-closed).
+Package is now `finmamba3` under `src/finmamba3/`; train entry `python -m
+finmamba3.train --config configs/lob.yaml --dataset polymarket` (console script
+`finmamba3-train`); backtest CLI `python -m finmamba3.eval.run_backtest_cli`. This
+session interpreted the batch-64 baseline run, verified the restructure changed no
+behavior, and unblocked Experiment D.
+
+### Baseline run interpretation (batch-64 rerun, PRE-restructure code)
+- Reproduced the prediction exactly: early-stopped at step 18k, **best val 368.1977 @
+  step 13k**, ~38 min, GPU util ~43%. Beats the batch-512 run (val 390) on both loss and
+  wall-clock (~5x); re-confirms "optimize time-to-target-val-loss, not utilization %".
+- Early-stop fired because nothing improved after 13k -> 20k SampleMaxSteps is more than
+  this config needs (effectively ~13k-bound).
+- This was the **baseline** (`RegimeFiLM.Enabled: False`). The val-368 checkpoint on HF
+  (sj-hryi/FinDrama-checkpoints) was produced by PRE-restructure code, so the baseline
+  arm of Exp D will be retrained on the restructured code (owner's choice) to rule out
+  drift before any A/B.
+- Feature-MSE diagnostics (FeatureDim 100 = 10 levels x 8 [idx 0-79] + 20 tick [80-99],
+  binaries at 94-99): top-error features 59/64/67/72/75 are all deep book levels 7-9 --
+  expected (top-of-book reconstructs best, deep/sparse levels worst). The binary-market
+  features (94-99) are absent from the top-5, so Workstream A's features learn cleanly.
+  Divergent trends (feature_72 worsening, 75 improving) = benign capacity reallocation.
+  Cosmetic: pre-restructure code logged `feature_NN`; restructured train.py resolves
+  human names for known dims.
+
+### Restructure parity: PASS (and improved)
+- CPU suite scoped to `tests/`: **93 passed, 1 skipped, 0 failed** (handoff baseline was
+  89 / 4-skip / 1-fail; same 94-test total). The restructure fixed the pre-existing
+  FI-2010 split-validation failure and made 3 of the 4 formerly CUDA-skipped tests
+  CPU-runnable; the one remaining skip is `test_train_integration.py:123` (WorldModel
+  needs CUDA-built mamba_ssm). No regressions.
+- NOTE: run pytest scoped to `tests/`. A bare `pytest` aborts during collection on the
+  untracked `tmppolymarket-bot/` dir (`ImportError` from its `config`); that is a
+  separate vendored bot, unrelated to this package.
+
+### Volatility split WIRED (Experiment D unblocker)
+- BUG: `run_backtest_cli --regime-split volatility:Q` passed `realized_vol={}` to
+  `volatility_split`, so every market landed in the train half and the high-vol TEST set
+  was empty -- Exp D's distribution-shift comparison literally could not run.
+- FIX: added `realized_vol_from_timeline(timeline)` in `src/finmamba3/eval/regime_split.py`.
+  It reads each market's YES-book mid once per distinct book snapshot (forward-filled
+  repeats collapsed via `book_ts` so idle ticks don't deflate vol) and takes the std of
+  one-step fractional mid-returns. `run_backtest_cli` now computes it from `bt.timeline`
+  and feeds it to `volatility_split`. Semantics: `volatility:0.5` keeps the high-vol half
+  (vol > median) as the backtest set; threshold is over the eval data's markets.
+- Tests: `tests/test_regime_split.py` (5 new): vol ranking, forward-fill collapse,
+  single-observation omission, split routing, CLI filter. Full suite now **98 passed, 1
+  skipped**.
+
+### Next steps (revised)
+1. **Retrain both arms on restructured code (Colab).** Baseline (`RegimeFiLM.Enabled:
+   false`) -- confirm it reproduces val ~368 (training-level parity) -- then treatment
+   (`true`) and compare val loss. First cheap in-distribution signal.
+2. **Run Experiment D.** Per checkpoint: `python -m finmamba3.eval.run_backtest_cli
+   --world-checkpoint <ckpt> --config configs/lob.yaml --data-val data/validation
+   --regime-split volatility:0.5 --out reports/<arm>_highvol.json`. Claim: treatment's
+   edge over baseline is larger on the high-vol split than on the full set
+   (`--regime-split none`).
+3. Optional: the CLI currently keeps only the high-vol tail; add a matched low-vol arm if
+   a controlled low-vs-high comparison is wanted.
