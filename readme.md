@@ -39,6 +39,7 @@ evaluation are all rebuilt for financial microstructure.
         <a href="https://github.com/iradosla0">
           <img src="https://avatars.githubusercontent.com/u/229367996?s=100&v=4" width="100px;" alt="Ivan Radoslavov"/>
           <br /><sub><b>Ivan Radoslavov</b></sub></a>
+        <br /><sub><a href="https://www.linkedin.com/in/ivan-asen-radoslavov-375b832a8/" title="LinkedIn">🔗 LinkedIn</a></sub>
         <br /><a href="#research-iradosla0" title="Research">🔬</a>
         <a href="https://github.com/Ruuudy1/FinMamba3/commits?author=iradosla0" title="Code">💻</a>
       </td>
@@ -118,15 +119,15 @@ saved_models/lob/LOB/<run_id>/ckpt/world_model.pth
 ```
 
 The final cells upload checkpoints to the model repo
-`sj-hryi/FinDrama-checkpoints` under `checkpoints/lob/`, and stdout logs plus
-wandb summaries to the dataset repo `sj-hryi/FinDrama` under `logs/<run_date>/`.
+`sj-hryi/FinMamba3-checkpoints` under `checkpoints/lob/`, and stdout logs plus
+wandb summaries to the dataset repo `sj-hryi/FinMamba3` under `logs/<run_date>/`.
 
 ## Wheel Cache
 
 Compiled CUDA wheels (`causal-conv1d`, `mamba-ssm`) are cached in the dedicated
 wheels dataset repo so later runtimes skip the source build:
 
-https://huggingface.co/datasets/sj-hryi/FinDrama-wheels/tree/main
+https://huggingface.co/datasets/sj-hryi/FinMamba3-wheels/tree/main
 
 Wheels are keyed by Python version, PyTorch version, CUDA version, and GPU
 architecture (for example `wheels-py312-torch260-cu124-sm90`). The first run
@@ -139,10 +140,10 @@ build after updating the dependency stack or if a cached wheel becomes stale.
 ## Data
 
 Both supported datasets live in the data-only HuggingFace dataset repo
-`sj-hryi/FinDrama`; checkpoints and prebuilt wheels live in separate repos:
+`sj-hryi/FinMamba3`; checkpoints and prebuilt wheels live in separate repos:
 
 ```text
-sj-hryi/FinDrama                                             (dataset: data + logs)
+sj-hryi/FinMamba3                                             (dataset: data + logs)
   data/
     polymarket/
       train.tar.gz                                          Polymarket train bundle.
@@ -151,8 +152,8 @@ sj-hryi/FinDrama                                             (dataset: data + lo
       train/Train_Dst_NoAuction_DecPre_CF_7.txt             FI-2010 train.
       validation/Val_Dst_NoAuction_DecPre_CF_7.txt          FI-2010 val.
   logs/<run_date>/
-sj-hryi/FinDrama-checkpoints                                 (model: checkpoints/lob + world_model.pth)
-sj-hryi/FinDrama-wheels                                      (dataset: prebuilt CUDA wheels)
+sj-hryi/FinMamba3-checkpoints                                 (model: checkpoints/lob + world_model.pth)
+sj-hryi/FinMamba3-wheels                                      (dataset: prebuilt CUDA wheels)
 ```
 
 ### Polymarket
@@ -162,7 +163,7 @@ Download both splits with `huggingface_hub`:
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="sj-hryi/FinDrama",
+    repo_id="sj-hryi/FinMamba3",
     repo_type="dataset",
     allow_patterns=["data/polymarket/train.tar.gz", "data/polymarket/validation.tar.gz"],
     local_dir="./",
@@ -186,7 +187,7 @@ bundles. Pull them directly:
 ```python
 from huggingface_hub import snapshot_download
 snapshot_download(
-    repo_id="sj-hryi/FinDrama",
+    repo_id="sj-hryi/FinMamba3",
     repo_type="dataset",
     allow_patterns=[
         "data/fi2010/train/Train_Dst_NoAuction_DecPre_CF_7.txt",
@@ -292,7 +293,7 @@ src/findrama/
     world_model.py              Mamba3 MIMO world model (core orchestration)
     world_model_heads.py        DistHead / RewardHead / TerminationHead
     lob_encoder.py              Transformer-over-depth-tokens encoder + Student-t decoder
-    mamba_backbone.py           FinDrama sequence wrapper for upstream Mamba
+    mamba_backbone.py           FinMamba3 sequence wrapper for upstream Mamba
     transformer.py              Stochastic Transformer backbone
     attention.py                Attention blocks + KV cache
     regime_modulation.py        Regime FiLM modulator

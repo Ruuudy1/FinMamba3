@@ -101,7 +101,7 @@ training run (`fit_stats=True` on the train split).
 ## 4. How to run baseline vs treatment (Colab GPU)
 
 Mamba requires CUDA, so runs happen on Colab (the local box is CPU / Python 3.13). The
-prebuilt wheels `sj-hryi/FinDrama-wheels/wheels-py312-torch260-cu124-sm{80,89,90,...}` cover
+prebuilt wheels `sj-hryi/FinMamba3-wheels/wheels-py312-torch260-cu124-sm{80,89,90,...}` cover
 A100/L4/H100 and need no rebuild; the FiLM change is pure PyTorch and does not recompile the
 CUDA extensions.
 
