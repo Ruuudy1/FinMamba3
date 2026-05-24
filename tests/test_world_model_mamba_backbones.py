@@ -74,7 +74,7 @@ def _small_config(backbone="Mamba3"):
     # Disable optional auxiliary heads for backbone unit tests; they are
     # exercised end-to-end in the integration smoke test.
     wm.setdefault("Direction", {})["Enabled"] = False
-    from findrama.config import DotDict
+    from finmamba3.config import DotDict
     return DotDict(config)
 
 
@@ -95,7 +95,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
             sys.modules["pytorch_warmup"] = warmup
         _install_fake_mamba_modules()
     def test_mamba3_mimo_sequence_shape_and_update(self):
-        from findrama.models.world_model import WorldModel
+        from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
         model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
         self.assertEqual(model.model, "Mamba3")
@@ -111,7 +111,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         # update() now returns detached tensors so callers can defer GPU-CPU sync.
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_mamba2_fallback_constructs(self):
-        from findrama.models.world_model import WorldModel
+        from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba2")
         model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
         self.assertEqual(model.model, "Mamba2")
@@ -120,7 +120,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         out = model.sequence_model(latent, action)
         self.assertEqual(tuple(out.shape), (1, 3, config.Models.WorldModel.HiddenStateDim))
     def test_episodic_memory_path_runs_finite(self):
-        from findrama.models.world_model import WorldModel
+        from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
         em = config.Models.WorldModel.EpisodicMemory
         em.Enabled = True
@@ -140,7 +140,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         losses = model.update(obs, action, reward, termination, 1, 0)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_direction_head_path_runs_finite(self):
-        from findrama.models.world_model import WorldModel
+        from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
         config.Models.WorldModel.Direction.Enabled = True
         config.Models.WorldModel.Direction.NumClasses = 3
@@ -158,7 +158,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         self.assertEqual(len(losses), 12)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_regime_film_identity_at_init_and_update_finite(self):
-        from findrama.models.world_model import WorldModel
+        from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
         config.Models.WorldModel.RegimeFiLM.Enabled = True
         config.Models.WorldModel.RegimeFiLM.NumRegimes = 4

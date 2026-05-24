@@ -5,8 +5,8 @@ import os
 import sys
 import numpy as np
 import torch
-from findrama.baselines.deeplob import DeepLOB  # noqa: E402
-from findrama.baselines.linear_ar import LinearAR, LinearARConfig  # noqa: E402
+from finmamba3.baselines.deeplob import DeepLOB  # noqa: E402
+from finmamba3.baselines.linear_ar import LinearAR, LinearARConfig  # noqa: E402
 # endregion
 
 

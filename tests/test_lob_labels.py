@@ -5,7 +5,7 @@ import os
 import sys
 import numpy as np
 import torch
-from findrama.envs.lob_labels import (  # noqa: E402
+from finmamba3.envs.lob_labels import (  # noqa: E402
     TripleBarrierConfig,
     multi_threshold_direction_labels,
     triple_barrier_labels_numpy,

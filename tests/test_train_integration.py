@@ -122,7 +122,7 @@ def _build_config(**overrides):
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="WorldModel requires CUDA-built mamba_ssm")
 def test_world_model_update_returns_twelve_finite_losses():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _build_config()
     device = torch.device("cuda")
     wm = WorldModel(action_dim=4, config=cfg, device=device).to(device)

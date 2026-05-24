@@ -1,4 +1,4 @@
-# FinDrama Handoff: Regime-Modulated Mamba for Polymarket Binary LOBs
+# FinMamba3 Handoff: Regime-Modulated Mamba for Polymarket Binary LOBs
 
 Living log of what changed, what was tried, what was pivoted, and what is left.
 For the architecture/design rationale see `research_notes.md`.
@@ -7,9 +7,9 @@ For the architecture/design rationale see `research_notes.md`.
 Full pass to the PEP8-based style rules + SOLID/YAGNI principles, in six verified
 stages (CPU suite held at 89 passed / 4 CUDA-skipped / 1 pre-existing FI-2010 fail
 throughout):
-1. **Packaging.** Everything moved under `src/findrama/`; added `pyproject.toml`
-   (editable install). All intra-repo imports are absolute `findrama.*`; the ~17
-   `sys.path.insert` bootstraps are gone. Train with `python -m findrama.train`
+1. **Packaging.** Everything moved under `src/finmamba3/`; added `pyproject.toml`
+   (editable install). All intra-repo imports are absolute `finmamba3.*`; the ~17
+   `sys.path.insert` bootstraps are gone. Train with `python -m finmamba3.train`
    (was `python src/train_lob.py`); the notebook now does `pip install -e .`.
 2. **Renames.** `sub_models/`->`models/`, `lob/backtester/`->`backtester/`,
    `src/config_files/configure_*.yaml`->`configs/*.yaml`; modules renamed for
@@ -51,13 +51,13 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
 ## Changes by workstream
 | # | Workstream | Status | Key files |
 |---|-----------|--------|-----------|
-| A | Binary-market features (boundary dist/scaled depth, logit-mid velocity/accel, Amihud, variance ratio); 94->100 dims; width-aware normalization; gated by `Encoder.BinaryMarketFeatures` | Done, CPU-tested | `src/findrama/envs/lob_features.py`, `tests/test_lob_features.py`, `lob.yaml`, `src/findrama/train.py` |
-| B | Regime inference + FiLM modulator (zero-init hypernetwork, identity at init); wired into the Mamba block loop | Done, CPU-tested | `src/findrama/models/regime_modulation.py`, `src/findrama/models/mamba_backbone.py`, `tests/test_regime_modulation.py` |
-| C | Load-balance regularizer + 12-loss contract + `RegimeFiLM` config | Done, CPU-tested | `src/findrama/models/world_model.py`, `src/findrama/train_step.py`, `lob.yaml` |
-| Util | GPU-utilization fixes: batch 64->512, AccumSteps 2->1, BatchLength 32->64, Compile on, log every 50 steps, sampler with-replacement fallback, non-fatal tilelang | Done (config), GPU-validate | `lob.yaml`, `src/findrama/train_step.py`, `src/findrama/replay_buffer.py`, notebook |
+| A | Binary-market features (boundary dist/scaled depth, logit-mid velocity/accel, Amihud, variance ratio); 94->100 dims; width-aware normalization; gated by `Encoder.BinaryMarketFeatures` | Done, CPU-tested | `src/finmamba3/envs/lob_features.py`, `tests/test_lob_features.py`, `lob.yaml`, `src/finmamba3/train.py` |
+| B | Regime inference + FiLM modulator (zero-init hypernetwork, identity at init); wired into the Mamba block loop | Done, CPU-tested | `src/finmamba3/models/regime_modulation.py`, `src/finmamba3/models/mamba_backbone.py`, `tests/test_regime_modulation.py` |
+| C | Load-balance regularizer + 12-loss contract + `RegimeFiLM` config | Done, CPU-tested | `src/finmamba3/models/world_model.py`, `src/finmamba3/train_step.py`, `lob.yaml` |
+| Util | GPU-utilization fixes: batch 64->512, AccumSteps 2->1, BatchLength 32->64, Compile on, log every 50 steps, sampler with-replacement fallback, non-fatal tilelang | Done (config), GPU-validate | `lob.yaml`, `src/finmamba3/train_step.py`, `src/finmamba3/replay_buffer.py`, notebook |
 | LR | LR bumped ~3x for the 4x effective batch (Laprop 4e-5->1.2e-4, Adam 1e-4->3e-4, warmup 500->1000) | Done | `lob.yaml` |
-| E | Competition adapter `FinDramaCompetitionStrategy` (reuses `extract_features` over a rolling `TickData` window = zero train/serve skew) | Done; feature path CPU-tested, model forward GPU-pending | `src/findrama/eval/competition_strategy.py`, `tests/test_competition_strategy.py` |
-| F | Phase B imagination trainer (rewrote the broken `imagination_smoke.py`) | Scaffold; GPU + prereqs pending | `src/findrama/eval/imagination_smoke.py` |
+| E | Competition adapter `FinMamba3CompetitionStrategy` (reuses `extract_features` over a rolling `TickData` window = zero train/serve skew) | Done; feature path CPU-tested, model forward GPU-pending | `src/finmamba3/eval/competition_strategy.py`, `tests/test_competition_strategy.py` |
+| F | Phase B imagination trainer (rewrote the broken `imagination_smoke.py`) | Scaffold; GPU + prereqs pending | `src/finmamba3/eval/imagination_smoke.py` |
 | G | Architecture/design write-up | Done | `research_notes.md` |
 | D | Baseline-vs-treatment + distribution-shift eval | Pending (Colab GPU) | commands in `research_notes.md` |
 
@@ -82,7 +82,7 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
   path** (DreamerV3 style), which runs entirely in the WM latent space and avoids the obs mismatch.
   The old `imagination_smoke.py` was broken (stale agent/checkpoint signatures, wrong obs); it was
   rewritten to the imagination path.
-- **Competition adapter realization:** FinDrama's `src/findrama/backtester/strategy.py` *is* the
+- **Competition adapter realization:** FinMamba3's `src/finmamba3/backtester/strategy.py` *is* the
   competition `BaseStrategy` interface, so the adapter targets it directly and reuses the training
   feature pipeline for zero skew.
 
@@ -141,4 +141,4 @@ regimes) than an unmodulated sequence model, on Polymarket binary-outcome LOBs.
 - Treatment: add `'--Models.WorldModel.RegimeFiLM.Enabled', 'true'` to the notebook's `run_train`
   extra args, or set it in `lob.yaml`.
 - Phase B (after a Phase-A checkpoint exists, GPU):
-  `python -m findrama.eval.imagination_smoke --checkpoint <ckpt>.pth --config configs/lob.yaml --data-train data/train --steps 200`
+  `python -m finmamba3.eval.imagination_smoke --checkpoint <ckpt>.pth --config configs/lob.yaml --data-train data/train --steps 200`

@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 import numpy as np
-from findrama.envs.lob_features import (  # noqa: E402
+from finmamba3.envs.lob_features import (  # noqa: E402
     F_LEVEL,
     F_TICK,
     F_TICK_BINARY,

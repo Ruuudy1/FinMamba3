@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import numpy as np
-from findrama.envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
-from findrama.eval.competition_strategy import FinDramaCompetitionStrategy  # noqa: E402
-from findrama.backtester.strategy import (  # noqa: E402
+from finmamba3.envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
+from finmamba3.eval.competition_strategy import FinMamba3CompetitionStrategy  # noqa: E402
+from finmamba3.backtester.strategy import (  # noqa: E402
     MarketState,
     MarketView,
     OrderBookLevel,
@@ -36,7 +36,7 @@ class CompetitionStrategyFeatureTest(unittest.TestCase):
             per_tick_std=np.ones(F_TICK_BINARY, dtype=np.float32),
             clip_value=8.0,
         )
-        strategy = FinDramaCompetitionStrategy(
+        strategy = FinMamba3CompetitionStrategy(
             world_model=SimpleNamespace(direction_head=object()),
             stats=stats, mid_index=80, device="cpu",
         )
@@ -59,7 +59,7 @@ class CompetitionStrategyFeatureTest(unittest.TestCase):
             clip_value=8.0,
         )
         with self.assertRaises(ValueError):
-            FinDramaCompetitionStrategy(
+            FinMamba3CompetitionStrategy(
                 world_model=SimpleNamespace(direction_head=None),
                 stats=stats, mid_index=80, device="cpu",
             )

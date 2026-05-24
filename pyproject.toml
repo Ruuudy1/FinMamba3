@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "findrama"
+name = "finmamba3"
 version = "0.1.0"
 description = "Regime-modulated Mamba world model for Polymarket binary limit-order-books."
 requires-python = ">=3.10"
@@ -26,7 +26,7 @@ dependencies = [
 # omitted: they are provided by the environment (Colab) and the prebuilt WHEELS_REPO flow.
 
 [project.scripts]
-findrama-train = "findrama.train:main"
+finmamba3-train = "finmamba3.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

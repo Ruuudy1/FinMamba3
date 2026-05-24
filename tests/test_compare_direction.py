@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import numpy as np
-from findrama.eval.compare_direction import (  # noqa: E402
+from finmamba3.eval.compare_direction import (  # noqa: E402
     _accuracy_brier,
     _format_table,
     _label_directions,

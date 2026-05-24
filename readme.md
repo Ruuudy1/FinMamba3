@@ -1,6 +1,6 @@
 # FinMamba3
 <!-- ALL-CONTRIBUTORS-BADGE:START - Do not remove or modify this section -->
-[![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#the-team-)
+[![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#the-team)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
 This repository contains the research and code behind FinMamba3, our team's
@@ -106,7 +106,7 @@ The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
 downloads the chosen dataset, and runs:
 
 ```bash
-python -m findrama.train \
+python -m finmamba3.train \
     --config configs/fi2010.yaml \
     --dataset fi2010 \
     --JointTrainAgent.SampleMaxSteps 20000
@@ -170,10 +170,10 @@ snapshot_download(
 )
 ```
 
-Or use the helper in `src/findrama/hf_hub.py`:
+Or use the helper in `src/finmamba3/hf_hub.py`:
 
 ```python
-from findrama.hf_hub import download_data
+from finmamba3.hf_hub import download_data
 train_zip, val_zip = download_data(local_dir="./", revision=None)
 ```
 
@@ -198,7 +198,7 @@ snapshot_download(
 ```
 
 The trainer copies these into `data/train/` and `data/validation/`, then
-`src/findrama/envs/fi2010_loader.py` parses the (149, N_events) matrix into a 46-dim
+`src/finmamba3/envs/fi2010_loader.py` parses the (149, N_events) matrix into a 46-dim
 flat feature vector: 10 levels of (ask_price, ask_size, bid_price, bid_size)
 plus 6 derived tick aggregates (mid, spread, log_spread, imbalance,
 microprice, log_total_vol). The published 5-horizon direction labels are
@@ -223,13 +223,13 @@ pip install -r requirements.txt
 Polymarket smoke run:
 
 ```bash
-python -m findrama.train --hours-train 1 --hours-val 0.25 --JointTrainAgent.SampleMaxSteps 20
+python -m finmamba3.train --hours-train 1 --hours-val 0.25 --JointTrainAgent.SampleMaxSteps 20
 ```
 
 FI-2010 smoke run:
 
 ```bash
-python -m findrama.train \
+python -m finmamba3.train \
     --config configs/fi2010.yaml \
     --dataset fi2010 \
     --JointTrainAgent.SampleMaxSteps 20
@@ -274,8 +274,8 @@ configs/
   lob_mamba2.yaml               Mamba-2 backbone for the architecture sweep.
   lob_transformer.yaml          Transformer backbone for the architecture sweep.
   lob_diagnose.yaml             Collapse-diagnosis knobs.
-src/findrama/
-  train.py                      LOB pretraining entrypoint (python -m findrama.train)
+src/finmamba3/
+  train.py                      LOB pretraining entrypoint (python -m finmamba3.train)
   sequence_builder.py           Build normalized LOB sequences; populate the replay buffer
   train_step.py                 World-model update step
   config.py                     DotDict + dotted CLI config overrides
@@ -373,7 +373,7 @@ ablation table can be produced with one command per backbone:
 
 ### Episodic and retrieval-augmented memory (arxiv 2506.06326, 2602.16192, 2202.08417)
 
-The repo's `EpisodicMemory` (`src/findrama/models/lob_heads.py`) is a CPU-side
+The repo's `EpisodicMemory` (`src/finmamba3/models/lob_heads.py`) is a CPU-side
 top-k cosine retriever with FIFO eviction. New: `UseNovelty` flag turns the
 write policy into a KL-novelty filter so the buffer becomes a regime catalog
 rather than a sliding window of recent states. The `lob_em.yaml`
@@ -398,7 +398,7 @@ enables the novelty-filtered variant. Both compare against the default (off).
 ### LOB-specific deep-learning baselines
 
 We ship a port of DeepLOB (Zhang et al. 2018) and a closed-form linear AR
-baseline at `src/findrama/baselines/`. Recent transformer-based competitors worth
+baseline at `src/finmamba3/baselines/`. Recent transformer-based competitors worth
 adding next: TLOB (Bertini et al., arxiv 2502.15757) with dual spatial/
 temporal attention; LiT (Frontiers AI 2025) with structured patches; HLOB
 (ScienceDirect 2024) with persistence-aware blocks. The shared LOBFrame
@@ -411,7 +411,7 @@ report numbers on Polymarket so the reviewer can compare regimes.
 median half-spread on Polymarket near 200 bps - one to two orders of
 magnitude wider than equity LOBs. This is why per-tick mid changes are
 dominated by spread-bouncing noise rather than signal, and why the new
-`src/findrama/envs/bar_aggregation.py` module is essential for an honest training
+`src/finmamba3/envs/bar_aggregation.py` module is essential for an honest training
 target. The `SoK: Decentralized Prediction Markets` paper (arxiv 2510.15612)
 is the right taxonomy citation for positioning the dataset.
 
@@ -427,7 +427,7 @@ with Mamba.
 
 Polymarket median half-spread is roughly 200 bps. Raw per-tick mid changes
 on Polymarket are mostly spread-bouncing noise, not signal. Three layered
-denoising tools live in `src/findrama/envs/`:
+denoising tools live in `src/finmamba3/envs/`:
 
 1. **Bar aggregation** (`bar_aggregation.py`). Replace the raw tick stream
    with one of: time bars (5s/30s default), volume bars, dollar bars,
@@ -489,18 +489,18 @@ Enable all three at once via `lob_full_ablation.yaml`.
 
 ## Evaluation
 
-Three CLIs in `src/findrama/eval/` consume a trained world-model checkpoint and emit
+Three CLIs in `src/finmamba3/eval/` consume a trained world-model checkpoint and emit
 the artifacts the paper's evaluation table needs.
 
 ### Diagnose a checkpoint
 
-`src/findrama/eval/diagnose_collapse.py` regenerates the 32-step imagine rollout, computes
+`src/finmamba3/eval/diagnose_collapse.py` regenerates the 32-step imagine rollout, computes
 posterior and prior categorical entropy on a val batch, and prints the top
 per-feature val MSE. Use after a Phase A run that ended with
 `Imagine/mid_norm_std = 0` or an unexpectedly large `val_loss`.
 
 ```bash
-python -m findrama.eval.diagnose_collapse \
+python -m finmamba3.eval.diagnose_collapse \
     --checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
     --config configs/lob.yaml \
     --data-val data/validation \
@@ -513,13 +513,13 @@ Outputs: `notes/diagnose_rollout_<slug>.npy`,
 
 ### Compare against direction-prediction baselines
 
-`src/findrama/eval/compare_direction.py` evaluates the world-model direction head,
+`src/finmamba3/eval/compare_direction.py` evaluates the world-model direction head,
 DeepLOB (trained from scratch on the train split), and a closed-form LinearAR
 on the same val split, across one or more direction thresholds. Emits a
 markdown table.
 
 ```bash
-python -m findrama.eval.compare_direction \
+python -m finmamba3.eval.compare_direction \
     --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
     --config configs/lob.yaml \
     --data-train data/train --data-val data/validation \
@@ -531,12 +531,12 @@ python -m findrama.eval.compare_direction \
 
 ### Run a backtest with a frozen world model
 
-`src/findrama/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen
+`src/finmamba3/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen
 world model, runs `run_backtest` against `PolymarketLOBEnv`, and writes
 `BacktestMetrics` (PnL, Sharpe, MaxDD, win rate, portfolio curve) as JSON.
 
 ```bash
-python -m findrama.eval.run_backtest_cli \
+python -m finmamba3.eval.run_backtest_cli \
     --world-checkpoint saved_models/lob/LOB/<run_id>/ckpt/world_model.pth \
     --config configs/lob.yaml \
     --data-val data/validation \

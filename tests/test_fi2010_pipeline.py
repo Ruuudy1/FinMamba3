@@ -11,7 +11,7 @@ import pytest
 import torch
 
 
-from findrama.envs.fi2010_loader import (
+from finmamba3.envs.fi2010_loader import (
     FI2010Sequence,
     FI2010_FEATURE_DIM,
     FI2010_F_LEVEL,
@@ -22,7 +22,7 @@ from findrama.envs.fi2010_loader import (
     _remap_labels,
     load_fi2010_split,
 )
-from findrama.envs.lob_features import (
+from finmamba3.envs.lob_features import (
     LOBSequence,
     apply_normalization,
     compute_basic_tick_features,
@@ -135,7 +135,7 @@ def split_dir(tmp_path):
 
 def _fi2010_world_model_config():
     """Minimal WorldModel config for FI-2010 (CPU, fake Mamba, 46-dim obs)."""
-    from findrama.config import DotDict
+    from finmamba3.config import DotDict
     return DotDict({
         "BasicSettings": {
             "ObsMode": "features",
@@ -529,7 +529,7 @@ def test_make_aggregate_only_zeros_per_level():
 # ===========================================================================
 
 def _fi2010_encoder():
-    from findrama.models.lob_encoder import LOBEncoder
+    from finmamba3.models.lob_encoder import LOBEncoder
     return LOBEncoder(
         k_levels=FI2010_K_LEVELS,
         f_level=FI2010_F_LEVEL,
@@ -571,7 +571,7 @@ def test_lob_encoder_fi2010_batch_independence():
 # ===========================================================================
 
 def test_lob_reconstruction_loss_fi2010_scalar_finite():
-    from findrama.models.lob_encoder import LOBReconstructionLoss
+    from finmamba3.models.lob_encoder import LOBReconstructionLoss
     loss_fn = LOBReconstructionLoss(
         k_levels=FI2010_K_LEVELS,
         f_level=FI2010_F_LEVEL,
@@ -588,7 +588,7 @@ def test_lob_reconstruction_loss_fi2010_scalar_finite():
 
 
 def test_lob_reconstruction_loss_fi2010_feature_weight_shape():
-    from findrama.models.lob_encoder import LOBReconstructionLoss
+    from finmamba3.models.lob_encoder import LOBReconstructionLoss
     loss_fn = LOBReconstructionLoss(
         k_levels=FI2010_K_LEVELS,
         f_level=FI2010_F_LEVEL,
@@ -601,7 +601,7 @@ def test_lob_reconstruction_loss_fi2010_feature_weight_shape():
 
 
 def test_lob_reconstruction_loss_fi2010_size_indices_upweighted():
-    from findrama.models.lob_encoder import LOBReconstructionLoss
+    from finmamba3.models.lob_encoder import LOBReconstructionLoss
     loss_fn = LOBReconstructionLoss(
         k_levels=FI2010_K_LEVELS,
         f_level=FI2010_F_LEVEL,
@@ -622,7 +622,7 @@ def test_lob_reconstruction_loss_fi2010_size_indices_upweighted():
 
 
 def test_studentt_reconstruction_loss_fi2010_scalar_finite():
-    from findrama.models.lob_encoder import StudentTLOBDecoder, StudentTReconstructionLoss
+    from finmamba3.models.lob_encoder import StudentTLOBDecoder, StudentTReconstructionLoss
     decoder = StudentTLOBDecoder(
         stoch_dim=16,
         hidden_dim=32,
@@ -651,7 +651,7 @@ def test_studentt_reconstruction_loss_fi2010_scalar_finite():
 # ===========================================================================
 
 def test_world_model_fi2010_constructs():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     assert wm.encoder_type == "lob"
@@ -659,7 +659,7 @@ def test_world_model_fi2010_constructs():
 
 
 def test_world_model_fi2010_stoch_flattened_dim():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     # CategoricalDim=4, ClassDim=4 → stoch_flattened_dim=16.
@@ -667,7 +667,7 @@ def test_world_model_fi2010_stoch_flattened_dim():
 
 
 def test_world_model_fi2010_update_returns_twelve_losses():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     B, L = 2, 8
@@ -682,7 +682,7 @@ def test_world_model_fi2010_update_returns_twelve_losses():
 
 
 def test_world_model_fi2010_encode_obs_shape():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
     obs = torch.randn(2, 4, FI2010_FEATURE_DIM)
@@ -692,7 +692,7 @@ def test_world_model_fi2010_encode_obs_shape():
 
 
 def test_world_model_fi2010_direction_head_enabled_loss_finite():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Direction.Enabled = True
     cfg.Models.WorldModel.Direction.LossWeight = 0.5
@@ -709,7 +709,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
 
 
 def test_world_model_fi2010_regime_head_enabled_loss_finite():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Regime.Enabled = True
     cfg.Models.WorldModel.Regime.NumRegimes = 4
@@ -725,7 +725,7 @@ def test_world_model_fi2010_regime_head_enabled_loss_finite():
 
 
 def test_world_model_fi2010_studentt_decoder_loss_finite():
-    from findrama.models.world_model import WorldModel
+    from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     cfg.Models.WorldModel.Decoder.Kind = "studentt"
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
@@ -742,7 +742,7 @@ def test_world_model_fi2010_studentt_decoder_loss_finite():
 # ===========================================================================
 
 def test_e2e_loader_to_normalized_flat(split_dir, tmp_path):
-    from findrama.envs.lob_features import save_normalization, load_normalization
+    from finmamba3.envs.lob_features import save_normalization, load_normalization
     bundle = load_fi2010_split(split_dir, split="train", horizon=10)
     seq = bundle.sequence
     stats = fit_normalization(seq, clip_value=8.0)
@@ -757,7 +757,7 @@ def test_e2e_loader_to_normalized_flat(split_dir, tmp_path):
 
 
 def test_e2e_normalization_stats_survive_serialization(split_dir, tmp_path):
-    from findrama.envs.lob_features import save_normalization, load_normalization
+    from finmamba3.envs.lob_features import save_normalization, load_normalization
     bundle = load_fi2010_split(split_dir, split="train", horizon=10)
     stats = fit_normalization(bundle.sequence)
     norm_path = tmp_path / "norm.json"
