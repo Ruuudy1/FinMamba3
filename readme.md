@@ -32,6 +32,7 @@ evaluation are all rebuilt for financial microstructure.
         <a href="https://github.com/Hamzaq96">
           <img src="https://avatars.githubusercontent.com/u/30836331?s=100&v=4" width="100px;" alt="Hamza Qureshi"/>
           <br /><sub><b>Hamza Qureshi</b></sub></a>
+        <br \><sub><a href="https://www.linkedin.com/in/hamza-qureshi-98373115a/" title="LinkedIn">🔗 LinkedIn</a></sub>
         <br /><a href="#research-Hamzaq96" title="Research">🔬</a>
         <a href="https://github.com/Ruuudy1/FinMamba3/commits?author=Hamzaq96" title="Code">💻</a>
       </td>
