@@ -97,7 +97,8 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
             except ImportError:
                 logger.warning(
                     "[mamba] TileLang Mamba3 MIMO kernel NOT available; "
-                    "MIMO will use the slower Python reference path."
+                    "MIMO requires this kernel and will raise at model "
+                    "construction without it."
                 )
     return getattr(module, class_name)
 

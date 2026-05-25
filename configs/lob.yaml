@@ -123,9 +123,12 @@ Models:
       mimo_rank: 4
       d_state: 128            # Mamba-3 paper (arXiv:2603.15569) shows d_state=64 matches
                               # Mamba-2 d_state=128 at the same perplexity; 128 is over-
-                              # provisioned but kept until empirical validation.
+                              # provisioned but kept until empirical validation. MIMO at
+                              # d_state=128 fits A100/H100/B200 (sm_80/sm_90/sm_100); the
+                              # notebook drops it to 64 on ~100 KB cards (L4, sm_120).
       headdim: 64
-      chunk_size: 16
+      chunk_size: 16          # MIMO default; the notebook floors this at 8 (the kernel
+                              # minimum) on non-H100 GPUs to fit their shared memory.
       is_outproj_norm: false
       rope_fraction: 0.5
     Direction:
