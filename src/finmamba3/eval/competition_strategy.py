@@ -78,12 +78,16 @@ class FinMamba3CompetitionStrategy(BaseStrategy):
         view = state.markets[slug]
         flat = self._feature_vector(slug, view, state.timestamp)
         x = torch.from_numpy(flat.astype(np.float32)).to(self.device).reshape(1, 1, -1)
-        latent = self.world_model.encode_obs(x)
-        dist_feat = self.world_model.sequence_model(
-            latent[:, -1:],
-            torch.zeros((1, 1), dtype=torch.long, device=self.device),
-        )
-        direction = int(self.world_model.direction_head(dist_feat).argmax(dim=-1).item())
+        # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+        with torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16, enabled=self.world_model.use_amp
+        ):
+            latent = self.world_model.encode_obs(x)
+            dist_feat = self.world_model.sequence_model(
+                latent[:, -1:],
+                torch.zeros((1, 1), dtype=torch.long, device=self.device),
+            )
+            direction = int(self.world_model.direction_head(dist_feat).argmax(dim=-1).item())
         # A bullish call buys YES; a bearish call buys NO (the competition-correct way to
         # express downside, since selling YES with no inventory is rejected).
         if direction == 2:

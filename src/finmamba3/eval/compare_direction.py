@@ -108,7 +108,10 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     windows = np.stack([flat[s : s + L] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
-    with torch.no_grad():
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)

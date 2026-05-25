@@ -58,7 +58,11 @@ def imagine_rollout(
     obs = torch.from_numpy(ctx).float().to(device, non_blocking=True).unsqueeze(0)
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
     decoded: list[np.ndarray] = []
-    with torch.no_grad():
+    # Match training/validation autocast: the MIMO TileLang kernel only codegens a
+    # bf16 MMA path, so an unwrapped FP32 sequence_model call fails nvcc compilation.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
+    ):
         ctx_latent = world_model.encode_obs(obs)
         prefix_latent = ctx_latent
         prefix_action = action
@@ -75,7 +79,7 @@ def imagine_rollout(
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.straight_through_gradient(prior_logits)
             prior_flat = world_model.flatten_sample(prior_sample)
-            decoded.append(world_model.obs_decoder(prior_flat).cpu().numpy()[0, 0])
+            decoded.append(world_model.obs_decoder(prior_flat).float().cpu().numpy()[0, 0])
             if step != horizon - 1:
                 next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
