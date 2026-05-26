@@ -571,12 +571,11 @@ class WorldModel(nn.Module):
             flattened_sample = self.flatten_sample(sample)
             # Reconstruct observations from samples.
             # The decoder returns the flat feature vector under MSE, or (mean, log_scale) under Student-t.
-            decoder_out = self.obs_decoder(flattened_sample)
             if self.decoder_kind == 'studentt':
-                obs_hat_mean, obs_hat_log_scale = decoder_out
+                obs_hat_mean, obs_hat_log_scale = self.obs_decoder(flattened_sample)
                 obs_hat = obs_hat_mean
             else:
-                obs_hat = decoder_out
+                obs_hat = self.obs_decoder(flattened_sample)
             # Compute sequence-model hidden states.
             regime_logits = None
             if self.model == 'Transformer':
