@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+win_nvcc="/mnt/host/c/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8/bin/nvcc.exe"
+ccbin="C:\\Program Files (x86)\\Microsoft Visual Studio\\2019\\BuildTools\\VC\\Tools\\MSVC\\14.29.30133\\bin\\Hostx64\\x64"
+args=()
+convert_path() {
+  local value="$1"
+  if [[ "$value" == /* ]]; then
+    wslpath -w "$value"
+  else
+    printf '%s' "$value"
+  fi
+}
+while (($#)); do
+  case "$1" in
+    -I/*)
+      args+=("-I$(convert_path "${1:2}")")
+      shift
+      ;;
+    -I)
+      args+=("-I" "$(convert_path "$2")")
+      shift 2
+      ;;
+    -o)
+      args+=("-o" "$(convert_path "$2")")
+      shift 2
+      ;;
+    /*)
+      args+=("$(convert_path "$1")")
+      shift
+      ;;
+    *)
+      args+=("$1")
+      shift
+      ;;
+  esac
+done
+exec "$win_nvcc" -ccbin "$ccbin" "${args[@]}"
