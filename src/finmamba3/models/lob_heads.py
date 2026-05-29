@@ -233,14 +233,21 @@ class SettlementHead(nn.Module):
         time_to_expiry_frac in [0, 1]: 1 at start, 0 at expiry. Weighting by
         (1 - frac) puts more pressure near expiry where the binary outcome
         becomes most predictable.
+
+        NaN entries in `outcome` (unresolved markets) are masked out: they
+        contribute zero to the loss and zero to the denominator, so a batch
+        with no resolved markets returns 0 without producing NaN gradients.
+        When all outcomes are finite the result equals the unmasked mean.
         """
+        outcome = outcome.to(logits.dtype)
+        # mask.sum() drives a single device-side reduction per step; the cost is amortized over the rest of the loss compute.
+        mask = torch.isfinite(outcome).to(logits.dtype)
+        safe_outcome = torch.where(torch.isnan(outcome), torch.zeros_like(outcome), outcome)
+        per = F.binary_cross_entropy_with_logits(logits, safe_outcome, reduction="none")
         if time_to_expiry_frac is None:
-            return F.binary_cross_entropy_with_logits(logits, outcome.to(logits.dtype))
+            return (per * mask).sum() / mask.sum().clamp(min=1.0)
         weight = (1.0 - time_to_expiry_frac.clamp(min=0.0, max=1.0)).to(logits.dtype)
-        per = F.binary_cross_entropy_with_logits(
-            logits, outcome.to(logits.dtype), reduction="none"
-        )
-        return (per * weight).mean()
+        return (per * weight * mask).sum() / mask.sum().clamp(min=1.0)
 
 
 class EpisodicMemoryFuser(nn.Module):

@@ -38,12 +38,15 @@ def _settlement_yes_outcome(settlement) -> float | None:
 def populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
     flat = seq.to_flat()
     T = flat.shape[0]
+    yes_outcome = seq.yes_outcome
     for t in range(T):
+        outcome_t = float(yes_outcome[t]) if yes_outcome is not None else float('nan')
         buffer.append(
             obs=flat[t],
             action=0,
             reward=0.0,
             termination=0.0,
+            outcome=outcome_t,
         )
     logger.info(f"replay buffer: loaded {T} ticks for market {seq.market_slug}")
 

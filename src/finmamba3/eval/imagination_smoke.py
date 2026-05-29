@@ -94,7 +94,7 @@ def main() -> int:
     context_len = config.JointTrainAgent.ImagineContextLength
     imagine_len = config.JointTrainAgent.ImagineBatchLength
     for step in range(args.steps):
-        sample_obs, sample_action, _, _ = replay_buffer.sample(imagine_batch_size, context_len, imagine=True)
+        sample_obs, sample_action, _, _, _ = replay_buffer.sample(imagine_batch_size, context_len, imagine=True)
         imagined, imagined_action, old_logits, context_out, imagined_reward, imagined_term = world_model.imagine_data(
             agent, sample_obs, sample_action, imagine_batch_size, imagine_len,
             log_video=False, logger=None, global_step=step,

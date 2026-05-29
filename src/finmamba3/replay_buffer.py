@@ -20,6 +20,8 @@ class ReplayBuffer():
             self.action_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.reward_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             self.termination_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
+            # NaN sentinel: unresolved-market ticks must be visible to the loss path so BCE can mask them out instead of treating uninitialized memory as outcome=0.
+            self.outcome_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
         else:
@@ -27,6 +29,7 @@ class ReplayBuffer():
             self.action_buffer = np.empty((max_length), dtype=np.float32)
             self.reward_buffer = np.empty((max_length), dtype=np.float32)
             self.termination_buffer = np.empty((max_length), dtype=np.float32)
+            self.outcome_buffer = np.full((max_length,), np.nan, dtype=np.float32)
             self.sampled_counter = np.zeros((max_length), dtype=np.int32)
             self.imagined_counter = np.zeros((max_length), dtype=np.int32)
         self.length = 0
@@ -71,12 +74,15 @@ class ReplayBuffer():
             action_list.append(self.action_buffer[indexes])
             reward_list.append(self.reward_buffer[indexes])
             termination_list.append(self.termination_buffer[indexes])
+            outcome_list = [self.outcome_buffer[indexes]]
             obs = torch.cat(obs_list, dim=0).float()
             action = torch.cat(action_list, dim=0)
             reward = torch.cat(reward_list, dim=0)
             termination = torch.cat(termination_list, dim=0)
+            outcome = torch.cat(outcome_list, dim=0)
         else:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
+            outcome_list_cpu: list[torch.Tensor] = []
             if batch_size > 0:
                 counts = self.sampled_counter[:self.length + 1 - batch_length]
                 imagine_counts = self.imagined_counter[:self.length + 1 - batch_length] / self.batch_scale_factor
@@ -98,31 +104,37 @@ class ReplayBuffer():
                 action_seq = self.action_buffer[indexes]
                 reward_seq = self.reward_buffer[indexes]
                 termination_seq = self.termination_buffer[indexes]
+                outcome_seq = self.outcome_buffer[indexes]
                 obs_seq = torch.from_numpy(obs_seq).float().to(self.device)
                 action_seq = torch.from_numpy(action_seq).to(self.device)
                 reward_seq = torch.from_numpy(reward_seq).to(self.device)
                 termination_seq = torch.from_numpy(termination_seq).to(self.device)
+                outcome_seq = torch.from_numpy(outcome_seq).to(self.device)
                 obs_list.append(obs_seq)
                 action_list.append(action_seq)
                 reward_list.append(reward_seq)
                 termination_list.append(termination_seq)
+                outcome_list_cpu.append(outcome_seq)
             obs = torch.cat(obs_list, dim=0) if obs_list else torch.empty(0, device=self.device)
             action = torch.cat(action_list, dim=0) if action_list else torch.empty(0, device=self.device)
             reward = torch.cat(reward_list, dim=0) if reward_list else torch.empty(0, device=self.device)
             termination = torch.cat(termination_list, dim=0) if termination_list else torch.empty(0, device=self.device)
-        return obs, action, reward, termination
-    def append(self, obs, action, reward, termination):
+            outcome = torch.cat(outcome_list_cpu, dim=0) if outcome_list_cpu else torch.empty(0, device=self.device)
+        return obs, action, reward, termination, outcome
+    def append(self, obs, action, reward, termination, outcome=float('nan')):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length)
         if self.store_on_gpu:
             self.obs_buffer[self.last_pointer] = torch.from_numpy(obs)
             self.action_buffer[self.last_pointer] = torch.tensor(action, device=self.device)
             self.reward_buffer[self.last_pointer] = torch.tensor(reward, device=self.device)
             self.termination_buffer[self.last_pointer] = torch.tensor(termination, device=self.device)
+            self.outcome_buffer[self.last_pointer] = torch.tensor(float(outcome), device=self.device)
         else:
             self.obs_buffer[self.last_pointer] = obs
             self.action_buffer[self.last_pointer] = action
             self.reward_buffer[self.last_pointer] = reward
             self.termination_buffer[self.last_pointer] = termination
+            self.outcome_buffer[self.last_pointer] = float(outcome)
         if len(self) < self.max_length:
             self.length += 1
     def __len__(self):
