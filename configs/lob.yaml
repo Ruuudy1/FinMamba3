@@ -26,8 +26,8 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
-  BatchSize: 64        # Reverted from 512: the big batch converged worse (val 390 vs 368) and ran ~5x slower.
-  AccumSteps: 2        # Effective batch 128; the known-good config that reached val 368 in ~38 min.
+  BatchSize: 128       # A100 80GB: one fused pass at the val-368 effective batch (was 64 with AccumSteps=2). Larger batches regressed (val 390 at 512), so effective batch stays 128; LR (4.0e-5) is unchanged because effective batch is unchanged.
+  AccumSteps: 1        # Fused single forward/backward at effective batch 128; higher kernel occupancy than the 2x micro-batch accumulation, identical optimizer math. MIMO at d_state=128/chunk_size=8 is compute-bound (~9.5 s/it on A100), so GPU compute util is already high without inflating VRAM use.
   BatchLength: 32
   ImagineBatchSize: 64
   ImagineContextLength: 8
