@@ -20,6 +20,7 @@ Evaluate:
 JointTrainAgent:
   SampleMaxSteps: 15000   # Drives both the loop length and the cosine LR horizon (world_model.py t_max); 15k aligns annealing to the ~13k convergence point, early-stop still guards.
   EarlyStoppingPatience: 5
+  EarlyStopMetric: Val/reconstruction_loss   # Switch to Val/yes_log_loss when settlement is the primary objective (Polymarket binary outcome).
   SaveBestOnly: true
   BufferMaxLength: 50000
   WorldModelWarmUp: 64
@@ -159,8 +160,8 @@ Models:
       Enabled: False                # Auxiliary Poisson NLL on buy/sell event counts; needs event_counts data.
       LossWeight: 0.1
     Settlement:
-      Enabled: False                # Auxiliary BCE on the binary contract outcome; needs outcome labels.
-      LossWeight: 0.25
+      Enabled: True
+      LossWeight: 0.5               # Polymarket binary-outcome calibration is the primary objective; weight matches direction loss.
 
   Agent:
     dtype: float32

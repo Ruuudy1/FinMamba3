@@ -410,6 +410,7 @@ def main() -> None:
     imagine_every = save_every
     # Early stopping config
     early_stopping_patience = config.JointTrainAgent.get('EarlyStoppingPatience', 0)
+    early_stop_metric = config.JointTrainAgent.get('EarlyStopMetric', 'Val/reconstruction_loss')
     save_best_only = config.JointTrainAgent.get('SaveBestOnly', False)
     # Tracking variables
     best_val_loss = float('inf')
@@ -447,7 +448,10 @@ def main() -> None:
                 )
 
             # --- Early stopping & best checkpoint logic ---
-            current_val_loss = val_metrics.get('Val/reconstruction_loss', float('inf'))
+            current_val_loss = val_metrics.get(early_stop_metric, float('inf'))
+            if not np.isfinite(current_val_loss):
+                # When the selected metric is NaN this validation, fall through without comparing.
+                current_val_loss = float('inf')
 
             if current_val_loss < best_val_loss:
                 best_val_loss = current_val_loss

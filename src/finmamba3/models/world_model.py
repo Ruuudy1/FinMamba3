@@ -370,9 +370,11 @@ class WorldModel(nn.Module):
         else:
             self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=config.Models.WorldModel.Warmup_steps)
+        # Bf16 shares fp32's exponent range so loss scaling is a no-op semantically, but each unscale/step/update still issues an inf-check that syncs CPU-to-GPU.
+        _amp_dtype = str(config.Models.WorldModel.dtype).lower()
         self.scaler = torch.amp.GradScaler(
             "cuda",
-            enabled=self.use_amp and config.Models.WorldModel.dtype is not torch.bfloat16,
+            enabled=self.use_amp and _amp_dtype not in ("bfloat16", "bf16", "torch.bfloat16"),
         )
         # Watch for selective_scan and Mamba3 instability under bf16 autocast for the first NaNGuardSteps updates.
         # After that we trust the run.

@@ -94,6 +94,8 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
                     "[mamba] TileLang Mamba3 MIMO kernel available at %s",
                     getattr(tilelang_mod, "__file__", "<unknown>"),
                 )
+                # The kernel_cache lookup emits a WARNING on every fwd/bwd call (~7 per step at n_layer=4); silencing keeps stdout readable and removes per-step logging overhead.
+                logging.getLogger("tilelang.cache.kernel_cache").setLevel(logging.ERROR)
             except ImportError:
                 logger.warning(
                     "[mamba] TileLang Mamba3 MIMO kernel NOT available; "
