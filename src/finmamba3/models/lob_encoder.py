@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint_utils
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from einops import rearrange, reduce
 from finmamba3.envs.lob_features import F_LEVEL, F_TICK, K_LEVELS
 # endregion
@@ -93,11 +94,17 @@ class LOBEncoder(nn.Module):
         tick_emb = rearrange(self.tick_proj(tick), "b l d -> (b l) 1 d")
         cls = cls + tick_emb
         seq = torch.cat([cls, tok], dim=1)
-        if self.gradient_checkpointing and self.training:
-            for layer in self.transformer.layers:
-                seq = checkpoint_utils.checkpoint(layer, seq, use_reentrant=False)
-        else:
-            seq = self.transformer(seq)
+        # The transformer runs over (B*L) flattened snapshots, each a length-(K+1) sequence.
+        # At large batch*length the fused/flash SDPA backend maps batch*heads onto a CUDA grid
+        # dimension capped at 65535 and crashes with "invalid configuration argument". The
+        # sequence is only K+1 tokens, so flash's S^2 saving is irrelevant; force the math
+        # backend, which has no grid cap, to keep the encoder robust at any batch size.
+        with sdpa_kernel(SDPBackend.MATH):
+            if self.gradient_checkpointing and self.training:
+                for layer in self.transformer.layers:
+                    seq = checkpoint_utils.checkpoint(layer, seq, use_reentrant=False)
+            else:
+                seq = self.transformer(seq)
         cls_out = self.norm(seq[:, 0])
         out = self.out_proj(cls_out)
         return rearrange(out, "(b l) d -> b l d", b=B, l=L)
