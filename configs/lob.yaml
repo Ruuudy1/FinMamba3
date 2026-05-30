@@ -26,9 +26,9 @@ JointTrainAgent:
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
-  BatchSize: 128       # A100 80GB: one fused pass at the val-368 effective batch (was 64 with AccumSteps=2). Larger batches regressed (val 390 at 512), so effective batch stays 128; LR (4.0e-5) is unchanged because effective batch is unchanged.
-  AccumSteps: 1        # Fused single forward/backward at effective batch 128; higher kernel occupancy than the 2x micro-batch accumulation, identical optimizer math. MIMO at d_state=128/chunk_size=8 is compute-bound (~9.5 s/it on A100), so GPU compute util is already high without inflating VRAM use.
-  BatchLength: 32
+  BatchSize: 1024      # A100 max-util recipe: the MIMO scan kernel's parallel grid is ~batch*heads*chunks, so a large batch is the dominant lever for SM occupancy. At the val-368 batch 128 the A100 sat at ~0-1% util / 2.2GB; this floods the card. NOTE: this is a NEW recipe, not the val-368 comparison.
+  AccumSteps: 1        # Single fused forward/backward at the full batch; gradient accumulation would not raise occupancy.
+  BatchLength: 64
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
@@ -57,13 +57,13 @@ Models:
     # bottleneck. 16x16 is still 2.7x expansion, preserving capacity while
     # restoring some regularization pressure. Revert to 32 if reconstruction
     # collapses or KL stays pinned at the free-bits floor.
-    CategoricalDim: 16
-    ClassDim: 16
-    HiddenStateDim: 512
+    CategoricalDim: 32
+    ClassDim: 32
+    HiddenStateDim: 1024
     Optimiser: Laprop
     LatentDiscreteType: naive
     Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
-    Warmup_steps: 500
+    Warmup_steps: 1000
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
@@ -76,7 +76,7 @@ Models:
     Adam:
       LearningRate: 1.0e-4
     Laprop:
-      LearningRate: 4.0e-5   # Reverted: the proven LR for the batch-64 config (reached val 368).
+      LearningRate: 1.1e-4   # sqrt(1024/128)=2.83x scaled off the proven batch-128 anchor (4.0e-5); tune off the loss curve.
       Epsilon: 1.0e-20
     Encoder:
       Type: lob
@@ -84,16 +84,16 @@ Models:
       FeatureDimLevel: 8
       FeatureDimTick: 20
       BinaryMarketFeatures: True   # Append boundary/logit/Amihud/variance-ratio tick features (Polymarket only).
-      DModel: 128
+      DModel: 256
       NumLayers: 2
       NumHeads: 4
-      DimFeedforward: 256
-      OutputFlattenDim: 1024
+      DimFeedforward: 512
+      OutputFlattenDim: 2048
       AggregateOnly: False
       GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
       Kind: mse              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.
-      HiddenDim: 512
+      HiddenDim: 1024
       NumLayers: 3
       NuInit: 5.0            # Student-t degrees of freedom; ignored for 'mse'.
       LearnableNu: True
@@ -117,11 +117,11 @@ Models:
         d_state: 16
     Mamba3:
       Enabled: true
-      n_layer: 4              # 2 was Drama-Atari default; 4 gives the world model real depth
-                              # over the LOB tick stream. Activation checkpointing on the
-                              # encoder is available if VRAM is tight.
+      n_layer: 6              # 2 was Drama-Atari default; A100 max-util recipe uses 6 for
+                              # more depth/capacity and more total GPU work per step.
+                              # Activation checkpointing on the encoder is available if VRAM is tight.
       is_mimo: true
-      mimo_rank: 4
+      mimo_rank: 8
       d_state: 128            # Mamba-3 paper (arXiv:2603.15569) shows d_state=64 matches
                               # Mamba-2 d_state=128 at the same perplexity; 128 is over-
                               # provisioned but kept until empirical validation. Full

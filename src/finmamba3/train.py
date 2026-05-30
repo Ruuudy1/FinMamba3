@@ -223,17 +223,27 @@ def _validation_metrics(
 validate = _validation_metrics
 
 
-def _gpu_monitor(interval: int = 30) -> None:
+def _gpu_monitor(interval: int = 30, sample_every: float = 2.0) -> None:
+    # A single instantaneous nvidia-smi snapshot lands on an arbitrary instant of a
+    # multi-second step and badly under-reads util. Sample across the whole window and
+    # report mean + peak so the logged number reflects sustained occupancy.
+    samples_per_window = max(1, int(interval / sample_every))
     while True:
-        result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            util, mem_used, mem_total = result.stdout.strip().split(", ")
-            logger.info(f"[GPU] util={util}%  mem={mem_used}/{mem_total} MiB")
-        time.sleep(interval)
+        utils = []
+        mem_used, mem_total = "?", "?"
+        for _ in range(samples_per_window):
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                util, mem_used, mem_total = result.stdout.strip().split(", ")
+                utils.append(int(util))
+            time.sleep(sample_every)
+        if utils:
+            mean_util = sum(utils) // len(utils)
+            logger.info(f"[GPU] util mean={mean_util}% peak={max(utils)}% mem={mem_used}/{mem_total} MiB")
 
 
 def main() -> None:
