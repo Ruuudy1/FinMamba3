@@ -121,7 +121,11 @@ Models:
                               # more depth/capacity and more total GPU work per step.
                               # Activation checkpointing on the encoder is available if VRAM is tight.
       is_mimo: true
-      mimo_rank: 8
+      mimo_rank: 4            # The MIMO kernel's dynamic SMEM scales with chunk_size*mimo_rank.
+                              # rank 4 needs ~120 KB at chunk_size=8 (fits A100's ~166 KB) and
+                              # ~219 KB at chunk_size=16 (fits H100's ~227 KB). rank 8 needs ~217 KB
+                              # at chunk_size=8 (over the A100 cap) and would not fit any target
+                              # card at chunk_size=16 -- so 4 is the SMEM ceiling, not a tuning knob.
       d_state: 128            # Mamba-3 paper (arXiv:2603.15569) shows d_state=64 matches
                               # Mamba-2 d_state=128 at the same perplexity; 128 is over-
                               # provisioned but kept until empirical validation. Full
