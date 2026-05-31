@@ -66,9 +66,18 @@ def train_world_model_step(
             for name, value in zip(_LOSS_NAMES, means):
                 epoch_means[name].append(float(value))
     if should_log:
-        for name, values in epoch_means.items():
-            logger.log(
-                f"WorldModel/{name}",
-                float(np.mean(values)) if values else 0.0,
-                global_step=global_step,
-            )
+        mean_by_loss = {name: float(np.mean(values)) for name, values in epoch_means.items()}
+        for name, mean_value in mean_by_loss.items():
+            logger.log(f"WorldModel/{name}", mean_value, global_step=global_step)
+        # These per-step losses otherwise only reach wandb; echo the key terms to stdout so the
+        # trajectory is visible in the captured training log (and its HF logs/ upload) offline.
+        print(
+            f"[loss] step={global_step} "
+            f"total={mean_by_loss['total_loss']:.3f} "
+            f"recon={mean_by_loss['reconstruction_loss']:.3f} "
+            f"dyn_kl={mean_by_loss['dynamics_loss']:.3f} "
+            f"rep={mean_by_loss['representation_loss']:.3f} "
+            f"dir={mean_by_loss['direction_loss']:.3f} "
+            f"settle={mean_by_loss['settlement_loss']:.3f}",
+            flush=True,
+        )
