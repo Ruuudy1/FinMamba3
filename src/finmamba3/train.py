@@ -246,6 +246,32 @@ def _gpu_monitor(interval: int = 30, sample_every: float = 2.0) -> None:
             logger.info(f"[GPU] util mean={mean_util}% peak={max(utils)}% mem={mem_used}/{mem_total} MiB")
 
 
+def _upload_checkpoints_async(folder: str, repo_id: str, token: str, lock: threading.Lock) -> None:
+    # Fire-and-forget HF sync on a daemon thread so the upload never stalls the training
+    # loop. The non-blocking lock drops the sync if a previous one is still in flight, so a
+    # slow upload cannot pile up behind a faster save cadence.
+    def _run():
+        if not lock.acquire(blocking=False):
+            return
+        try:
+            from huggingface_hub import HfApi
+            HfApi().upload_folder(
+                folder_path=folder,
+                path_in_repo="checkpoints/lob",
+                repo_id=repo_id,
+                repo_type="model",
+                token=token,
+                commit_message="Periodic checkpoint sync during training",
+            )
+            logger.info(f"[ckpt-sync] uploaded {folder} -> {repo_id}")
+        except Exception as exc:
+            # A transient network error must not kill a multi-hour run; log and retry next cadence.
+            logger.warning(f"[ckpt-sync] upload failed: {exc}")
+        finally:
+            lock.release()
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     pre_parser = argparse.ArgumentParser(add_help=False)
@@ -267,6 +293,22 @@ def main() -> None:
         "--dataset", choices=("polymarket", "fi2010"), default=None,
         help="Override Dataset.Kind from the config file.",
     )
+    pre_parser.add_argument(
+        "--resume-checkpoint", type=Path, default=None,
+        help="Warm-restart from this .pth (model + optimizer weights). The LR schedule "
+             "and step counter reset; best_val_loss seeds from the checkpoint so the new "
+             "run only saves a checkpoint when it beats the resumed one.",
+    )
+    pre_parser.add_argument(
+        "--ckpt-repo", default=None,
+        help="HF model repo id to sync checkpoints to during training (crash-safety).",
+    )
+    pre_parser.add_argument(
+        "--ckpt-upload-every", type=int, default=0,
+        help="Write the latest checkpoint and upload saved_models/<n> to --ckpt-repo every "
+             "N steps. 0 disables in-training upload (the run still saves locally).",
+    )
+    pre_parser.add_argument("--hf-token", default=os.environ.get("HF_TOKEN"))
     pre_args, remaining = pre_parser.parse_known_args()
     with open(pre_args.config, "r") as f:
         config = yaml.safe_load(f)
@@ -362,6 +404,17 @@ def main() -> None:
     world_model = WorldModel(action_dim=action_dim, config=config, device=device).cuda(device)
     n_params = sum(p.numel() for p in world_model.parameters())
     logger.info(f"world model: {n_params:,} params, encoder_type={world_model.encoder_type}")
+    resume_best_val_loss = float('inf')
+    if pre_args.resume_checkpoint is not None:
+        ckpt = torch.load(pre_args.resume_checkpoint, map_location=device)
+        world_model.load_state_dict(ckpt["world_model"])
+        world_model.optimizer.load_state_dict(ckpt["optimizer"])
+        resume_best_val_loss = float(ckpt.get("best_val_loss", float('inf')))
+        logger.info(
+            f"warm-restart from {pre_args.resume_checkpoint}: trained-to step "
+            f"{ckpt.get('step', '?')}, best_val_loss={resume_best_val_loss:.4f}. "
+            f"LR schedule and step counter reset for the new run."
+        )
     # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows
     # up before a 6-hour training run instead of after.
     try:
@@ -412,6 +465,11 @@ def main() -> None:
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{wlogger.run.id}"
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
+    ckpt_root = f"./saved_models/{config.n}"
+    upload_every = pre_args.ckpt_upload_every if (pre_args.ckpt_repo and pre_args.hf_token) else 0
+    upload_lock = threading.Lock()
+    if upload_every > 0:
+        logger.info(f"[ckpt-sync] syncing {ckpt_root} -> {pre_args.ckpt_repo} every {upload_every} steps")
     accum_steps = config.JointTrainAgent.get('AccumSteps', 1)
     log_every = config.JointTrainAgent.get('LogEvery', 50)
     max_steps = config.JointTrainAgent.SampleMaxSteps
@@ -423,7 +481,7 @@ def main() -> None:
     early_stop_metric = config.JointTrainAgent.get('EarlyStopMetric', 'Val/reconstruction_loss')
     save_best_only = config.JointTrainAgent.get('SaveBestOnly', False)
     # Tracking variables
-    best_val_loss = float('inf')
+    best_val_loss = resume_best_val_loss
     patience_counter = 0
     best_step = 0
     pbar = tqdm(range(max_steps), desc="pretrain", miniters=50, mininterval=0)
@@ -494,6 +552,16 @@ def main() -> None:
                  "optimizer": world_model.optimizer.state_dict()},
                 f"{logdir}/ckpt/world_model.pth",
             )
+        if upload_every > 0 and step > 0 and step % upload_every == 0:
+            # Snapshot the latest weights, then push the whole checkpoint dir to HF so an
+            # interrupted run still leaves a recent model on the Hub. The save runs inline
+            # (it must finish before the async upload reads the file); the upload is detached.
+            torch.save(
+                {"step": step, "world_model": world_model.state_dict(),
+                 "optimizer": world_model.optimizer.state_dict()},
+                f"{logdir}/ckpt/world_model.pth",
+            )
+            _upload_checkpoints_async(ckpt_root, pre_args.ckpt_repo, pre_args.hf_token, upload_lock)
     # Save final checkpoint
     torch.save(
         {"step": step, "world_model": world_model.state_dict(),
@@ -504,6 +572,15 @@ def main() -> None:
     logger.info(f"best val_loss={best_val_loss:.4f} at step {best_step}")
     if save_best_only:
         logger.info(f"best checkpoint: {logdir}/ckpt/world_model_best.pth")
+    if upload_every > 0:
+        # Final synchronous flush so the very last weights land on HF before the process exits.
+        from huggingface_hub import HfApi
+        HfApi().upload_folder(
+            folder_path=ckpt_root, path_in_repo="checkpoints/lob",
+            repo_id=pre_args.ckpt_repo, repo_type="model", token=pre_args.hf_token,
+            commit_message="Final checkpoint sync",
+        )
+        logger.info(f"[ckpt-sync] final upload {ckpt_root} -> {pre_args.ckpt_repo}")
     wlogger.close()
 if __name__ == "__main__":
     main()
