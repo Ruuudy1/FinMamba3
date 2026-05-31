@@ -18,7 +18,7 @@ Evaluate:
   EverySteps: 1000
 
 JointTrainAgent:
-  SampleMaxSteps: 15000   # Drives both the loop length and the cosine LR horizon (world_model.py t_max); 15k aligns annealing to the ~13k convergence point, early-stop still guards.
+  SampleMaxSteps: 1500    # Drives both the loop length and the cosine LR horizon (world_model.py t_max). At batch 1024 x length 64 each step samples ~18x the 3600-tick single-market buffer, so the proven val-368 baseline's total data exposure is reached by ~940 steps; 1500 is ~1.8x that for margin while keeping the run ~3.7h on the A100.
   EarlyStoppingPatience: 5
   EarlyStopMetric: Val/reconstruction_loss   # Switch to Val/yes_log_loss when settlement is the primary objective (Polymarket binary outcome).
   SaveBestOnly: true
@@ -38,7 +38,7 @@ JointTrainAgent:
   TrainAgentEverySteps: 1
   FreezeWorldModelAfterSteps: 20000
   FreezeBehaviourAfterSteps: 0
-  SaveEverySteps: 2000
+  SaveEverySteps: 1000    # Also drives val_every=max(SaveEverySteps//2,500) and imagine_every (train.py). 1000 hits the 500-step floor so the 1500-step run validates at 500/1000/1500; the fine per-step loss curve is covered by the LogEvery [loss] stdout print.
   LogEvery: 50         # World-model losses sync to CPU and log every N steps; avoids a per-step GPU stall.
   SaveModels: True
   Tau: 10
@@ -63,7 +63,7 @@ Models:
     Optimiser: Laprop
     LatentDiscreteType: naive
     Max_grad_norm: 100     # DreamerV3 default; loose by design for cross-domain robustness.
-    Warmup_steps: 1000
+    Warmup_steps: 100      # Linear LR ramp; this is a FIXED step count independent of SampleMaxSteps (world_model.py LinearWarmup). At 1000 it would eat 67% of the 1500-step run and the LR would never reach peak; 100 is ~6.7%, matching the ratio the 15k run used.
     LRSchedule: cosine      # 'constant' or 'cosine' (decays to LRMin over SampleMaxSteps after warmup).
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
