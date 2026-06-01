@@ -1,8 +1,15 @@
-"""Compare next-tick direction prediction across the world model and baselines.
+"""Compare direction prediction across the world model and baselines.
 
 Loads a pretrained world-model checkpoint, fits the LinearAR baseline, trains
 a fresh DeepLOB on the train split, and evaluates all three on the val split
-across one or more direction thresholds. Emits a markdown comparison table.
+across one or more direction thresholds. Emits a markdown comparison table whose
+macro_f1 column is directly comparable to the LOBCAST benchmark (Prata et al.
+2023): macro-F1 weights the three classes equally, unlike accuracy.
+
+The DL arms (world_model, deeplob) honor --label-mode: next_tick (legacy sign of
+the next-tick mid change) or triple_barrier (de Prado profit/stop/time barrier on
+the raw mid, the denoised target for Polymarket's wide spread). LinearAR keeps its
+own internal next-tick labelling.
 
 The world-model arm is optional (skip with --baselines linear_ar,deeplob)
 which lets you run the script CPU-only when no checkpoint is available.
@@ -45,6 +52,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hours-val", type=float, default=1.0)
     p.add_argument("--thresholds", default="0.001,0.005,0.01",
                    help="Comma-separated direction thresholds")
+    p.add_argument("--label-mode", choices=("next_tick", "triple_barrier"), default="next_tick",
+                   help="Direction labelling for the DL arms. next_tick = sign of the next-tick "
+                        "mid change (legacy). triple_barrier = de Prado profit/stop/time barrier "
+                        "on raw mid (denoised; recommended for Polymarket's wide spread).")
+    p.add_argument("--tb-horizon", type=int, default=32,
+                   help="Forward horizon in ticks for triple-barrier labelling.")
     p.add_argument("--baselines", default="world_model,deeplob,linear_ar",
                    help="Comma-separated subset of {world_model,deeplob,linear_ar}")
     p.add_argument("--epochs-deeplob", type=int, default=3)
@@ -70,15 +83,53 @@ def _label_directions(mid_norm: np.ndarray, threshold: float) -> np.ndarray:
     return labels
 
 
-def _accuracy_brier(pred_probs: np.ndarray, labels: np.ndarray) -> tuple[float, float]:
-    """Compute top-1 accuracy and three-class Brier score."""
+def _nan_metrics() -> dict[str, float]:
+    return {"accuracy": float("nan"), "macro_f1": float("nan"), "brier": float("nan")}
+
+
+def _global_labels(val_seq, threshold: float, label_mode: str, tb_horizon: int, level_width: int) -> tuple[np.ndarray, np.ndarray]:
+    """Per-tick direction labels for the whole sequence, plus a validity mask.
+
+    next_tick labels the sign of the next normalized-mid change (legacy). triple_barrier
+    labels which of the profit/stop/time barriers a forward window hits first on the raw
+    mid, the denoised target preferred for Polymarket's wide spread. Both are indexed per
+    window as labels[s : s + batch_length - 1].
+    """
+    if label_mode == "triple_barrier":
+        from finmamba3.envs.lob_labels import TripleBarrierConfig, triple_barrier_labels_numpy
+        config = TripleBarrierConfig(profit_threshold=threshold, stop_threshold=threshold, horizon=tb_horizon)
+        labels, valid = triple_barrier_labels_numpy(val_seq.midprice.astype(np.float64), config)
+        return labels.astype(np.int64), valid
+    mid_norm = val_seq.to_flat()[:, level_width + 0]
+    labels = _label_directions(mid_norm, threshold)
+    valid = np.ones_like(labels, dtype=bool)
+    return labels, valid
+
+
+def classification_metrics(pred_probs: np.ndarray, labels: np.ndarray) -> dict[str, float]:
+    """Top-1 accuracy, macro-averaged F1, and the three-class Brier score.
+
+    Macro-F1 is the benchmark paper's reporting axis (Prata et al. 2023): it weights
+    all three classes equally, so it is not inflated by the dominant flat class the way
+    raw accuracy is.
+    """
     if pred_probs.ndim != 2 or pred_probs.shape[1] != 3:
         raise ValueError(f"pred_probs must be (N, 3); got {pred_probs.shape}")
+    if labels.size == 0:
+        return _nan_metrics()
     pred_labels = pred_probs.argmax(axis=-1)
     accuracy = float((pred_labels == labels).mean())
     one_hot = np.eye(3)[labels]
     brier = float(((pred_probs - one_hot) ** 2).sum(axis=-1).mean())
-    return accuracy, brier
+    f1_sum = 0.0
+    for class_index in range(3):
+        true_positive = float(((pred_labels == class_index) & (labels == class_index)).sum())
+        predicted_positive = float((pred_labels == class_index).sum())
+        actual_positive = float((labels == class_index).sum())
+        precision = true_positive / predicted_positive if predicted_positive > 0 else 0.0
+        recall = true_positive / actual_positive if actual_positive > 0 else 0.0
+        f1_sum += 2.0 * precision * recall / (precision + recall) if precision + recall > 0 else 0.0
+    return {"accuracy": accuracy, "macro_f1": f1_sum / 3.0, "brier": brier}
 
 
 def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:
@@ -97,12 +148,12 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     wm.eval()
     if not wm.use_direction_head:
         logger.warning("World model has no direction head; world_model arm will be skipped.")
-        return {"accuracy": float("nan"), "brier": float("nan")}
+        return _nan_metrics()
     flat = val_seq.to_flat()
     T = flat.shape[0]
     L = 64
     if T < L + 1:
-        return {"accuracy": float("nan"), "brier": float("nan")}
+        return _nan_metrics()
     rng = np.random.default_rng(0)
     starts = rng.integers(0, T - L, size=min(64, T - L))
     windows = np.stack([flat[s : s + L] for s in starts], axis=0)
@@ -126,15 +177,16 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
         direction_logits = wm.direction_head(dist_feat[:, :-1])
         direction_probs = torch.softmax(direction_logits.float(), dim=-1)
     LEVEL_FLAT = 10 * 8
-    mid_norm = obs[..., LEVEL_FLAT + 0]
-    labels = []
+    labels_global, valid_global = _global_labels(val_seq, threshold, args.label_mode, args.tb_horizon, LEVEL_FLAT)
+    label_windows = []
+    valid_windows = []
     for s in starts:
-        labels.append(_label_directions(flat[s : s + L, LEVEL_FLAT + 0], threshold))
-    labels_np = np.stack(labels, axis=0)
+        label_windows.append(labels_global[s : s + L - 1])
+        valid_windows.append(valid_global[s : s + L - 1])
+    labels_flat = np.stack(label_windows, axis=0).reshape(-1)
+    valid_flat = np.stack(valid_windows, axis=0).reshape(-1)
     probs_np = direction_probs.cpu().numpy().reshape(-1, 3)
-    labels_flat = labels_np.reshape(-1)
-    accuracy, brier = _accuracy_brier(probs_np, labels_flat)
-    return {"accuracy": accuracy, "brier": brier}
+    return classification_metrics(probs_np[valid_flat], labels_flat[valid_flat])
 
 
 def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torch.device) -> dict[str, float]:
@@ -153,15 +205,12 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
     Xtr = _windows(train_per_level, L)
     Xva = _windows(val_per_level, L)
     if Xtr.shape[0] == 0 or Xva.shape[0] == 0:
-        return {"accuracy": float("nan"), "brier": float("nan")}
-    train_mid = flat_train[:, LEVEL_WIDTH + 0]
-    val_mid = flat_val[:, LEVEL_WIDTH + 0]
-    ytr = np.stack(
-        [_label_directions(train_mid[s : s + L], threshold) for s in range(Xtr.shape[0])], axis=0
-    )
-    yva = np.stack(
-        [_label_directions(val_mid[s : s + L], threshold) for s in range(Xva.shape[0])], axis=0
-    )
+        return _nan_metrics()
+    train_labels, _train_valid = _global_labels(train_seq, threshold, args.label_mode, args.tb_horizon, LEVEL_WIDTH)
+    val_labels, val_valid = _global_labels(val_seq, threshold, args.label_mode, args.tb_horizon, LEVEL_WIDTH)
+    ytr = np.stack([train_labels[s : s + L - 1] for s in range(Xtr.shape[0])], axis=0)
+    yva = np.stack([val_labels[s : s + L - 1] for s in range(Xva.shape[0])], axis=0)
+    yva_valid = np.stack([val_valid[s : s + L - 1] for s in range(Xva.shape[0])], axis=0)
     model = DeepLOB(k_levels=K_LEVELS, f_level=F_LEVEL).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_deeplob)
     Xtr_t = torch.from_numpy(Xtr).float().to(device)
@@ -183,8 +232,8 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
         Xva_t = torch.from_numpy(Xva).float().to(device)
         logits = model(Xva_t)
         probs = torch.softmax(logits[:, :-1].float(), dim=-1).cpu().numpy()
-    accuracy, brier = _accuracy_brier(probs.reshape(-1, 3), yva[:, : L - 1].reshape(-1))
-    return {"accuracy": accuracy, "brier": brier}
+    valid_flat = yva_valid.reshape(-1)
+    return classification_metrics(probs.reshape(-1, 3)[valid_flat], yva.reshape(-1)[valid_flat])
 
 
 def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float]:
@@ -197,23 +246,20 @@ def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float
     ar.fit(flat_train)
     pred, actual = ar.direction_labels(flat_val)
     if pred.size == 0:
-        return {"accuracy": float("nan"), "brier": float("nan")}
-    accuracy = float((pred == actual).mean())
-    # LinearAR does not emit class probabilities; fall back to a deterministic one-hot
-    # for the Brier score, which is a fair proxy for a deterministic predictor.
-    one_hot_pred = np.eye(3)[pred]
-    one_hot_actual = np.eye(3)[actual]
-    brier = float(((one_hot_pred - one_hot_actual) ** 2).sum(axis=-1).mean())
-    return {"accuracy": accuracy, "brier": brier}
+        return _nan_metrics()
+    # LinearAR is a closed-form floor with its own next-tick labelling, so it ignores
+    # --label-mode. It emits hard labels, not probabilities; a deterministic one-hot is a
+    # fair Brier proxy and lets accuracy / macro-F1 share the common metric path.
+    return classification_metrics(np.eye(3)[pred], actual)
 
 
 def _format_table(rows: list[dict]) -> str:
-    """Render the rows as a markdown table sorted by method then threshold."""
-    head = "| method | threshold | accuracy | brier |\n|---|---:|---:|---:|"
+    """Render the rows as a markdown table. macro_f1 is the paper-comparable column."""
+    head = "| method | threshold | accuracy | macro_f1 | brier |\n|---|---:|---:|---:|---:|"
     lines = [head]
     for r in rows:
         lines.append(
-            f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['brier']:.4f} |"
+            f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['macro_f1']:.4f} | {r['brier']:.4f} |"
         )
     return "\n".join(lines)
 

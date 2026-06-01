@@ -32,7 +32,13 @@ from finmamba3.envs.fi2010_loader import FLAT_FEATURE_NAMES_FI2010
 from finmamba3.config import DotDict, parse_args_and_update_config
 from finmamba3.replay_buffer import ReplayBuffer
 from finmamba3.train_step import train_world_model_step
-from finmamba3.sequence_builder import build_fi2010_sequences, build_sequences, populate_buffer
+from finmamba3.sequence_builder import (
+    build_fi2010_sequences,
+    build_market_sequences,
+    build_sequences,
+    populate_buffer,
+    populate_buffer_multi,
+)
 # endregion
 logger = logging.getLogger(__name__)
 SRC_DIR = Path(__file__).resolve().parents[1]
@@ -281,6 +287,11 @@ def main() -> None:
     pre_parser.add_argument("--data-val", type=Path,
                             default=SRC_DIR.parent / "data" / "validation")
     pre_parser.add_argument("--market-slug", default=None)
+    pre_parser.add_argument(
+        "--max-markets", type=int, default=None,
+        help="Train on the top-N longest markets (multi-market substrate). Default: "
+             "JointTrainAgent.MarketCount from the config, or 1 for single-market.",
+    )
     pre_parser.add_argument("--hours-train", type=float, default=6.0)
     pre_parser.add_argument("--hours-val", type=float, default=1.0)
     pre_parser.add_argument(
@@ -328,6 +339,8 @@ def main() -> None:
     logger.info(f"dataset pipeline: {dataset_kind}")
     norm_clip = config.BasicSettings.get("NormClip", 8.0)
     aggregate_only = config.Models.WorldModel.Encoder.get("AggregateOnly", False)
+    # The multi-market knob defaults to the config; 1 keeps the single-market path.
+    max_markets = pre_args.max_markets if pre_args.max_markets is not None else int(config.JointTrainAgent.get("MarketCount", 1))
     # Parse intervals if provided
     intervals = None
     if pre_args.intervals:
@@ -335,30 +348,60 @@ def main() -> None:
         logger.info(f"filtering markets to intervals: {intervals}")
     if dataset_kind == "polymarket":
         include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
-        logger.info(f"building train features from {pre_args.data_train}")
-        train_seq, slug, stats = build_sequences(
-            pre_args.data_train,
-            pre_args.market_slug,
-            pre_args.hours_train,
-            pre_args.norm_path,
-            fit_stats=True,
-            norm_clip=norm_clip,
-            aggregate_only=aggregate_only,
-            intervals=intervals,
-            include_binary_features=include_binary_features,
-        )
-        logger.info(f"building val features from {pre_args.data_val}")
-        val_seq, _, _ = build_sequences(
-            pre_args.data_val,
-            slug,
-            pre_args.hours_val,
-            pre_args.norm_path,
-            fit_stats=False,
-            norm_clip=norm_clip,
-            intervals=intervals,
-            aggregate_only=aggregate_only,
-            include_binary_features=include_binary_features,
-        )
+        logger.info(f"building train features from {pre_args.data_train} (max_markets={max_markets})")
+        if max_markets > 1:
+            train_seqs, slugs, stats = build_market_sequences(
+                pre_args.data_train,
+                pre_args.market_slug,
+                pre_args.hours_train,
+                pre_args.norm_path,
+                fit_stats=True,
+                norm_clip=norm_clip,
+                aggregate_only=aggregate_only,
+                max_markets=max_markets,
+                intervals=intervals,
+                include_binary_features=include_binary_features,
+            )
+            # The training-loop val metric reads one sequence; the longest val market
+            # is a stable, boundary-safe representative. Cross-market generalization is
+            # measured post-hoc by eval/regime_split.py + eval/compare_direction.py.
+            logger.info(f"building val features from {pre_args.data_val} (longest market)")
+            val_seq, _, _ = build_sequences(
+                pre_args.data_val,
+                None,
+                pre_args.hours_val,
+                pre_args.norm_path,
+                fit_stats=False,
+                norm_clip=norm_clip,
+                intervals=intervals,
+                aggregate_only=aggregate_only,
+                include_binary_features=include_binary_features,
+            )
+        else:
+            train_seq, slug, stats = build_sequences(
+                pre_args.data_train,
+                pre_args.market_slug,
+                pre_args.hours_train,
+                pre_args.norm_path,
+                fit_stats=True,
+                norm_clip=norm_clip,
+                aggregate_only=aggregate_only,
+                intervals=intervals,
+                include_binary_features=include_binary_features,
+            )
+            logger.info(f"building val features from {pre_args.data_val}")
+            val_seq, _, _ = build_sequences(
+                pre_args.data_val,
+                slug,
+                pre_args.hours_val,
+                pre_args.norm_path,
+                fit_stats=False,
+                norm_clip=norm_clip,
+                intervals=intervals,
+                aggregate_only=aggregate_only,
+                include_binary_features=include_binary_features,
+            )
+            train_seqs = [train_seq]
     elif dataset_kind == "fi2010":
         fi2010_cfg = dataset_cfg.get("FI2010", None) if dataset_cfg is not None else None
         horizon = int(fi2010_cfg.get("Horizon", 10)) if fi2010_cfg is not None else 10
@@ -379,9 +422,13 @@ def main() -> None:
         if aggregate_only:
             train_seq = make_aggregate_only(train_seq)
             val_seq = make_aggregate_only(val_seq)
+        # FI-2010 is a single sequence; the buffer's segment flags stay all-False.
+        train_seqs = [train_seq]
     else:
         raise ValueError(f"Unknown dataset kind: {dataset_kind!r}")
-    for split_name, seq in (("train", train_seq), ("val", val_seq)):
+    diag_targets = [(f"train[{i}]", seq) for i, seq in enumerate(train_seqs)]
+    diag_targets.append(("val", val_seq))
+    for split_name, seq in diag_targets:
         diag = normalized_feature_diagnostics(seq, stats.clip_value)
         top = ", ".join(f"{name}={value:.3f}" for name, value in diag["top_features"])
         logger.info(
@@ -395,8 +442,8 @@ def main() -> None:
             )
     # The config-driven assertion handles both Polymarket (94-dim) and FI-2010 (46-dim).
     # The legacy FEATURE_DIM_FLAT constant only applies to the Polymarket schema.
-    assert train_seq.to_flat().shape[1] == config.BasicSettings.FeatureDim, (
-        f"Feature dim mismatch: computed {train_seq.to_flat().shape[1]} "
+    assert train_seqs[0].to_flat().shape[1] == config.BasicSettings.FeatureDim, (
+        f"Feature dim mismatch: computed {train_seqs[0].to_flat().shape[1]} "
         f"vs config {config.BasicSettings.FeatureDim}"
     )
     action_dim = 1
@@ -456,7 +503,10 @@ def main() -> None:
         except Exception as exc:
             logger.warning(f"torch.compile unavailable, running eager: {exc}")
     replay_buffer = ReplayBuffer(config, device=device)
-    populate_buffer(replay_buffer, train_seq)
+    if len(train_seqs) > 1:
+        populate_buffer_multi(replay_buffer, train_seqs)
+    else:
+        populate_buffer(replay_buffer, train_seqs[0])
     wlogger = make_logger(
         config=config,
         project=config.Wandb.Init.Project,
@@ -514,6 +564,16 @@ def main() -> None:
                     "validation top feature MSE: "
                     + ", ".join(f"{name}={value:.4g}" for name, value in top_mse)
                 )
+            # Echo the decision metrics to stdout so the offline log captures the
+            # thesis-relevant signal, not just the reconstruction ELBO the run
+            # early-stops on. NaN settlement metrics print as nan without breaking.
+            logger.info(
+                f"[val] step={step} "
+                f"recon={val_metrics.get('Val/reconstruction_loss', float('nan')):.4f} "
+                f"dir_acc={val_metrics.get('Val/mid_direction_accuracy', float('nan')):.4f} "
+                f"yes_log_loss={val_metrics.get('Val/yes_log_loss', float('nan')):.4f} "
+                f"yes_brier={val_metrics.get('Val/yes_brier', float('nan')):.4f}"
+            )
 
             # --- Early stopping & best checkpoint logic ---
             current_val_loss = val_metrics.get(early_stop_metric, float('inf'))
@@ -538,7 +598,8 @@ def main() -> None:
                 if early_stopping_patience > 0:
                     logger.info(f"no improvement for {patience_counter}/{early_stopping_patience} validations")
 
-            pbar.set_postfix(val_loss=f"{current_val_loss:.4f}", best=f"{best_val_loss:.4f}")
+            dir_acc = val_metrics.get("Val/mid_direction_accuracy", float("nan"))
+            pbar.set_postfix(val_loss=f"{current_val_loss:.4f}", best=f"{best_val_loss:.4f}", dir_acc=f"{dir_acc:.3f}")
 
             # Early stopping check
             if early_stopping_patience > 0 and patience_counter >= early_stopping_patience:

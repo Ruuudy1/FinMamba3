@@ -356,15 +356,30 @@ def compute_basic_tick_features(per_level_fi2010: np.ndarray) -> np.ndarray:
     ).astype(np.float32)
 
 
-def pick_longest_market(data: BacktestData) -> str:
-    counts: dict[str, int] = {}
+def pick_top_markets(data: BacktestData, n: int, min_ticks: int = 128) -> list[str]:
+    """Return the slugs of the n longest 2-sided-book markets, longest first.
+
+    Counts ticks whose YES book has both sides, then keeps only markets with at
+    least min_ticks usable ticks so each yields at least one training window.
+    Fewer than n markets may qualify; the caller gets whatever exists.
+    """
+    count_by_slug: dict[str, int] = {}
     for tick in data.timeline:
         for slug, sb in tick.order_books.items():
             if sb.yes_book.bids and sb.yes_book.asks:
-                counts[slug] = counts.get(slug, 0) + 1
-    if not counts:
-        raise RuntimeError("No markets with 2-sided books in timeline")
-    return max(counts.items(), key=lambda kv: kv[1])[0]
+                count_by_slug[slug] = count_by_slug.get(slug, 0) + 1
+    qualified_by_count = [(slug, count) for slug, count in count_by_slug.items() if count >= min_ticks]
+    if not qualified_by_count:
+        raise RuntimeError(f"No markets with >= {min_ticks} two-sided-book ticks in timeline")
+    qualified_by_count.sort(key=lambda kv: kv[1], reverse=True)
+    top_slugs = [slug for slug, _ in qualified_by_count[:n]]
+    return top_slugs
+
+
+def pick_longest_market(data: BacktestData) -> str:
+    # min_ticks=1 keeps the original contract: return the single longest market
+    # regardless of length, raising only when no 2-sided book exists at all.
+    return pick_top_markets(data, 1, min_ticks=1)[0]
 # Normalization.
 
 

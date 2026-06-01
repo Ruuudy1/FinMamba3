@@ -20,9 +20,10 @@ Evaluate:
 JointTrainAgent:
   SampleMaxSteps: 1500    # Drives both the loop length and the cosine LR horizon (world_model.py t_max). At batch 1024 x length 64 each step samples ~18x the 3600-tick single-market buffer, so the proven val-368 baseline's total data exposure is reached by ~940 steps; 1500 is ~1.8x that for margin while keeping the run ~3.7h on the A100.
   EarlyStoppingPatience: 5
-  EarlyStopMetric: Val/reconstruction_loss   # Switch to Val/yes_log_loss when settlement is the primary objective (Polymarket binary outcome).
+  EarlyStopMetric: Val/reconstruction_loss   # Reconstruction is the always-finite early-stop proxy. The thesis-relevant decision metrics (dir_acc, yes_log_loss) are echoed to stdout every validation and logged to wandb; the generalization claim is measured post-hoc on the saved checkpoints by eval/regime_split.py.
   SaveBestOnly: true
   BufferMaxLength: 50000
+  MarketCount: 8       # Top-N longest markets for the multi-market substrate (generalization A/B). 1 = single-market legacy behavior. Multi-market val is a NEW baseline, not comparable to the 363/368 single-market numbers. BufferMaxLength above already has headroom for ~8 markets.
   WorldModelWarmUp: 64
   BehaviourWarmUp: 1000000   # effectively disables agent training
   NumEnvs: 1
@@ -76,7 +77,7 @@ Models:
     Adam:
       LearningRate: 1.0e-4
     Laprop:
-      LearningRate: 1.1e-4   # sqrt(1024/128)=2.83x scaled off the proven batch-128 anchor (4.0e-5); tune off the loss curve.
+      LearningRate: 3.0e-4   # The local 4080 sweep found 3e-4 the clear optimum (recon 100 at 3e-4 vs 119 at 1.5e-4 vs 191 at 4e-5), monotonic and stable. The prior 1.1e-4 (sqrt-scaled off a 4e-5 anchor) sat in the under-performing region. 3e-4 is conservative at batch 1024 since a larger batch tolerates a higher LR; the sqrt-scaled aggressive option is ~8.5e-4.
       Epsilon: 1.0e-20
     Encoder:
       Type: lob
