@@ -139,7 +139,7 @@ Models:
       NumRegimes: 8
       EmbedDim: 32
     RegimeFiLM:
-      Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
+      Enabled: True          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
       NumRegimes: 8
       EmbedDim: 32
       EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
