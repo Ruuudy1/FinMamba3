@@ -1,8 +1,8 @@
 """Linear vector autoregression baseline for LOB direction prediction.
 
 Establishes the floor every Mamba/Transformer model must beat. Fits an
-ordinary-least-squares regression of next-tick midprice on a window of
-recent flat features. Direction labels are then read off the sign of the
+ordinary-least-squares regression of the next-tick midprice return on a window
+of recent flat features. Direction labels are then read off the sign of the
 predicted return at the configured threshold.
 
 The fit is closed-form via numpy.linalg.lstsq so this baseline trains in
@@ -21,6 +21,10 @@ class LinearARConfig:
     lookback: int = 16
     threshold: float = 0.001
     midprice_index: int = 80
+    # Ridge penalty on the lookback x F design matrix. Any value >= 1 fixes the
+    # ill-conditioning that made the unregularized fit explode on held-out data; 10
+    # keeps the floor a real linear predictor rather than collapsing it to majority-vote.
+    ridge: float = 10.0
 
 
 class LinearAR:
@@ -37,14 +41,25 @@ class LinearAR:
             raise ValueError(f"Need at least {L + 2} ticks; got {T}")
         rows = []
         targets = []
+        mid_idx = self.config.midprice_index
         for t in range(L, T - 1):
             window = features[t - L + 1 : t + 1].reshape(-1)
             rows.append(np.concatenate([[1.0], window]))
-            targets.append(features[t + 1, self.config.midprice_index])
+            # Regress the next-tick mid RETURN, not the level. A centered return target
+            # keeps the predicted sign meaningful; regressing the level and differencing
+            # let any lstsq bias dominate the sign and collapsed the floor to one class.
+            targets.append(features[t + 1, mid_idx] - features[t, mid_idx])
         return np.asarray(rows), np.asarray(targets)
     def fit(self, features: np.ndarray) -> None:
         X, y = self._build_design_matrix(features)
-        self.coef, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        # Ridge-regularize the high-dimensional flat design matrix (lookback x F columns).
+        # An unregularized lstsq is ill-conditioned here and extrapolated to 1e4-scale
+        # predictions on held-out data, collapsing the floor to a single class. Augmenting
+        # with sqrt(ridge) * I solves the penalized least squares in one stable lstsq call.
+        n_features = X.shape[1]
+        augmented_x = np.concatenate([X, np.sqrt(self.config.ridge) * np.eye(n_features, dtype=X.dtype)], axis=0)
+        augmented_y = np.concatenate([y, np.zeros(n_features, dtype=y.dtype)], axis=0)
+        self.coef, _, _, _ = np.linalg.lstsq(augmented_x, augmented_y, rcond=None)
         self.feature_dim = int(features.shape[1])
     def predict(self, features: np.ndarray) -> np.ndarray:
         if self.coef is None or self.feature_dim is None:
@@ -68,8 +83,9 @@ class LinearAR:
         preds = self.predict(features)
         T = features.shape[0]
         actual_diff = np.diff(features[L:T, mid_idx])
-        last_mid = features[L : T - 1, mid_idx]
-        pred_diff = preds[: T - L - 1] - last_mid
+        # preds are predicted next-tick mid returns (already centered), so they are the
+        # directional signal directly; no level differencing that a bias could swamp.
+        pred_diff = preds[: T - L - 1]
         actual = np.full_like(actual_diff, 1, dtype=np.int64)
         actual[actual_diff > thr] = 2
         actual[actual_diff < -thr] = 0
