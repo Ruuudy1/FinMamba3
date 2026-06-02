@@ -132,30 +132,54 @@ def classification_metrics(pred_probs: np.ndarray, labels: np.ndarray) -> dict[s
     return {"accuracy": accuracy, "macro_f1": f1_sum / 3.0, "brier": brier}
 
 
-def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:
-    """Run the world-model encoder + direction head on the val sequence."""
-    import yaml
-    from finmamba3.config import DotDict, parse_args_and_update_config
+def load_world_model(config, checkpoint_path, device: torch.device, action_dim: int = 1):
+    """Build a WorldModel from a resolved config and load a checkpoint into it.
+
+    The checkpoint stores only weights, never the config, so the caller must pass a
+    config whose architecture flags (Mamba3.is_mimo, RegimeFiLM.Enabled) match the run
+    that produced the checkpoint. A strict key check fails fast on any mismatch instead
+    of silently dropping FiLM or MIMO weights the way a bare strict=False load would.
+
+    action_dim defaults to 1 to match Phase-A pretraining (train.py builds the world model
+    with action_dim=1); it feeds the sequence-model stem width, so a wrong value is a hard
+    size-mismatch at load time.
+    """
     from finmamba3.models.world_model import WorldModel
-    with open(args.config, "r") as f:
-        cfg_raw = yaml.safe_load(f)
-    cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
-    cfg = DotDict(cfg_raw)
-    wm = WorldModel(action_dim=13, config=cfg, device=device).to(device)
-    state = torch.load(args.world_checkpoint, map_location=device, weights_only=False)
+    wm = WorldModel(action_dim=action_dim, config=config, device=device).to(device)
+    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     sd = state.get("world_model", state.get("state_dict", state))
-    wm.load_state_dict(sd, strict=False)
+    incompatible = wm.load_state_dict(sd, strict=False)
+    assert not incompatible.missing_keys, (
+        f"checkpoint is missing model keys, so the rebuilt architecture does not match it "
+        f"(check is_mimo and the RegimeFiLM flag): {incompatible.missing_keys[:8]}"
+    )
+    assert not incompatible.unexpected_keys, (
+        f"checkpoint has unexpected keys for the rebuilt architecture "
+        f"(check is_mimo and the RegimeFiLM flag): {incompatible.unexpected_keys[:8]}"
+    )
     wm.eval()
-    if not wm.use_direction_head:
-        logger.warning("World model has no direction head; world_model arm will be skipped.")
-        return _nan_metrics()
+    return wm
+
+
+def world_model_direction_probs(
+    wm, val_seq, threshold: float, label_mode: str, tb_horizon: int,
+    level_width: int, device: torch.device,
+    windows_per_market: int = 64, window_len: int = 64, rng_seed: int = 0,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Direction-head class probabilities and matching labels for one market sequence.
+
+    Samples fixed random windows and reads the per-position direction head, so the
+    compare_direction world-model arm and the cross-regime gap evaluator score on
+    identical methodology. Returns the valid-masked (probs, labels) so a caller can
+    pool several markets before computing one metric.
+    """
     flat = val_seq.to_flat()
     T = flat.shape[0]
-    L = 64
+    L = window_len
     if T < L + 1:
-        return _nan_metrics()
-    rng = np.random.default_rng(0)
-    starts = rng.integers(0, T - L, size=min(64, T - L))
+        return np.zeros((0, 3), dtype=np.float32), np.zeros((0,), dtype=np.int64)
+    rng = np.random.default_rng(rng_seed)
+    starts = rng.integers(0, T - L, size=min(windows_per_market, T - L))
     windows = np.stack([flat[s : s + L] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
@@ -176,17 +200,79 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
         dist_feat = wm.condition_dist_feat(dist_feat)
         direction_logits = wm.direction_head(dist_feat[:, :-1])
         direction_probs = torch.softmax(direction_logits.float(), dim=-1)
-    LEVEL_FLAT = 10 * 8
-    labels_global, valid_global = _global_labels(val_seq, threshold, args.label_mode, args.tb_horizon, LEVEL_FLAT)
-    label_windows = []
-    valid_windows = []
-    for s in starts:
-        label_windows.append(labels_global[s : s + L - 1])
-        valid_windows.append(valid_global[s : s + L - 1])
+    labels_global, valid_global = _global_labels(val_seq, threshold, label_mode, tb_horizon, level_width)
+    label_windows = [labels_global[s : s + L - 1] for s in starts]
+    valid_windows = [valid_global[s : s + L - 1] for s in starts]
     labels_flat = np.stack(label_windows, axis=0).reshape(-1)
     valid_flat = np.stack(valid_windows, axis=0).reshape(-1)
     probs_np = direction_probs.cpu().numpy().reshape(-1, 3)
-    return classification_metrics(probs_np[valid_flat], labels_flat[valid_flat])
+    return probs_np[valid_flat], labels_flat[valid_flat]
+
+
+def world_model_prediction_mse(
+    wm, val_seq, device: torch.device,
+    windows_per_market: int = 256, window_len: int = 64, rng_seed: int = 0,
+) -> tuple[float, int]:
+    """Summed squared error and element count of the one-step-ahead decoder prediction.
+
+    Encodes windows, runs the sequence model (which applies the regime-FiLM modulation for the
+    treatment arm), decodes the prior-predicted next latent, and compares it to the actual next
+    observation. This is the decoder NLL on the predicted next tick under a Gaussian (mse)
+    decoder, i.e. the regime-sensitive reconstruction term that actually exercises FiLM (the
+    posterior reconstruction barely does). Returning (sse, count) lets a caller pool markets exactly.
+    """
+    assert wm.decoder_kind != "studentt", (
+        "prediction_mse assumes a Gaussian (mse) decoder; a studentt decoder returns (mean, log_scale)."
+    )
+    flat = val_seq.to_flat()
+    T = flat.shape[0]
+    L = window_len
+    if T < L + 1:
+        return 0.0, 0
+    rng = np.random.default_rng(rng_seed)
+    starts = rng.integers(0, T - L, size=min(windows_per_market, T - L))
+    windows = np.stack([flat[s : s + L] for s in starts], axis=0)
+    obs = torch.from_numpy(windows).float().to(device)
+    action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
+        embedding = wm.encoder(obs)
+        post_logits = wm.dist_head.forward_post(embedding)
+        sample = wm.straight_through_gradient(post_logits)
+        flattened_sample = wm.flatten_sample(sample)
+        if wm.model == "Transformer":
+            from finmamba3.models.attention import get_subsequent_mask_with_batch_length
+            mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
+            dist_feat = wm.sequence_model(flattened_sample, action, mask)
+        else:
+            dist_feat = wm.sequence_model(flattened_sample, action)
+        prior_logits = wm.dist_head.forward_prior(dist_feat[:, :-1])
+        prior_sample = wm.straight_through_gradient(prior_logits, sample_mode="probs")
+        prior_flat = wm.flatten_sample(prior_sample)
+        next_hat = wm.obs_decoder(prior_flat).float()
+    target_next = obs[:, 1:].float()
+    sse = float(((next_hat - target_next) ** 2).sum().item())
+    count = int(target_next.numel())
+    return sse, count
+
+
+def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:
+    """Run the world-model encoder + direction head on the val sequence."""
+    import yaml
+    from finmamba3.config import DotDict, parse_args_and_update_config
+    with open(args.config, "r") as f:
+        cfg_raw = yaml.safe_load(f)
+    cfg = DotDict(parse_args_and_update_config(cfg_raw, argv=[]))
+    wm = load_world_model(cfg, args.world_checkpoint, device)
+    if not wm.use_direction_head:
+        logger.warning("World model has no direction head; world_model arm will be skipped.")
+        return _nan_metrics()
+    probs, labels = world_model_direction_probs(
+        wm, val_seq, threshold, args.label_mode, args.tb_horizon, 10 * 8, device
+    )
+    return classification_metrics(probs, labels)
 
 
 def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torch.device) -> dict[str, float]:
@@ -280,13 +366,18 @@ def main() -> int:
     from finmamba3.sequence_builder import build_sequences
     norm_clip = cfg.BasicSettings.get("NormClip", 8.0)
     aggregate_only = cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
+    # The world model's encoder width is fixed by whether training appended the six binary-market
+    # tick features, so the eval sequences must use the same flag or the encoder linear mismatches.
+    include_binary_features = cfg.Models.WorldModel.Encoder.get("BinaryMarketFeatures", False)
     train_seq, slug, _stats = build_sequences(
         args.data_train, args.market_slug, args.hours_train, args.norm_path,
         fit_stats=True, norm_clip=norm_clip, aggregate_only=aggregate_only,
+        include_binary_features=include_binary_features,
     )
     val_seq, _, _ = build_sequences(
         args.data_val, slug, args.hours_val, args.norm_path,
         fit_stats=False, norm_clip=norm_clip, aggregate_only=aggregate_only,
+        include_binary_features=include_binary_features,
     )
     logger.info(f"train ticks: {train_seq.per_tick.shape[0]}, val ticks: {val_seq.per_tick.shape[0]}")
     rows = []
