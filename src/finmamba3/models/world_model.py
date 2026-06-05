@@ -9,7 +9,7 @@ from pytorch_warmup import LinearWarmup
 from finmamba3.models.losses import CategoricalKLDivLossWithFreeBits, SymLogTwoHotLoss
 from finmamba3.models.world_model_heads import DistHead, RewardHead, TerminationHead
 from finmamba3.models.attention import get_subsequent_mask_with_batch_length, get_subsequent_mask
-from finmamba3.models.transformer import StochasticTransformerKVCache
+from finmamba3.models.transformer import StochasticTransformerKVCache, StochasticTransformerModernKVCache
 from finmamba3.models.mamba_backbone import FinMambaSequenceModel
 from finmamba3.models.regime_modulation import regime_load_balance_loss
 from finmamba3.models.lob_heads import (
@@ -92,6 +92,19 @@ class WorldModel(nn.Module):
                 num_heads=config.Models.WorldModel.Transformer.NumHeads,
                 max_length=max_seq_length,
                 dropout=config.Models.WorldModel.Dropout
+            )
+        elif self.model == 'TransformerModern':
+            self.sequence_model = StochasticTransformerModernKVCache(
+                stoch_dim=self.stoch_flattened_dim,
+                action_dim=action_dim,
+                feat_dim=self.hidden_state_dim,
+                num_layers=config.Models.WorldModel.Transformer.NumLayers,
+                num_heads=config.Models.WorldModel.Transformer.NumHeads,
+                max_length=max_seq_length,
+                dropout=config.Models.WorldModel.Dropout,
+                use_action_input=bool(config.Models.WorldModel.get('UseActionInput', True)),
+                device=device,
+                dtype=config.Models.WorldModel.dtype
             )
         elif self.model == 'Mamba':
             self.sequence_model = FinMambaSequenceModel(
