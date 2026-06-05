@@ -115,7 +115,7 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
         prefix_latent = ctx_latent
         prefix_action = action
         for step in range(horizon):
-            if wm.model == "Transformer":
+            if wm.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                 mask = get_subsequent_mask_with_batch_length(prefix_latent.shape[1], prefix_latent.device)
                 feat = wm.sequence_model(prefix_latent, prefix_action, mask)
@@ -152,7 +152,7 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
@@ -196,7 +196,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
