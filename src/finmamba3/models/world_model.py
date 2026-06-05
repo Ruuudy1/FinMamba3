@@ -405,7 +405,7 @@ class WorldModel(nn.Module):
         return flattened_sample
     def calc_last_dist_feat(self, latent, action, inference_params=None):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            if self.model == 'Transformer':
+            if self.model in ('Transformer', 'TransformerModern'):
                 temporal_mask = get_subsequent_mask(latent)
                 dist_feat = self.sequence_model(latent, action, temporal_mask)
             else:
@@ -422,7 +422,7 @@ class WorldModel(nn.Module):
             post_logits = self.dist_head.forward_post(embedding)
             sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
-            if self.model == 'Transformer':
+            if self.model in ('Transformer', 'TransformerModern'):
                 temporal_mask = get_subsequent_mask(latent)
                 dist_feat = self.sequence_model(latent, action, temporal_mask)
             else:
@@ -591,7 +591,7 @@ class WorldModel(nn.Module):
                 obs_hat = self.obs_decoder(flattened_sample)
             # Compute sequence-model hidden states.
             regime_logits = None
-            if self.model == 'Transformer':
+            if self.model in ('Transformer', 'TransformerModern'):
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
                 dist_feat = self.sequence_model(flattened_sample, action, temporal_mask)
             elif self.use_regime_film:
