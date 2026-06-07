@@ -27,7 +27,7 @@ JointTrainAgent:
   NumEnvs: 1
   BatchSize: 64
   AccumSteps: 2        # Effective batch 128
-  BatchLength: 32
+  BatchLength: 48      # Increased from 32 to handle imagination rollouts (context 8 + horizon 16 + buffer)
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
