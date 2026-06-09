@@ -13,7 +13,11 @@ from finmamba3.backtester.strategy import (
     OrderBookSnapshot,
     StoredBook,
 )
-from finmamba3.eval.regime_split import realized_vol_from_timeline, volatility_split
+from finmamba3.eval.regime_split import (
+    realized_vol_from_timeline,
+    spot_realized_vol_from_timeline,
+    volatility_split,
+)
 from finmamba3.eval.run_backtest_cli import _filter_backtest_data
 # endregion
 _CALM = "btc-updown-5m-0"
@@ -96,3 +100,34 @@ def test_filter_backtest_data_volatility_keeps_high_vol():
     kept = [m.market_slug for m in bt2.lifecycles]
     assert kept == [_WILD]
     assert desc.startswith("vol>")
+# Phase 0.5: the spot-vol split buckets markets by the underlying Chainlink realized vol over each
+# market window, the honest axis, instead of the YES-mid vol that is confounded with time-to-expiry.
+_SPOT_CALM = "btc-updown-5m-0"
+_SPOT_WILD = "btc-updown-5m-10"
+_SPOT_LIFECYCLES = [
+    MarketLifecycle(_SPOT_CALM, "5m", start_ts=0, end_ts=9),
+    MarketLifecycle(_SPOT_WILD, "5m", start_ts=10, end_ts=19),
+]
+
+
+def _spot_timeline_two_markets():
+    calm_prices = [50_000.0 + (ts % 2) for ts in range(10)]
+    wild_prices = [50_000.0, 51_000.0, 49_000.0, 52_000.0, 48_000.0,
+                   53_000.0, 47_000.0, 54_000.0, 46_000.0, 55_000.0]
+    ticks = []
+    for ts in range(20):
+        price = calm_prices[ts] if ts < 10 else wild_prices[ts - 10]
+        ticks.append(TickData(ts_sec=ts, chainlink_btc=price))
+    return ticks
+
+
+def test_spot_realized_vol_ranks_volatile_market_higher():
+    vol = spot_realized_vol_from_timeline(_spot_timeline_two_markets(), _SPOT_LIFECYCLES)
+    assert vol[_SPOT_WILD] > vol[_SPOT_CALM] > 0.0
+
+
+def test_spot_vol_split_routes_high_vol_to_test():
+    vol = spot_realized_vol_from_timeline(_spot_timeline_two_markets(), _SPOT_LIFECYCLES)
+    result = volatility_split(_SPOT_LIFECYCLES, realized_vol=vol, quantile=0.5)
+    assert [m.market_slug for m in result.test_markets] == [_SPOT_WILD]
+    assert [m.market_slug for m in result.train_markets] == [_SPOT_CALM]

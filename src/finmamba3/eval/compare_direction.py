@@ -209,6 +209,53 @@ def world_model_direction_probs(
     return probs_np[valid_flat], labels_flat[valid_flat]
 
 
+def world_model_settlement_logloss(
+    wm, val_seq, device: torch.device,
+    windows_per_market: int = 256, window_len: int = 64, rng_seed: int = 0,
+) -> tuple[float, int]:
+    """Summed binary cross-entropy and count of the settlement head over one market (lower is better).
+
+    Mirrors the direction-probs forward but reads the settlement head, whose per-position logit predicts
+    the market's terminal YES/NO outcome. Pooling (sum_bce, count) before dividing gives the exact
+    position-weighted log-loss over a regime so longer markets are not over-weighted. Positions whose
+    yes_outcome is unresolved (nan) are masked out. Requires the settlement head and a resolved market.
+    """
+    assert wm.use_settlement_head, "checkpoint has no settlement head; train with Settlement.Enabled=True."
+    assert val_seq.yes_outcome is not None, "market has no yes_outcome; settlement log-loss is undefined."
+    flat = val_seq.to_flat()
+    T = flat.shape[0]
+    L = window_len
+    if T < L + 1:
+        return 0.0, 0
+    rng = np.random.default_rng(rng_seed)
+    starts = rng.integers(0, T - L, size=min(windows_per_market, T - L))
+    windows = np.stack([flat[s : s + L] for s in starts], axis=0)
+    obs = torch.from_numpy(windows).float().to(device)
+    action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
+        embedding = wm.encoder(obs)
+        post_logits = wm.dist_head.forward_post(embedding)
+        sample = wm.straight_through_gradient(post_logits)
+        flattened_sample = wm.flatten_sample(sample)
+        if wm.model == "Transformer":
+            from finmamba3.models.attention import get_subsequent_mask_with_batch_length
+            mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
+            dist_feat = wm.sequence_model(flattened_sample, action, mask)
+        else:
+            dist_feat = wm.sequence_model(flattened_sample, action)
+        dist_feat = wm.condition_dist_feat(dist_feat)
+        settle_logits = wm.settlement_head(dist_feat).float()
+    outcome_windows = np.stack([val_seq.yes_outcome[s : s + L] for s in starts], axis=0)
+    outcome = torch.from_numpy(outcome_windows).float().to(device)
+    finite = torch.isfinite(outcome)
+    safe_outcome = torch.where(finite, outcome, torch.zeros_like(outcome))
+    per = F.binary_cross_entropy_with_logits(settle_logits, safe_outcome, reduction="none")
+    masked = per * finite.float()
+    return float(masked.sum().item()), int(finite.sum().item())
+
+
 def world_model_prediction_mse(
     wm, val_seq, device: torch.device,
     windows_per_market: int = 256, window_len: int = 64, rng_seed: int = 0,
@@ -256,6 +303,70 @@ def world_model_prediction_mse(
     sse = float(((next_hat - target_next) ** 2).sum().item())
     count = int(target_next.numel())
     return sse, count
+
+
+def world_model_prediction_nll(
+    wm, val_seq, device: torch.device, feature_indices: torch.Tensor,
+    windows_per_market: int = 256, window_len: int = 64, rng_seed: int = 0,
+) -> tuple[float, int]:
+    """Summed Student-t NLL and element count of the one-step-ahead decoder prediction.
+
+    The Gaussian prediction_mse cannot express "this regime is more volatile" because an MSE
+    decoder has no scale parameter, so the regime-FiLM modulation had nothing to earn under it.
+    A Student-t decoder emits a per-feature (mean, log_scale); its NLL on the prior-predicted next
+    tick rewards a correctly widened scale in the high-vol regime, which is the regime-dependent
+    quantity this campaign tests FiLM on. The forward is identical to world_model_prediction_mse up
+    to prior_flat; only the decode and the likelihood differ. feature_indices restricts the NLL to a
+    channel subset (price/scale or volume) so the same checkpoints answer both the volatility and the
+    order-flow-magnitude question. Returning (sum_nll, count) lets a caller pool windows exactly.
+    """
+    assert wm.decoder_kind == "studentt", (
+        "prediction_nll assumes a Student-t decoder returning (mean, log_scale); a Gaussian decoder "
+        "returns a single tensor and has no scale to score."
+    )
+    flat = val_seq.to_flat()
+    T = flat.shape[0]
+    L = window_len
+    if T < L + 1:
+        return 0.0, 0
+    rng = np.random.default_rng(rng_seed)
+    starts = rng.integers(0, T - L, size=min(windows_per_market, T - L))
+    windows = np.stack([flat[s : s + L] for s in starts], axis=0)
+    obs = torch.from_numpy(windows).float().to(device)
+    action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
+        embedding = wm.encoder(obs)
+        post_logits = wm.dist_head.forward_post(embedding)
+        sample = wm.straight_through_gradient(post_logits)
+        flattened_sample = wm.flatten_sample(sample)
+        if wm.model == "Transformer":
+            from finmamba3.models.attention import get_subsequent_mask_with_batch_length
+            mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
+            dist_feat = wm.sequence_model(flattened_sample, action, mask)
+        else:
+            # A FeedObsVol checkpoint conditioned its router on the obs-midprice realized volatility during
+            # training; the eval forward must hand the router the identical feature or the FiLM modulation
+            # diverges from training and the gap is meaningless.
+            regime_vol = None
+            if wm.use_regime_film and wm.regime_film_feed_obs_vol:
+                from finmamba3.models.regime_modulation import realized_vol_conditioning_feature
+                regime_vol = realized_vol_conditioning_feature(obs[..., wm.midprice_index], wm.regime_film_vol_window)
+            dist_feat = wm.sequence_model(flattened_sample, action, regime_vol=regime_vol)
+        prior_logits = wm.dist_head.forward_prior(dist_feat[:, :-1])
+        prior_sample = wm.straight_through_gradient(prior_logits, sample_mode="probs")
+        prior_flat = wm.flatten_sample(prior_sample)
+        mean, log_scale = wm.obs_decoder(prior_flat)
+    target_next = obs[:, 1:].float()
+    # The likelihood is computed in float32 outside autocast so the Student-t lgamma/log terms keep
+    # full precision; bf16 would quantize the scale and bias the per-regime NLL comparison.
+    log_prob = wm.obs_decoder.log_prob(mean.float(), log_scale.float(), target_next)
+    selected = log_prob.index_select(-1, feature_indices.to(log_prob.device))
+    sum_nll = float((-selected).sum().item())
+    count = int(selected.numel())
+    return sum_nll, count
 
 
 def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device) -> dict[str, float]:

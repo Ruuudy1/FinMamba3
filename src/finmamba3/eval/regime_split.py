@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import numpy as np
+from finmamba3.backtester.data_loader import _asset_from_slug
 from finmamba3.backtester.strategy import MarketLifecycle
 # endregion
 if TYPE_CHECKING:
@@ -29,6 +30,62 @@ class RegimeSplitResult:
     train_markets: list[MarketLifecycle]
     test_markets: list[MarketLifecycle]
     description: str
+
+
+@dataclass
+class WindowSplitResult:
+    low_vol_windows: list[tuple[int, int]]
+    high_vol_windows: list[tuple[int, int]]
+    description: str
+
+
+def window_volatility_split(
+    midprice: np.ndarray,
+    window_len: int,
+    quantile: float = 0.5,
+) -> WindowSplitResult:
+    """Split one concatenated LOB stream into low- and high-volatility windows.
+
+    FI-2010 ships as a single event stream with no market or day boundaries, so the
+    per-market volatility_split has no segment key to group by. The stream is chopped
+    into non-overlapping windows of window_len events, realized volatility is measured
+    per window, and the windows are split at the vol quantile: windows at or below the
+    threshold form the low-vol reference regime and the rest form the high-vol shifted
+    regime. Each returned (start, end) pair indexes the stream so the caller can slice
+    its LOBSequence into one sub-sequence per window, the direct analog of the per-market
+    list volatility_split returns. This keeps the FI-2010 difference-of-differences a fair
+    comparison with the Polymarket vol-median split: only the dataset changes, not the
+    split definition.
+
+    Volatility is the standard deviation of the first difference of the mid, not of
+    fractional returns: FI-2010 mids are already z-scored or decimal-scaled and can be
+    zero or negative, which makes a fractional return ill-defined, while the split only
+    needs a consistent volatility ordering across windows measured on the same scale.
+    """
+    num_events = int(midprice.shape[0])
+    assert window_len >= 2, "window_len must be at least 2 to estimate volatility."
+    mid = np.asarray(midprice, dtype=np.float64)
+    bounds = [
+        (start, start + window_len)
+        for start in range(0, num_events - window_len + 1, window_len)
+    ]
+    assert len(bounds) >= 2, (
+        f"stream of {num_events} events yields fewer than two full windows at "
+        f"window_len={window_len}; lower window_len or pass a longer stream."
+    )
+    vols = np.fromiter(
+        (float(np.std(np.diff(mid[start:end]))) for start, end in bounds),
+        dtype=np.float64,
+        count=len(bounds),
+    )
+    threshold = float(np.quantile(vols, quantile))
+    low_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] <= threshold]
+    high_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] > threshold]
+    return WindowSplitResult(
+        low_vol_windows=low_vol_windows,
+        high_vol_windows=high_vol_windows,
+        description=f"win{window_len}-vol>{threshold:.5f}",
+    )
 
 
 def realized_vol_from_timeline(timeline: list[TickData]) -> dict[str, float]:
@@ -55,6 +112,56 @@ def realized_vol_from_timeline(timeline: list[TickData]) -> dict[str, float]:
             continue
         arr = np.asarray(mids, dtype=np.float64)
         vol_by_slug[slug] = float(np.std(np.diff(arr) / arr[:-1]))
+    return vol_by_slug
+
+
+def market_spot_series(
+    timeline: list["TickData"],
+    lifecycles: list[MarketLifecycle],
+) -> dict[str, np.ndarray]:
+    """Per-market underlying Chainlink-spot price series over its [start_ts, end_ts] window.
+
+    Forward-filled repeats are dropped so idle seconds do not distort downstream estimators; a
+    market with fewer than two distinct spot prices is omitted. Both the spot-vol axis (Phase 0.5)
+    and the predictability axis (Phase 0.7) read these series, so the per-market extraction lives
+    here once.
+    """
+    num_ticks = len(timeline)
+    ts_array = np.fromiter((int(tick.ts_sec) for tick in timeline), dtype=np.int64, count=num_ticks)
+    price_by_asset = {
+        "BTC": np.fromiter((float(tick.chainlink_btc) for tick in timeline), dtype=np.float64, count=num_ticks),
+        "ETH": np.fromiter((float(tick.chainlink_eth) for tick in timeline), dtype=np.float64, count=num_ticks),
+        "SOL": np.fromiter((float(tick.chainlink_sol) for tick in timeline), dtype=np.float64, count=num_ticks),
+    }
+    series_by_slug: dict[str, np.ndarray] = {}
+    for lifecycle in lifecycles:
+        prices = price_by_asset[_asset_from_slug(lifecycle.market_slug)]
+        lo = int(np.searchsorted(ts_array, lifecycle.start_ts, side="left"))
+        hi = int(np.searchsorted(ts_array, lifecycle.end_ts, side="right"))
+        window = prices[lo:hi]
+        window = window[window > 0.0]
+        if window.shape[0] < 2:
+            continue
+        moved = window[np.concatenate([[True], window[1:] != window[:-1]])]
+        if moved.shape[0] >= 2:
+            series_by_slug[lifecycle.market_slug] = moved
+    return series_by_slug
+
+
+def spot_realized_vol_from_timeline(
+    timeline: list["TickData"],
+    lifecycles: list[MarketLifecycle],
+) -> dict[str, float]:
+    """Realized underlying-spot return volatility per market (Phase 0.5, the honest regime axis).
+
+    The prior split measured volatility on the YES-mid (the implied probability), which
+    mechanically explodes toward 0/1 near settlement, so "high vol" was confounded with "near
+    expiry". The std of one-step fractional Chainlink-spot returns inside each market's window
+    removes that confound.
+    """
+    vol_by_slug: dict[str, float] = {}
+    for slug, series in market_spot_series(timeline, lifecycles).items():
+        vol_by_slug[slug] = float(np.std(np.diff(series) / series[:-1]))
     return vol_by_slug
 
 

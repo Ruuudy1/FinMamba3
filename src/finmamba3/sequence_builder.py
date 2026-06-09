@@ -6,9 +6,12 @@ go through the identical feature pipeline (no train/serve skew).
 # region imports
 from __future__ import annotations
 import logging
+import math
+from dataclasses import replace
 from pathlib import Path
 import numpy as np
 from finmamba3.backtester import build_timeline
+from finmamba3.backtester.data_loader import _asset_from_slug
 from finmamba3.envs.fi2010_loader import load_fi2010_split
 from finmamba3.envs.lob_features import (
     LOBSequence,
@@ -37,10 +40,96 @@ def _settlement_yes_outcome(settlement) -> float | None:
     return None
 
 
+CROSS_INTERVAL_WIDTH = 3
+_SHORT_INTERVALS = ("5m", "15m")
+
+
+def cross_interval_context_block(bt, hourly_slug: str, ts_sec_array: np.ndarray) -> np.ndarray:
+    """Per-tick context summarizing the contemporaneous short-interval markets of an hourly market.
+
+    For each hourly book-tick the block carries three channels (Phase 0.4): the mean YES mid of the
+    same-asset 5m/15m markets active at that tick, the YES fraction among those that have already
+    resolved this hour, and log1p of that resolved count. Those short markets resolve inside the
+    hourly window and are already-settled, direct evidence about the hourly direction, so a
+    concatenated summary is the simplest signal that exposes them (KISS, not a cross-attention
+    module). The caller appends a zero block to non-hourly markets so the feature width stays uniform.
+    """
+    lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
+    hourly_lifecycle = lifecycle_by_slug[hourly_slug]
+    asset = _asset_from_slug(hourly_slug)
+    short_slugs = [
+        lc.market_slug for lc in bt.lifecycles
+        if lc.interval in _SHORT_INTERVALS and
+        _asset_from_slug(lc.market_slug) == asset and
+        lc.start_ts >= hourly_lifecycle.start_ts and
+        lc.end_ts <= hourly_lifecycle.end_ts
+    ]
+    # Sort the resolved short markets by end time with their YES outcome so a searchsorted per tick
+    # yields how many have settled and their cumulative YES count without rescanning the list.
+    resolved = []
+    for slug in short_slugs:
+        outcome = _settlement_yes_outcome(bt.settlements.get(slug))
+        if outcome is not None:
+            resolved.append((lifecycle_by_slug[slug].end_ts, outcome))
+    resolved.sort(key=lambda pair: pair[0])
+    end_ts_sorted = np.fromiter((end for end, _ in resolved), dtype=np.int64, count=len(resolved))
+    yes_cumsum = np.concatenate([[0.0], np.cumsum([out for _, out in resolved], dtype=np.float64)])
+    # The active short mids live on the very timeline tick the hourly book lives on, so one pass over
+    # the wanted timestamps reads them directly without a separate per-market mid series.
+    row_by_ts = {int(ts): i for i, ts in enumerate(ts_sec_array)}
+    active_mean_mid = np.full(len(ts_sec_array), 0.5, dtype=np.float64)
+    for tick in bt.timeline:
+        row = row_by_ts.get(int(tick.ts_sec))
+        if row is None:
+            continue
+        mids = []
+        for slug in short_slugs:
+            sb = tick.order_books.get(slug)
+            if sb is not None and sb.yes_book.bids and sb.yes_book.asks and sb.yes_book.mid > 0.0:
+                mids.append(sb.yes_book.mid)
+        if mids:
+            active_mean_mid[row] = float(np.mean(mids))
+    block = np.zeros((len(ts_sec_array), CROSS_INTERVAL_WIDTH), dtype=np.float32)
+    for i, ts in enumerate(ts_sec_array):
+        n_resolved = int(np.searchsorted(end_ts_sorted, int(ts), side="right"))
+        block[i, 0] = active_mean_mid[i]
+        block[i, 1] = float(yes_cumsum[n_resolved] / n_resolved) if n_resolved > 0 else 0.5
+        block[i, 2] = math.log1p(float(n_resolved))
+    return block
+
+
+def _append_cross_interval(bt, slug: str, seq: LOBSequence, lifecycle_by_slug: dict) -> LOBSequence:
+    # Hourly markets get the real contemporaneous-short summary; others get a zero block so the buffer
+    # feature width is uniform across intervals, which the fixed-size encoder requires.
+    if lifecycle_by_slug[slug].interval == "hourly":
+        block = cross_interval_context_block(bt, slug, seq.ts_sec)
+    else:
+        block = np.zeros((seq.per_tick.shape[0], CROSS_INTERVAL_WIDTH), dtype=np.float32)
+    return replace(seq, per_tick=np.concatenate([seq.per_tick, block], axis=1))
+
+
+def _spot_feature_kwargs(slug: str, settlement, lifecycle_by_slug: dict) -> dict:
+    # The spot block is anchored to the market's lifecycle bounds and its open Chainlink
+    # reference. start_ts/end_ts come from the slug-parsed lifecycle (always present); the open
+    # reference reuses the settlement's chainlink_open when computed, else extract_features scans.
+    lifecycle = lifecycle_by_slug.get(slug)
+    if lifecycle is None:
+        raise RuntimeError(f"No lifecycle for market {slug!r}; cannot build spot features.")
+    spot_open = settlement.chainlink_open if settlement is not None and settlement.chainlink_open > 0.0 else None
+    return {
+        "asset": _asset_from_slug(slug),
+        "start_ts": int(lifecycle.start_ts),
+        "end_ts": int(lifecycle.end_ts),
+        "spot_open": spot_open,
+    }
+
+
 def populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
     flat = seq.to_flat()
     T = flat.shape[0]
     yes_outcome = seq.yes_outcome
+    tte = seq.tte_frac
+    spot_dist = seq.spot_signed_distance
     for t in range(T):
         outcome_t = float(yes_outcome[t]) if yes_outcome is not None else float('nan')
         buffer.append(
@@ -49,6 +138,8 @@ def populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
             reward=0.0,
             termination=0.0,
             outcome=outcome_t,
+            tte_frac=float(tte[t]) if tte is not None else float('nan'),
+            spot_signed_distance=float(spot_dist[t]) if spot_dist is not None else float('nan'),
         )
     logger.info(f"replay buffer: loaded {T} ticks for market {seq.market_slug}")
 
@@ -64,6 +155,8 @@ def populate_buffer_multi(buffer: ReplayBuffer, seqs: list[LOBSequence]) -> None
         flat = seq.to_flat()
         T = flat.shape[0]
         yes_outcome = seq.yes_outcome
+        tte = seq.tte_frac
+        spot_dist = seq.spot_signed_distance
         for t in range(T):
             outcome_t = float(yes_outcome[t]) if yes_outcome is not None else float('nan')
             buffer.append(
@@ -72,6 +165,8 @@ def populate_buffer_multi(buffer: ReplayBuffer, seqs: list[LOBSequence]) -> None
                 reward=0.0,
                 termination=0.0,
                 outcome=outcome_t,
+                tte_frac=float(tte[t]) if tte is not None else float('nan'),
+                spot_signed_distance=float(spot_dist[t]) if spot_dist is not None else float('nan'),
                 segment_end=(t == T - 1),
             )
         total += T
@@ -89,24 +184,39 @@ def build_sequences(
     aggregate_only: bool,
     intervals: list[str] | None = None,
     include_binary_features: bool = False,
+    include_spot_features: bool = False,
+    include_cross_interval: bool = False,
 ) -> tuple[LOBSequence, str, object]:
     bt = build_timeline(data_dir=data_dir, hours=hours, intervals=intervals)
+    lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
     slug = market_slug or pick_longest_market(bt)
     settlement = bt.settlements.get(slug)
     yes_outcome = _settlement_yes_outcome(settlement)
+    spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
     try:
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
+        seq = extract_features(
+            bt.timeline, slug, yes_outcome=yes_outcome,
+            include_binary_features=include_binary_features,
+            include_spot_features=include_spot_features, **spot_kwargs,
+        )
     except RuntimeError:
         # Requested slug has no usable ticks in this split; fall back to the
         # longest market available in this split.
         slug = pick_longest_market(bt)
         settlement = bt.settlements.get(slug)
         yes_outcome = _settlement_yes_outcome(settlement)
+        spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
         logger.warning(
             f"Market {market_slug!r} has no usable ticks in {data_dir}; "
             f"falling back to {slug!r}"
         )
-        seq = extract_features(bt.timeline, slug, yes_outcome=yes_outcome, include_binary_features=include_binary_features)
+        seq = extract_features(
+            bt.timeline, slug, yes_outcome=yes_outcome,
+            include_binary_features=include_binary_features,
+            include_spot_features=include_spot_features, **spot_kwargs,
+        )
+    if include_cross_interval:
+        seq = _append_cross_interval(bt, slug, seq, lifecycle_by_slug)
     if fit_stats:
         stats = fit_normalization(seq, clip_value=norm_clip)
         save_normalization(stats, norm_path)
@@ -130,6 +240,9 @@ def build_market_sequences(
     max_markets: int,
     intervals: list[str] | None = None,
     include_binary_features: bool = False,
+    include_spot_features: bool = False,
+    include_cross_interval: bool = False,
+    assets: list[str] | None = None,
 ) -> tuple[list[LOBSequence], list[str], object]:
     """Build per-market normalized sequences for the top-N longest markets.
 
@@ -140,17 +253,22 @@ def build_market_sequences(
     first), their slugs, and the shared stats.
     """
     bt = build_timeline(data_dir=data_dir, hours=hours, intervals=intervals)
-    slugs = [market_slug] if market_slug else pick_top_markets(bt, max_markets)
+    lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
+    slugs = [market_slug] if market_slug else pick_top_markets(bt, max_markets, assets=assets)
     raw_seqs: list[LOBSequence] = []
     for slug in slugs:
         settlement = bt.settlements.get(slug)
         yes_outcome = _settlement_yes_outcome(settlement)
+        spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
         raw_seqs.append(
             extract_features(
                 bt.timeline, slug, yes_outcome=yes_outcome,
                 include_binary_features=include_binary_features,
+                include_spot_features=include_spot_features, **spot_kwargs,
             )
         )
+    if include_cross_interval:
+        raw_seqs = [_append_cross_interval(bt, slug, seq, lifecycle_by_slug) for slug, seq in zip(slugs, raw_seqs)]
     if fit_stats:
         # The temp sequence only feeds fit_normalization, which reads per_level and
         # per_tick; concatenating the other fields keeps it internally consistent.

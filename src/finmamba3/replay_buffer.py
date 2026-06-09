@@ -22,6 +22,11 @@ class ReplayBuffer():
             self.termination_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             # NaN sentinel: unresolved-market ticks must be visible to the loss path so BCE can mask them out instead of treating uninitialized memory as outcome=0.
             self.outcome_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            # Raw per-tick settlement-supervision channels (Phase 0.3): tte_frac in [0, 1] weights the
+            # outcome BCE toward expiry; the signed spot distance gives the observable running spot-sign
+            # target. NaN until populated so a buffer with no spot features contributes neither term.
+            self.tte_frac_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            self.spot_dist_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             # Marks the final tick of each market. A dedicated buffer keeps the
@@ -33,6 +38,8 @@ class ReplayBuffer():
             self.reward_buffer = np.empty((max_length), dtype=np.float32)
             self.termination_buffer = np.empty((max_length), dtype=np.float32)
             self.outcome_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.tte_frac_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.spot_dist_buffer = np.full((max_length,), np.nan, dtype=np.float32)
             self.sampled_counter = np.zeros((max_length), dtype=np.int32)
             self.imagined_counter = np.zeros((max_length), dtype=np.int32)
             self.segment_end_buffer = np.zeros((max_length), dtype=np.float32)
@@ -73,7 +80,12 @@ class ReplayBuffer():
         self.valid_start_mask_by_key[key] = mask
         return mask
     @torch.no_grad()
-    def sample(self, batch_size, batch_length, imagine=False):
+    def sample(self, batch_size, batch_length, imagine=False, with_supervision=False):
+        # with_supervision additionally returns the raw per-tick tte_frac and signed spot distance
+        # gathered at the same start indices, so the settlement loss can weight by expiry and read
+        # the observable spot sign. Legacy callers keep the five-tuple return untouched.
+        tte_frac = None
+        spot_dist = None
         if self.store_on_gpu:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             counts = self.sampled_counter[:self.length + 1 - batch_length]
@@ -114,9 +126,13 @@ class ReplayBuffer():
             reward = torch.cat(reward_list, dim=0)
             termination = torch.cat(termination_list, dim=0)
             outcome = torch.cat(outcome_list, dim=0)
+            tte_frac = self.tte_frac_buffer[indexes]
+            spot_dist = self.spot_dist_buffer[indexes]
         else:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             outcome_list_cpu: list[torch.Tensor] = []
+            tte_list_cpu: list[torch.Tensor] = []
+            spot_list_cpu: list[torch.Tensor] = []
             if batch_size > 0:
                 counts = self.sampled_counter[:self.length + 1 - batch_length]
                 imagine_counts = self.imagined_counter[:self.length + 1 - batch_length] / self.batch_scale_factor
@@ -153,18 +169,27 @@ class ReplayBuffer():
                 reward_seq = torch.from_numpy(reward_seq).to(self.device)
                 termination_seq = torch.from_numpy(termination_seq).to(self.device)
                 outcome_seq = torch.from_numpy(outcome_seq).to(self.device)
+                tte_seq = torch.from_numpy(self.tte_frac_buffer[indexes]).to(self.device)
+                spot_seq = torch.from_numpy(self.spot_dist_buffer[indexes]).to(self.device)
                 obs_list.append(obs_seq)
                 action_list.append(action_seq)
                 reward_list.append(reward_seq)
                 termination_list.append(termination_seq)
                 outcome_list_cpu.append(outcome_seq)
+                tte_list_cpu.append(tte_seq)
+                spot_list_cpu.append(spot_seq)
             obs = torch.cat(obs_list, dim=0) if obs_list else torch.empty(0, device=self.device)
             action = torch.cat(action_list, dim=0) if action_list else torch.empty(0, device=self.device)
             reward = torch.cat(reward_list, dim=0) if reward_list else torch.empty(0, device=self.device)
             termination = torch.cat(termination_list, dim=0) if termination_list else torch.empty(0, device=self.device)
             outcome = torch.cat(outcome_list_cpu, dim=0) if outcome_list_cpu else torch.empty(0, device=self.device)
+            tte_frac = torch.cat(tte_list_cpu, dim=0) if tte_list_cpu else torch.empty(0, device=self.device)
+            spot_dist = torch.cat(spot_list_cpu, dim=0) if spot_list_cpu else torch.empty(0, device=self.device)
+        if with_supervision:
+            return obs, action, reward, termination, outcome, tte_frac, spot_dist
         return obs, action, reward, termination, outcome
-    def append(self, obs, action, reward, termination, outcome=float('nan'), segment_end=False):
+    def append(self, obs, action, reward, termination, outcome=float('nan'),
+               tte_frac=float('nan'), spot_signed_distance=float('nan'), segment_end=False):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length)
         if self.store_on_gpu:
             self.obs_buffer[self.last_pointer] = torch.from_numpy(obs)
@@ -172,6 +197,8 @@ class ReplayBuffer():
             self.reward_buffer[self.last_pointer] = torch.tensor(reward, device=self.device)
             self.termination_buffer[self.last_pointer] = torch.tensor(termination, device=self.device)
             self.outcome_buffer[self.last_pointer] = torch.tensor(float(outcome), device=self.device)
+            self.tte_frac_buffer[self.last_pointer] = torch.tensor(float(tte_frac), device=self.device)
+            self.spot_dist_buffer[self.last_pointer] = torch.tensor(float(spot_signed_distance), device=self.device)
             self.segment_end_buffer[self.last_pointer] = float(segment_end)
         else:
             self.obs_buffer[self.last_pointer] = obs
@@ -179,6 +206,8 @@ class ReplayBuffer():
             self.reward_buffer[self.last_pointer] = reward
             self.termination_buffer[self.last_pointer] = termination
             self.outcome_buffer[self.last_pointer] = float(outcome)
+            self.tte_frac_buffer[self.last_pointer] = float(tte_frac)
+            self.spot_dist_buffer[self.last_pointer] = float(spot_signed_distance)
             self.segment_end_buffer[self.last_pointer] = float(segment_end)
         if len(self) < self.max_length:
             self.length += 1

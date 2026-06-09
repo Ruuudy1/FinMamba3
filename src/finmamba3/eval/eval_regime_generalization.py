@@ -55,8 +55,14 @@ from finmamba3.eval.compare_direction import (
     load_world_model,
     world_model_direction_probs,
     world_model_prediction_mse,
+    world_model_settlement_logloss,
 )
-from finmamba3.eval.regime_split import realized_vol_from_timeline, volatility_split
+from finmamba3.eval.regime_split import (
+    realized_vol_from_timeline,
+    spot_realized_vol_from_timeline,
+    volatility_split,
+)
+from finmamba3.sequence_builder import _settlement_yes_outcome, _spot_feature_kwargs
 # endregion
 logger = logging.getLogger(__name__)
 LEVEL_FLAT = K_LEVELS * F_LEVEL
@@ -76,11 +82,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hours-val", type=float, default=1.0)
     p.add_argument("--volatility-quantile", type=float, default=0.5,
                    help="Markets above this realized-vol quantile form the high-vol regime.")
+    p.add_argument("--vol-source", choices=("spot", "mid"), default="spot",
+                   help="spot = underlying Chainlink realized vol over each market window (Phase 0.5, "
+                        "the honest axis); mid = the legacy YES-mid vol, confounded with time-to-expiry.")
     p.add_argument("--max-markets", type=int, default=128,
                    help="Cap on the longest qualifying held-out markets to split and score; bounds cost.")
     p.add_argument("--min-ticks", type=int, default=128,
                    help="Drop markets with fewer two-sided ticks so every regime market yields windows.")
-    p.add_argument("--metric", choices=("prediction_mse", "direction_macro_f1"), default="prediction_mse",
+    p.add_argument("--metric", choices=("prediction_mse", "direction_macro_f1", "settlement_logloss"), default="prediction_mse",
                    help="prediction_mse = decoder NLL on the prior-predicted next tick (regime-sensitive, "
                         "non-degenerate); direction_macro_f1 = 3-class direction (collapses on Polymarket).")
     p.add_argument("--label-mode", choices=("next_tick", "triple_barrier"), default="triple_barrier",
@@ -150,15 +159,26 @@ def generalization_gap(degradation_baseline: float, degradation_treatment: float
     return degradation_baseline - degradation_treatment
 
 
-def _regime_sequences(bt, slugs: list[str], stats, aggregate_only: bool, include_binary_features: bool) -> list:
+def _regime_sequences(bt, slugs: list[str], stats, aggregate_only: bool, include_binary_features: bool,
+                      include_spot_features: bool = False) -> list:
     """Per-market normalized sequences for the given slugs, reusing the train stats.
 
     Mirrors build_market_sequences' inner loop but applies a pre-fit normalization
     instead of fitting one, so the held-out markets are scored on the training scale.
     """
+    lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
     seqs = []
     for slug in slugs:
-        raw = extract_features(bt.timeline, slug, yes_outcome=None, include_binary_features=include_binary_features)
+        # Carry each held-out market's realized settlement so the settlement_logloss metric can score
+        # calibration; the direction and MSE metrics ignore yes_outcome, so this is harmless for them.
+        settlement = bt.settlements.get(slug)
+        yes_outcome = _settlement_yes_outcome(settlement)
+        spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
+        raw = extract_features(
+            bt.timeline, slug, yes_outcome=yes_outcome,
+            include_binary_features=include_binary_features,
+            include_spot_features=include_spot_features, **spot_kwargs,
+        )
         seq = apply_normalization(raw, stats)
         if aggregate_only:
             seq = make_aggregate_only(seq)
@@ -203,11 +223,29 @@ def _regime_prediction_mse(wm, seqs: list, windows_per_market: int, device: torc
     return total_sse / total_count
 
 
+def _regime_settlement_logloss(wm, seqs: list, windows_per_market: int, device: torch.device) -> float:
+    """Pooled settlement binary cross-entropy across a regime's markets (lower is better).
+
+    Summing the BCE and the resolved-position count before dividing gives the exact position-weighted
+    log-loss over the regime, so longer or better-resolved markets are not over- or under-counted.
+    """
+    total_bce = 0.0
+    total_count = 0
+    for seq in seqs:
+        sum_bce, count = world_model_settlement_logloss(wm, seq, device, windows_per_market=windows_per_market)
+        total_bce += sum_bce
+        total_count += count
+    assert total_count > 0, "no resolved settlement positions scored for this regime; markets lack yes_outcome."
+    return total_bce / total_count
+
+
 def _regime_score(wm, seqs: list, metric: str, threshold: float, label_mode: str, tb_horizon: int,
                   windows_per_market: int, device: torch.device) -> float:
-    """Per-regime scalar for the chosen metric (macro-F1, or one-step prediction MSE)."""
+    """Per-regime scalar for the chosen metric (macro-F1, one-step MSE, or settlement log-loss)."""
     if metric == "direction_macro_f1":
         return _regime_macro_f1(wm, seqs, threshold, label_mode, tb_horizon, windows_per_market, device)
+    if metric == "settlement_logloss":
+        return _regime_settlement_logloss(wm, seqs, windows_per_market, device)
     return _regime_prediction_mse(wm, seqs, windows_per_market, device)
 
 
@@ -248,6 +286,7 @@ def main() -> int:
     base_cfg = _load_config(args.config, [])
     aggregate_only = base_cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
     include_binary_features = base_cfg.Models.WorldModel.Encoder.get("BinaryMarketFeatures", False)
+    include_spot_features = base_cfg.Models.WorldModel.Encoder.get("SpotFeatures", False)
     # Build both models before the held-out timeline is loaded. The mamba_ssm import pulls in a
     # heavy transformers/dynamo chain whose transient allocation spike must land while host RAM
     # is free; loading the large timeline first then importing was OSError(Errno 12) on the 4080.
@@ -264,7 +303,10 @@ def main() -> int:
         arms.append((arm_name, wm))
     # One timeline load serves both the volatility split and the per-market feature source.
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val)
-    realized_vol = realized_vol_from_timeline(bt.timeline)
+    if args.vol_source == "spot":
+        realized_vol = spot_realized_vol_from_timeline(bt.timeline, bt.lifecycles)
+    else:
+        realized_vol = realized_vol_from_timeline(bt.timeline)
     low_slugs, high_slugs, split_desc = _split_slugs(
         bt, realized_vol, args.max_markets, args.min_ticks, args.volatility_quantile
     )
@@ -275,8 +317,8 @@ def main() -> int:
     )
     logger.info(f"volatility split ({split_desc}): low-vol={len(low_slugs)} high-vol={len(high_slugs)} markets")
     stats = load_normalization(args.norm_path)
-    low_seqs = _regime_sequences(bt, low_slugs, stats, aggregate_only, include_binary_features)
-    high_seqs = _regime_sequences(bt, high_slugs, stats, aggregate_only, include_binary_features)
+    low_seqs = _regime_sequences(bt, low_slugs, stats, aggregate_only, include_binary_features, include_spot_features)
+    high_seqs = _regime_sequences(bt, high_slugs, stats, aggregate_only, include_binary_features, include_spot_features)
     higher_is_better = args.metric == "direction_macro_f1"
     rows = []
     degradation_by_arm: dict[str, float] = {}

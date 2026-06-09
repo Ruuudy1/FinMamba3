@@ -248,6 +248,29 @@ class SettlementHead(nn.Module):
             return (per * mask).sum() / mask.sum().clamp(min=1.0)
         weight = (1.0 - time_to_expiry_frac.clamp(min=0.0, max=1.0)).to(logits.dtype)
         return (per * weight * mask).sum() / mask.sum().clamp(min=1.0)
+    @staticmethod
+    def spot_sign_bce(
+        logits: torch.Tensor,
+        spot_signed_distance: torch.Tensor,
+        time_to_expiry_frac: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Auxiliary BCE toward the observable running spot sign 1[spot >= open] (Phase 0.3).
+
+        The contract settles on exactly this rule at expiry, so supervising the running sign
+        early gives the head a dense, learnable target and keeps the causal spot sign salient
+        in the latent. Weighting by tte_frac makes it dominate near the open, complementary to
+        the realized-outcome term that bce() concentrates near expiry. NaN distances (a tick
+        with no spot path) are masked out so they contribute neither loss nor denominator.
+        """
+        spot = spot_signed_distance.to(logits.dtype)
+        target = (spot >= 0.0).to(logits.dtype)
+        mask = torch.isfinite(spot).to(logits.dtype)
+        per = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+        if time_to_expiry_frac is None:
+            weight = torch.ones_like(spot)
+        else:
+            weight = time_to_expiry_frac.clamp(min=0.0, max=1.0).to(logits.dtype)
+        return (per * weight * mask).sum() / mask.sum().clamp(min=1.0)
 
 
 class EpisodicMemoryFuser(nn.Module):

@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from finmamba3.models.regime_modulation import RegimeFiLMModulator
+from finmamba3.models.regime_modulation import RegimeAux, RegimeFiLMModulator
 # endregion
 logger = logging.getLogger(__name__)
 _LOGGED_MAMBA_CLASSES: list[str] = []
@@ -126,6 +126,11 @@ class FinMambaSequenceModel(nn.Module):
         use_regime_film: bool = False,
         num_regimes: int = 8,
         regime_embed_dim: int = 32,
+        regime_condition_on_vol: bool = False,
+        regime_vol_window: int = 16,
+        regime_init_scale: float = 0.0,
+        regime_dropout: float = 0.0,
+        regime_decouple_router: bool = False,
         device=None,
         dtype=None,
     ) -> None:
@@ -183,22 +188,33 @@ class FinMambaSequenceModel(nn.Module):
                 n_layer=n_layer,
                 num_regimes=num_regimes,
                 embed_dim=regime_embed_dim,
+                condition_on_vol=regime_condition_on_vol,
+                vol_window=regime_vol_window,
+                init_scale=regime_init_scale,
+                dropout=regime_dropout,
+                decouple_router=regime_decouple_router,
                 dtype=dtype,
                 device=device,
             )
         else:
             self.regime_modulator = None
-    def forward(self, samples, action, inference_params=None, return_regime=False, **mixer_kwargs):
+    def forward(self, samples, action, inference_params=None, return_regime=False,
+                regime_vol=None, **mixer_kwargs):
         if self.use_action_input:
             action = F.one_hot(action.long(), self.action_dim).to(dtype=samples.dtype)
             hidden_states = self.stem(torch.cat([samples, action], dim=-1))
         else:
             hidden_states = self.stem(samples)
-        # Infer the latent regime from the stem summary and emit per-block FiLM, so the
-        # regime modulates each block's input and thus its input-dependent Delta, B and C.
+        # Infer the latent regime from the stem summary, optionally steered by a volatility feature, and
+        # emit per-block FiLM so the regime modulates each block's input and thus its input-dependent
+        # Delta, B and C. regime_vol, when supplied, is the realized volatility measured from the
+        # observation midprice (shape [B, L, 1]); it gives the router the same axis the supervision label
+        # and the eval split use. When omitted the modulator falls back to its caller-free latent proxy.
         regime_logits = None
+        gammas = None
+        betas = None
         if self.use_regime_film:
-            gammas, betas, regime_logits = self.regime_modulator(hidden_states)
+            gammas, betas, regime_logits = self.regime_modulator(hidden_states, external_vol=regime_vol)
         # Mamba3 single-token cache and step kernels are intentionally bypassed on T4 and A100 compatibility runs.
         # Full-prefix recomputation calls this path instead.
         if self.block_type == "Mamba3":
@@ -219,5 +235,9 @@ class FinMambaSequenceModel(nn.Module):
             hidden_states = residual + self.dropout(layer_out)
         output = self.norm_f(hidden_states)
         if return_regime:
-            return output, regime_logits
+            # gamma_dev and beta_mag report how far FiLM has moved off its identity init; they are
+            # zero when FiLM is disabled so the caller can log them unconditionally.
+            gamma_dev = (gammas - 1.0).abs().mean() if gammas is not None else output.new_zeros(())
+            beta_mag = betas.abs().mean() if betas is not None else output.new_zeros(())
+            return output, RegimeAux(regime_logits=regime_logits, gamma_dev=gamma_dev, beta_mag=beta_mag)
         return output

@@ -90,7 +90,7 @@ Models:
       AggregateOnly: False
       GradientCheckpointing: False
     Decoder:
-      Kind: mse
+      Kind: studentt
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0
@@ -130,7 +130,6 @@ Models:
       NumClasses: 3
       Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
       LossWeight: 0.5
-      ClassBalanced: False             # Inverse-frequency class weighting on the direction CE; counters the ~76% flat-majority collapse so the head learns up/down. Phase 3 escalation sets True.
       Dropout: 0.0
       UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
     Regime:

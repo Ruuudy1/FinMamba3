@@ -154,8 +154,36 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        # 8 base losses + direction + hawkes + settlement + regime = 12 total.
-        self.assertEqual(len(losses), 12)
+        # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics = 15 total.
+        self.assertEqual(len(losses), 15)
+        self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+    def test_direction_class_balanced_weights_and_update_finite(self):
+        from finmamba3.models.world_model import WorldModel
+        config = _small_config("Mamba3")
+        config.Models.WorldModel.Direction.Enabled = True
+        config.Models.WorldModel.Direction.NumClasses = 3
+        config.Models.WorldModel.Direction.LossWeight = 2.0
+        config.Models.WorldModel.Direction.Threshold = 0.01
+        config.Models.WorldModel.Direction.Dropout = 0.0
+        config.Models.WorldModel.Direction.ClassBalanced = True
+        model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
+        self.assertTrue(model.direction_class_balanced)
+        # A majority-flat batch must yield inverse-frequency weights, so the rare up/down classes
+        # outweigh the flat majority and the head can no longer minimize loss by predicting flat.
+        targets = torch.tensor([1, 1, 1, 1, 0, 2])
+        weight = model._direction_class_weight(targets, torch.float32)
+        torch.testing.assert_close(weight, torch.tensor([1.0, 0.25, 1.0]))
+        self.assertGreater(weight[0].item(), weight[1].item())
+        # The plain arm must keep returning None so its cross-entropy stays exactly unweighted.
+        model.direction_class_balanced = False
+        self.assertIsNone(model._direction_class_weight(targets, torch.float32))
+        model.direction_class_balanced = True
+        obs = torch.randn(2, 4, config.BasicSettings.FeatureDim)
+        action = torch.zeros(2, 4)
+        reward = torch.zeros(2, 4)
+        termination = torch.zeros(2, 4)
+        losses = model.update(obs, action, reward, termination, 0, 0)
+        self.assertEqual(len(losses), 15)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_regime_film_identity_at_init_and_update_finite(self):
         from finmamba3.models.world_model import WorldModel
@@ -174,16 +202,19 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
             model.sequence_model.use_regime_film = False
             out_off = model.sequence_model(latent, action)
             model.sequence_model.use_regime_film = True
-            out_again, regime_logits = model.sequence_model(latent, action, return_regime=True)
+            out_again, regime_aux = model.sequence_model(latent, action, return_regime=True)
         # At init the hypernetwork emits gamma=1, beta=0, so FiLM is the identity and the
         # regime-on output must exactly match the regime-off output (clean baseline parity).
         torch.testing.assert_close(out_on, out_off, rtol=1e-4, atol=1e-5)
-        self.assertEqual(tuple(regime_logits.shape), (2, 4, 4))
+        self.assertEqual(tuple(regime_aux.regime_logits.shape), (2, 4, 4))
+        # The identity init means gamma sits at one and beta at zero, so both diagnostics start at zero.
+        torch.testing.assert_close(regime_aux.gamma_dev, torch.zeros_like(regime_aux.gamma_dev))
+        torch.testing.assert_close(regime_aux.beta_mag, torch.zeros_like(regime_aux.beta_mag))
         obs = torch.randn(2, 4, config.BasicSettings.FeatureDim)
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        self.assertEqual(len(losses), 12)
+        self.assertEqual(len(losses), 15)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 if __name__ == "__main__":
     unittest.main()

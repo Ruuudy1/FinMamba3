@@ -666,7 +666,7 @@ def test_world_model_fi2010_stoch_flattened_dim():
     assert wm.stoch_flattened_dim == 16
 
 
-def test_world_model_fi2010_update_returns_twelve_losses():
+def test_world_model_fi2010_update_returns_fifteen_losses():
     from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
@@ -676,7 +676,8 @@ def test_world_model_fi2010_update_returns_twelve_losses():
     reward = torch.zeros(B, L)
     termination = torch.zeros(B, L)
     losses = wm.update(obs, action, reward, termination, global_step=1, epoch_step=0)
-    assert len(losses) == 12
+    # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics = 15 total.
+    assert len(losses) == 15
     for t in losses:
         assert torch.is_tensor(t) and torch.isfinite(t).all()
 
@@ -703,7 +704,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
     action = torch.zeros(B, L, dtype=torch.long)
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
-    assert len(losses) == 12
+    assert len(losses) == 15
     direction_loss = losses[7]
     assert torch.isfinite(direction_loss)
 
@@ -724,6 +725,71 @@ def test_world_model_fi2010_regime_head_enabled_loss_finite():
     assert all(torch.isfinite(t).all() for t in losses)
 
 
+def test_world_model_fi2010_regime_film_knobs_train_and_log_diagnostics():
+    from finmamba3.config import DotDict
+    from finmamba3.models.world_model import WorldModel
+    cfg = _fi2010_world_model_config()
+    # Exercise every new FiLM knob at once: vol conditioning, a non-zero init that breaks identity,
+    # embedding dropout, and a separate optimizer group via LRMult and a weight-decay override.
+    cfg.Models.WorldModel.RegimeFiLM = DotDict({
+        "Enabled": True,
+        "NumRegimes": 4,
+        "EmbedDim": 8,
+        "EntropyCoef": 0.01,
+        "InitScale": 0.02,
+        "Dropout": 0.1,
+        "LRMult": 5.0,
+        "WeightDecay": 0.001,
+        "ConditionOnVol": True,
+        "VolWindow": 4,
+    })
+    wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
+    assert wm.use_regime_film
+    # LRMult and the weight-decay override must split the optimizer into a base group and a FiLM group.
+    assert len(wm.optimizer.param_groups) == 2
+    assert wm.optimizer.param_groups[1]["lr"] == cfg.Models.WorldModel.Adam.LearningRate * 5.0
+    B, L = 2, 8
+    obs = torch.randn(B, L, FI2010_FEATURE_DIM)
+    action = torch.zeros(B, L, dtype=torch.long)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
+                       global_step=1, epoch_step=0)
+    assert len(losses) == 15
+    assert all(torch.isfinite(t).all() for t in losses)
+    film_gamma_dev, film_beta_mag, regime_entropy = losses[11], losses[12], losses[13]
+    # A non-zero init means FiLM has already left identity, so gamma deviation is strictly positive,
+    # and the load-balanced router keeps a positive assignment entropy.
+    assert float(film_gamma_dev) > 0.0
+    assert float(film_beta_mag) > 0.0
+    assert float(regime_entropy) > 0.0
+
+
+def test_world_model_fi2010_regime_supervision_trains_finite_loss():
+    # Regime supervision adds a vol-bucket cross-entropy on the regime logits; the update must stay
+    # finite and the regime_loss diagnostic must be strictly positive (the CE term is nonzero at init).
+    from finmamba3.config import DotDict
+    from finmamba3.models.world_model import WorldModel
+    cfg = _fi2010_world_model_config()
+    cfg.Models.WorldModel.Decoder.Kind = "studentt"
+    # Regime supervision reads the obs midprice index, which is set only when the direction head exists.
+    cfg.Models.WorldModel.Direction.Enabled = True
+    cfg.Models.WorldModel.RegimeFiLM = DotDict({
+        "Enabled": True, "NumRegimes": 4, "EmbedDim": 8, "EntropyCoef": 0.0,
+        "InitScale": 0.03, "Dropout": 0.0, "LRMult": 10.0, "WeightDecay": None,
+        "ConditionOnVol": True, "VolWindow": 4, "SuperviseVol": True, "SupervisionWeight": 1.0,
+    })
+    wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
+    assert wm.regime_film_supervise_vol
+    B, L = 2, 8
+    obs = torch.randn(B, L, FI2010_FEATURE_DIM)
+    action = torch.zeros(B, L, dtype=torch.long)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
+                       global_step=1, epoch_step=0)
+    assert len(losses) == 15
+    assert all(torch.isfinite(t).all() for t in losses)
+    regime_loss = losses[10]
+    assert float(regime_loss) > 0.0, "regime supervision CE must make the regime loss strictly positive."
+
+
 def test_world_model_fi2010_studentt_decoder_loss_finite():
     from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
@@ -735,6 +801,37 @@ def test_world_model_fi2010_studentt_decoder_loss_finite():
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
     assert all(torch.isfinite(t).all() for t in losses)
+
+
+def test_validation_metrics_studentt_reconstruction_loss_finite():
+    # The validation path must decode the studentt (mean, log_scale) and score the NLL, not call the
+    # MSE reconstruction signature; this regression locks the fix that lets a studentt run reach a
+    # checkpoint (an unfixed path crashed at the first validation with a missing-positional TypeError).
+    from finmamba3.models.world_model import WorldModel
+    from finmamba3.train import validate
+    cfg = _fi2010_world_model_config()
+    cfg.Models.WorldModel.Decoder.Kind = "studentt"
+    wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
+    seq = _make_lobsequence(n_events=80)
+    stats = fit_normalization(seq)
+    metrics, top_features = validate(wm, seq, stats, batch_size=4, batch_length=8)
+    assert np.isfinite(metrics["Val/reconstruction_loss"]), "studentt val NLL must be finite."
+    assert np.isfinite(metrics["Val/normalized_next_mse"])
+    assert len(top_features) == 5
+
+
+def test_imagine_rollout_studentt_decodes_finite_trajectory():
+    # imagine_rollout must take the studentt mean for the decoded trajectory rather than unpacking a
+    # tuple into numpy; this locks the matching fix on the autoregressive rollout path.
+    from finmamba3.models.world_model import WorldModel
+    from finmamba3.train import imagine_rollout
+    cfg = _fi2010_world_model_config()
+    cfg.Models.WorldModel.Decoder.Kind = "studentt"
+    wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
+    seq = _make_lobsequence(n_events=40)
+    decoded = imagine_rollout(wm, seq, context_len=8, horizon=6)
+    assert decoded.shape == (6, FI2010_FEATURE_DIM)
+    assert np.isfinite(decoded).all()
 
 
 # ===========================================================================

@@ -1,28 +1,25 @@
 BasicSettings:
   ObsMode: features
-  FeatureDim: 46          # K(10) * F_level(4) + F_tick(6)
-  ReplayBufferOnGPU: True
+  FeatureDim: 46
+  ReplayBufferOnGPU: true
   Seed: 3710
   Env_name: LOB
   Device: cuda:0
-  Use_amp: True
+  Use_amp: true
   NormClip: 8.0
-  Use_cg: False
-  Compile: False
+  Use_cg: false
+  Compile: false
   SavePath: None
-
 Dataset:
   Kind: fi2010
   FI2010:
-    Horizon: 10              # Events ahead for direction labels. One of 10, 20, 30, 50, 100.
-    MaxEvents: 0             # 0 = use the full file; positive caps to the most recent N events.
-
+    Horizon: 10
+    MaxEvents: 0
 Evaluate:
   EpisodeNum: 10
   NumEnvs: 1
-  DuringTraining: False
+  DuringTraining: false
   EverySteps: 1000
-
 JointTrainAgent:
   SampleMaxSteps: 8000
   BufferMaxLength: 50000
@@ -44,12 +41,11 @@ JointTrainAgent:
   FreezeWorldModelAfterSteps: 20000
   FreezeBehaviourAfterSteps: 0
   SaveEverySteps: 2000
-  SaveModels: True
+  SaveModels: true
   Tau: 10
   ImaginationTau: 10
   Alpha: 1.0
   Beta: 1.0
-
 Models:
   WorldModel:
     dtype: float32
@@ -64,40 +60,43 @@ Models:
     Warmup_steps: 500
     LRSchedule: cosine
     LRMinRatio: 0.1
-    UseActionInput: True
+    UseActionInput: true
     DirectionThresholds: null
     Dropout: 0.1
     Unimix_ratio: 0.01
-    Weight_decay: 1.0e-4
+    Weight_decay: 0.0001
     RepresentationLossWeight: 0.1
     FreeBits: 1.0
     Adam:
-      LearningRate: 1.0e-4
+      LearningRate: 0.0001
     Laprop:
-      LearningRate: 4.0e-5
+      LearningRate: 4.0e-05
       Epsilon: 1.0e-20
     Encoder:
       Type: lob
       K: 10
-      FeatureDimLevel: 4         # FI-2010 levels: (ask_price, ask_size, bid_price, bid_size).
-      FeatureDimTick: 6          # Derived aggregates: mid, spread, log_spread, imbalance, microprice, log_total_vol.
+      FeatureDimLevel: 4
+      FeatureDimTick: 6
       DModel: 256
       NumLayers: 4
       NumHeads: 8
       Dropout: 0.2
       DimFeedforward: 256
       OutputFlattenDim: 1024
-      AggregateOnly: False
-      GradientCheckpointing: False
+      AggregateOnly: false
+      GradientCheckpointing: false
     Decoder:
       Kind: mse
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0
-      LearnableNu: True
-      SizeWeight: 1.0                  # FI-2010 features are pre-normalized; no size/price asymmetry to correct.
-      LevelSizeIndices: [1, 3]         # ask_size, bid_size.
-      TickSizeIndices: [5]             # log_total_vol.
+      LearnableNu: true
+      SizeWeight: 1.0
+      LevelSizeIndices:
+      - 1
+      - 3
+      TickSizeIndices:
+      - 5
     Reward:
       Enabled: false
       HiddenUnits: 256
@@ -126,43 +125,41 @@ Models:
       is_outproj_norm: false
       rope_fraction: 0.5
     Direction:
-      Enabled: True
+      Enabled: true
       NumClasses: 3
-      Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
-      LossWeight: 0.5
-      ClassBalanced: False             # Inverse-frequency class weighting on the direction CE; counters the ~76% flat-majority collapse so the head learns up/down. Phase 3 escalation sets True.
+      Threshold: 0.0
+      LossWeight: 2.0
       Dropout: 0.0
-      UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
+      UseDatasetLabels: true
     Regime:
-      Enabled: False
+      Enabled: false
       NumRegimes: 8
       EmbedDim: 32
     RegimeFiLM:
-      Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
-      NumRegimes: 4           # Fewer regimes than the original 8: FI-2010 carries only a handful of vol regimes, and 8 spreads the router thin.
+      Enabled: false
+      NumRegimes: 4
       EmbedDim: 32
-      EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
-      InitScale: 0.0          # Hypernetwork output init std. 0.0 keeps the exact identity-at-init baseline; a small positive value (e.g. 0.01) escapes the slow zero-init warmup.
-      Dropout: 0.0            # Dropout on the regime embedding; overfitting guard on the hypernetwork's added capacity.
-      LRMult: 1.0             # Multiplies the world-model LR for the modulator params so the zero-init FiLM can learn faster than the backbone.
-      WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default. Raise it as an overfitting guard.
-      ConditionOnVol: False   # Append a causal rolling midprice volatility feature to the router input so regimes align with the volatility-shift axis the eval splits on.
-      VolWindow: 16           # Trailing events over which the causal volatility conditioning feature is measured.
+      EntropyCoef: 0.01
+      InitScale: 0.03
+      Dropout: 0.0
+      LRMult: 10.0
+      WeightDecay: null
+      ConditionOnVol: true
+      VolWindow: 16
     EpisodicMemory:
-      Enabled: False
+      Enabled: false
       Capacity: 50000
       TopK: 4
       MinFillBeforeRetrieve: 1024
       RetrieveEvery: 4
-      UseNovelty: False
+      UseNovelty: false
       NoveltyThreshold: 0.0
     Hawkes:
-      Enabled: False
+      Enabled: false
       LossWeight: 0.1
     Settlement:
-      Enabled: False
+      Enabled: false
       LossWeight: 0.25
-
   Agent:
     dtype: float32
     Policy: AC
@@ -171,16 +168,16 @@ Models:
       NumLayers: 3
       Gamma: 0.985
       Lambda: 0.95
-      EntropyCoef: 3.e-4
+      EntropyCoef: 0.0003
       Max_grad_norm: 100
       Warmup_steps: 1000
       Act: SiLU
       Optimiser: Laprop
       Adam:
-        LearningRate: 3.0e-5
-        Epsilon: 1.0e-5
+        LearningRate: 3.0e-05
+        Epsilon: 1.0e-05
       Laprop:
-        LearningRate: 4.0e-5
+        LearningRate: 4.0e-05
         Epsilon: 1.0e-20
       Actor:
         HiddenUnits: 256
@@ -194,23 +191,22 @@ Models:
       K_epochs: 3
       Minibatch: 16384
       CriticCoef: 1
-      EntropyCoef: 3.e-4
+      EntropyCoef: 0.0003
       KL_threshold: 0.01
       Max_grad_norm: 100
       Warmup_steps: 1000
       Act: SiLU
       Optimiser: Laprop
       Adam:
-        LearningRate: 3.e-5
-        Epsilon: 1.0e-5
+        LearningRate: 3.0e-05
+        Epsilon: 1.0e-05
       Laprop:
-        LearningRate: 4.0e-5
+        LearningRate: 4.0e-05
         Epsilon: 1.0e-20
       Actor:
         HiddenUnits: 256
       Critic:
         HiddenUnits: 512
-
 Wandb:
   Init:
     Mode: offline

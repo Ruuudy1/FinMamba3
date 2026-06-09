@@ -85,7 +85,11 @@ def imagine_rollout(
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.straight_through_gradient(prior_logits)
             prior_flat = world_model.flatten_sample(prior_sample)
-            decoded.append(world_model.obs_decoder(prior_flat).float().cpu().numpy()[0, 0])
+            # The studentt decoder returns (mean, log_scale); the rollout trajectory is the predicted
+            # mean, so take the first element. The Gaussian decoder returns the prediction directly.
+            decoder_out = world_model.obs_decoder(prior_flat)
+            mean_out = decoder_out[0] if world_model.decoder_kind == "studentt" else decoder_out
+            decoded.append(mean_out.float().cpu().numpy()[0, 0])
             if step != horizon - 1:
                 next_action = torch.zeros((1, 1), dtype=torch.float32, device=device)
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
@@ -145,8 +149,18 @@ def _validation_metrics(
         post_logits = world_model.dist_head.forward_post(embedding)
         sample = world_model.straight_through_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
-        obs_hat = world_model.obs_decoder(flattened_sample)
-        reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
+        # The studentt decoder returns (mean, log_scale) and its loss is the weighted NLL over both;
+        # the Gaussian decoder returns a single tensor scored by weighted MSE. Mirror update() so the
+        # studentt arm's Val/reconstruction_loss is the NLL that SaveBestOnly and early stopping read.
+        decoder_out = world_model.obs_decoder(flattened_sample)
+        if world_model.decoder_kind == "studentt":
+            recon_mean, recon_log_scale = decoder_out
+            reconstruction_loss = world_model.reconstruction_loss_func(
+                world_model.obs_decoder, recon_mean, recon_log_scale, obs
+            )
+        else:
+            obs_hat = decoder_out
+            reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
         if world_model.model == "Transformer":
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             temporal_mask = get_subsequent_mask_with_batch_length(
@@ -158,7 +172,10 @@ def _validation_metrics(
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
         prior_sample = world_model.straight_through_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
-        next_hat = world_model.obs_decoder(prior_flat)
+        # The one-step prediction MSE diagnostic compares the predicted mean to the next tick, so take
+        # the studentt mean; the Gaussian decoder already returns that mean directly.
+        prior_decode = world_model.obs_decoder(prior_flat)
+        next_hat = prior_decode[0] if world_model.decoder_kind == "studentt" else prior_decode
     target_next = obs[:, 1:].detach().float()
     pred_next = next_hat.detach().float()
     diff = pred_next - target_next
@@ -348,7 +365,16 @@ def main() -> None:
         logger.info(f"filtering markets to intervals: {intervals}")
     if dataset_kind == "polymarket":
         include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
-        logger.info(f"building train features from {pre_args.data_train} (max_markets={max_markets})")
+        # Phase 0.1/0.2/0.6: SpotFeatures appends the causal spot path, the time-to-expiry clock
+        # and the asset one-hot. Default off keeps the legacy 100-dim schema bit-identical.
+        include_spot_features = config.Models.WorldModel.Encoder.get('SpotFeatures', False)
+        # Phase 0.4: CrossIntervalContext appends the contemporaneous short-interval summary to hourly
+        # markets (zeros elsewhere). Default off; enabling it widens the schema by three channels.
+        include_cross_interval = config.Models.WorldModel.Encoder.get('CrossIntervalContext', False)
+        # Per-asset training: restrict the market pool to these asset symbols (e.g. ['ETH']) so the model
+        # learns one asset's dynamics; default None keeps the top markets across all assets (BTC-dominated).
+        train_assets = config.Models.WorldModel.Encoder.get('Assets', None)
+        logger.info(f"building train features from {pre_args.data_train} (max_markets={max_markets}, assets={train_assets})")
         if max_markets > 1:
             train_seqs, slugs, stats = build_market_sequences(
                 pre_args.data_train,
@@ -361,6 +387,9 @@ def main() -> None:
                 max_markets=max_markets,
                 intervals=intervals,
                 include_binary_features=include_binary_features,
+                include_spot_features=include_spot_features,
+                include_cross_interval=include_cross_interval,
+                assets=train_assets,
             )
             # The training-loop val metric reads one sequence; the longest val market
             # is a stable, boundary-safe representative. Cross-market generalization is
@@ -376,6 +405,8 @@ def main() -> None:
                 intervals=intervals,
                 aggregate_only=aggregate_only,
                 include_binary_features=include_binary_features,
+                include_spot_features=include_spot_features,
+                include_cross_interval=include_cross_interval,
             )
         else:
             train_seq, slug, stats = build_sequences(
@@ -388,6 +419,8 @@ def main() -> None:
                 aggregate_only=aggregate_only,
                 intervals=intervals,
                 include_binary_features=include_binary_features,
+                include_spot_features=include_spot_features,
+                include_cross_interval=include_cross_interval,
             )
             logger.info(f"building val features from {pre_args.data_val}")
             val_seq, _, _ = build_sequences(
@@ -400,6 +433,8 @@ def main() -> None:
                 intervals=intervals,
                 aggregate_only=aggregate_only,
                 include_binary_features=include_binary_features,
+                include_spot_features=include_spot_features,
+                include_cross_interval=include_cross_interval,
             )
             train_seqs = [train_seq]
     elif dataset_kind == "fi2010":

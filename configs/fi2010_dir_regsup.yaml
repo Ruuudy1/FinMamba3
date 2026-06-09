@@ -129,8 +129,8 @@ Models:
       Enabled: True
       NumClasses: 3
       Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
-      LossWeight: 0.5
-      ClassBalanced: False             # Inverse-frequency class weighting on the direction CE; counters the ~76% flat-majority collapse so the head learns up/down. Phase 3 escalation sets True.
+      LossWeight: 2.0                  # Up-weighted so the live direction head competes with reconstruction.
+      ClassBalanced: True              # Inverse-frequency class weighting; revives the head off the 76% flat-majority collapse.
       Dropout: 0.0
       UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
     Regime:
@@ -138,16 +138,26 @@ Models:
       NumRegimes: 8
       EmbedDim: 32
     RegimeFiLM:
+      # Strongest Phase-1 escalation recipe (vol-scale.md) carried onto the direction objective: the
+      # decision tree's top lever for an inert FiLM / uniform router. SuperviseVol drives the router off
+      # the load-balance term toward the realized-vol axis, FeedObsVol gives it that axis as input,
+      # DecoupleRouterFromFiLM frees the router from the reconstruction gradient, and a large LRMult plus
+      # positive InitScale and zeroed EntropyCoef remove the identity/uniform attractors. The question is
+      # whether a regime-discriminative FiLM, forced active here, moves the direction gap at all.
       Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
-      NumRegimes: 4           # Fewer regimes than the original 8: FI-2010 carries only a handful of vol regimes, and 8 spreads the router thin.
+      NumRegimes: 4
       EmbedDim: 32
-      EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
-      InitScale: 0.0          # Hypernetwork output init std. 0.0 keeps the exact identity-at-init baseline; a small positive value (e.g. 0.01) escapes the slow zero-init warmup.
-      Dropout: 0.0            # Dropout on the regime embedding; overfitting guard on the hypernetwork's added capacity.
-      LRMult: 1.0             # Multiplies the world-model LR for the modulator params so the zero-init FiLM can learn faster than the backbone.
-      WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default. Raise it as an overfitting guard.
-      ConditionOnVol: False   # Append a causal rolling midprice volatility feature to the router input so regimes align with the volatility-shift axis the eval splits on.
-      VolWindow: 16           # Trailing events over which the causal volatility conditioning feature is measured.
+      EntropyCoef: 0.0        # Load-balance term off; supervision now drives router usage instead.
+      InitScale: 0.03         # Positive init escapes the slow zero-init warmup so FiLM can express non-identity.
+      Dropout: 0.0
+      LRMult: 50.0            # Modulator learns far faster than the backbone so it can escape identity.
+      WeightDecay: null
+      ConditionOnVol: true    # Causal rolling midprice volatility feature appended to the router input.
+      VolWindow: 16
+      SuperviseVol: true      # Cross-entropy from regime logits to the realized-vol bucket; the top lever.
+      SupervisionWeight: 30.0 # Strong supervision: Phase 1 showed weight 1 was overpowered by recon under joint training.
+      FeedObsVol: true        # Route the obs-midprice realized volatility into the router so regimes align with the vol axis.
+      DecoupleRouterFromFiLM: true  # Detach the router on the FiLM path so the reconstruction gradient cannot drag it back to uniform.
     EpisodicMemory:
       Enabled: False
       Capacity: 50000

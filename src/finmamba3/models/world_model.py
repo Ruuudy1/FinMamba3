@@ -11,7 +11,15 @@ from finmamba3.models.world_model_heads import DistHead, RewardHead, Termination
 from finmamba3.models.attention import get_subsequent_mask_with_batch_length, get_subsequent_mask
 from finmamba3.models.transformer import StochasticTransformerKVCache
 from finmamba3.models.mamba_backbone import FinMambaSequenceModel
-from finmamba3.models.regime_modulation import regime_load_balance_loss
+from finmamba3.models.regime_modulation import (
+    efficiency_ratio_bucket_labels,
+    efficiency_ratio_conditioning_feature,
+    realized_vol_bucket_labels,
+    realized_vol_conditioning_feature,
+    regime_assignment_entropy,
+    regime_load_balance_loss,
+    regime_supervision_loss,
+)
 from finmamba3.models.lob_heads import (
     DirectionHead,
     EpisodicMemory,
@@ -64,6 +72,46 @@ class WorldModel(nn.Module):
         self.regime_film_num_regimes = int(regime_film_cfg.get('NumRegimes', 8)) if regime_film_cfg is not None else 8
         self.regime_film_embed_dim = int(regime_film_cfg.get('EmbedDim', 32)) if regime_film_cfg is not None else 32
         self.regime_film_entropy_coef = float(regime_film_cfg.get('EntropyCoef', 0.01)) if regime_film_cfg is not None else 0.01
+        # InitScale, Dropout, LRMult and WeightDecay are the FiLM tuning knobs: a positive InitScale
+        # escapes the slow zero-init warmup, Dropout and a larger WeightDecay guard the hypernetwork's
+        # added capacity against overfitting, and LRMult lets the modulator learn faster than the backbone.
+        self.regime_film_init_scale = float(regime_film_cfg.get('InitScale', 0.0)) if regime_film_cfg is not None else 0.0
+        self.regime_film_dropout = float(regime_film_cfg.get('Dropout', 0.0)) if regime_film_cfg is not None else 0.0
+        self.regime_film_lr_mult = float(regime_film_cfg.get('LRMult', 1.0)) if regime_film_cfg is not None else 1.0
+        self.regime_film_weight_decay = regime_film_cfg.get('WeightDecay', None) if regime_film_cfg is not None else None
+        # ConditionOnVol steers the router onto the volatility axis the generalization eval splits on.
+        # The modulator derives a causal volatility proxy over VolWindow steps from the stem summary
+        # itself, so the conditioning is identical across training, imagination and evaluation forwards
+        # with no caller plumbing; the world model only forwards the flags.
+        self.regime_film_condition_on_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('ConditionOnVol', False))
+        self.regime_film_vol_window = int(regime_film_cfg.get('VolWindow', 16)) if regime_film_cfg is not None else 16
+        # SuperviseVol adds a cross-entropy from the regime logits to the realized-volatility bucket of
+        # each step, derived inline from the obs midprice. It is the decision tree's highest-leverage
+        # lever: it removes the uniform-router failure mode (load balancing alone drives the router to a
+        # degenerate per-step uniform, so FiLM becomes a constant bias) by forcing the router onto the
+        # volatility axis the generalization eval splits on. SupervisionWeight scales that term.
+        self.regime_film_supervise_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('SuperviseVol', False))
+        self.regime_film_supervision_weight = float(regime_film_cfg.get('SupervisionWeight', 0.0)) if regime_film_cfg is not None else 0.0
+        # SuperviseAxis chooses what the router is supervised to predict: 'vol' (the realized-volatility
+        # bucket, the prior campaign's axis) or 'predictability' (the efficiency-ratio bucket, newgoal-2's
+        # axis a selective-betting policy has a genuine reason to encode). SuperviseChannelIndex points the
+        # supervision and the FeedObsVol conditioning at an obs channel (default the midprice); the spot
+        # block exposes the honest underlying axis the held-out eval splits on.
+        self.regime_film_supervise_axis = regime_film_cfg.get('SuperviseAxis', 'vol') if regime_film_cfg is not None else 'vol'
+        self.regime_film_supervise_index = regime_film_cfg.get('SuperviseChannelIndex', None) if regime_film_cfg is not None else None
+        # FeedObsVol routes the realized volatility measured from the observation midprice into the router
+        # as its conditioning feature, the faithful axis the supervision label and eval split use. Without
+        # it the router only sees the latent-speed proxy, which tracks obs volatility too weakly for even a
+        # supervised router to discriminate regimes (verified: argmax-vs-vol agreement stays at chance).
+        self.regime_film_feed_obs_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('FeedObsVol', False))
+        # DecoupleRouterFromFiLM detaches the router logits on the path into the FiLM hypernetwork, so the
+        # reconstruction gradient can no longer drag the router back to uniform; the router is then driven
+        # purely by the supervision CE. Without it, an adaptive optimizer keeps the router uniform no matter
+        # how the supervision weight is scaled, because the recon gradient direction on the shared params wins.
+        self.regime_film_decouple_router = bool(regime_film_cfg is not None and regime_film_cfg.get('DecoupleRouterFromFiLM', False))
+        assert not self.regime_film_condition_on_vol or self.regime_film_vol_window >= 2, (
+            "Models.WorldModel.RegimeFiLM.VolWindow must be at least 2 to estimate volatility."
+        )
         self.max_grad_norm = config.Models.WorldModel.Max_grad_norm
         max_seq_length = max(config.JointTrainAgent.BatchLength,
                              config.JointTrainAgent.ImagineContextLength + config.JointTrainAgent.ImagineBatchLength,
@@ -107,6 +155,11 @@ class WorldModel(nn.Module):
                 use_regime_film=self.use_regime_film,
                 num_regimes=self.regime_film_num_regimes,
                 regime_embed_dim=self.regime_film_embed_dim,
+                regime_condition_on_vol=self.regime_film_condition_on_vol,
+                regime_vol_window=self.regime_film_vol_window,
+                regime_init_scale=self.regime_film_init_scale,
+                regime_dropout=self.regime_film_dropout,
+                regime_decouple_router=self.regime_film_decouple_router,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -124,6 +177,11 @@ class WorldModel(nn.Module):
                 use_regime_film=self.use_regime_film,
                 num_regimes=self.regime_film_num_regimes,
                 regime_embed_dim=self.regime_film_embed_dim,
+                regime_condition_on_vol=self.regime_film_condition_on_vol,
+                regime_vol_window=self.regime_film_vol_window,
+                regime_init_scale=self.regime_film_init_scale,
+                regime_dropout=self.regime_film_dropout,
+                regime_decouple_router=self.regime_film_decouple_router,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -156,6 +214,11 @@ class WorldModel(nn.Module):
                 use_regime_film=self.use_regime_film,
                 num_regimes=self.regime_film_num_regimes,
                 regime_embed_dim=self.regime_film_embed_dim,
+                regime_condition_on_vol=self.regime_film_condition_on_vol,
+                regime_vol_window=self.regime_film_vol_window,
+                regime_init_scale=self.regime_film_init_scale,
+                regime_dropout=self.regime_film_dropout,
+                regime_decouple_router=self.regime_film_decouple_router,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -233,6 +296,12 @@ class WorldModel(nn.Module):
             )
             self.direction_loss_weight = float(direction_cfg.get('LossWeight', 0.5))
             self.direction_threshold = float(direction_cfg.get('Threshold', 1.0e-2))
+            self.direction_num_classes = int(direction_cfg.get('NumClasses', 3))
+            # FI-2010's next-tick mid is flat on ~76% of ticks, so an unweighted cross-entropy is
+            # minimized by predicting the flat majority class for every position and the head learns
+            # nothing about direction. Inverse-frequency class weighting cancels that majority
+            # dominance so the up/down classes carry gradient. Default off to preserve prior runs.
+            self.direction_class_balanced = bool(direction_cfg.get('ClassBalanced', False))
             # Index of normalized midprice in the flat feature vector.
             self.midprice_index = int(enc_cfg.K) * int(enc_cfg.FeatureDimLevel)
         else:
@@ -308,9 +377,18 @@ class WorldModel(nn.Module):
                 device=device,
             )
             self.settlement_loss_weight = float(settle_cfg.get('LossWeight', 0.25))
+            # Phase 0.3 honest target: TTEWeighted weights the realized-outcome BCE by (1 - tte_frac)
+            # so early-tick label noise stops dominating; SpotSignAux adds a dense pre-expiry term that
+            # supervises the head toward the observable running spot sign, weighted by tte_frac.
+            self.settlement_tte_weighted = bool(settle_cfg.get('TTEWeighted', False))
+            self.use_settlement_spot_sign = bool(settle_cfg.get('SpotSignAux', False))
+            self.settlement_spot_sign_weight = float(settle_cfg.get('SpotSignWeight', 0.0))
         else:
             self.settlement_head = None
             self.settlement_loss_weight = 0.0
+            self.settlement_tte_weighted = False
+            self.use_settlement_spot_sign = False
+            self.settlement_spot_sign_weight = 0.0
         # When DirectionThresholds is a list, the direction loss is computed at each threshold and averaged.
         # This replaces the single-threshold (1%) target with a curve over thresholds.
         self.direction_thresholds = config.Models.WorldModel.get('DirectionThresholds', None)
@@ -352,12 +430,32 @@ class WorldModel(nn.Module):
         # Representation loss weight controls how strongly the posterior is pulled toward the prior.
         # DreamerV3 uses 0.5; the original Drama default is 0.1.
         self.representation_loss_weight = float(config.Models.WorldModel.get('RepresentationLossWeight', 0.1))
-        if config.Models.WorldModel.Optimiser == 'Laprop':
-            self.optimizer = LaProp(self.parameters(), lr=config.Models.WorldModel.Laprop.LearningRate, eps=config.Models.WorldModel.Laprop.Epsilon, weight_decay=config.Models.WorldModel.Weight_decay)
-        elif config.Models.WorldModel.Optimiser == 'Adam':
-            self.optimizer = torch.optim.AdamW(self.parameters(), lr=config.Models.WorldModel.Adam.LearningRate, weight_decay=config.Models.WorldModel.Weight_decay)
+        optimiser_name = config.Models.WorldModel.Optimiser
+        weight_decay = config.Models.WorldModel.Weight_decay
+        if optimiser_name == 'Laprop':
+            base_lr = config.Models.WorldModel.Laprop.LearningRate
+        elif optimiser_name == 'Adam':
+            base_lr = config.Models.WorldModel.Adam.LearningRate
         else:
-            raise ValueError(f"Unknown optimiser: {config.Models.WorldModel.Optimiser}")
+            raise ValueError(f"Unknown optimiser: {optimiser_name}")
+        # The regime modulator gets its own optimizer group only when a tuning knob asks for it, so the
+        # default run stays a single group and bit-identical to before. A larger LRMult lets the zero-init
+        # FiLM warm up faster; a WeightDecay override is the overfitting guard on its added capacity.
+        if self.use_regime_film and (self.regime_film_lr_mult != 1.0 or self.regime_film_weight_decay is not None):
+            film_prefix = "sequence_model.regime_modulator."
+            base_named_params = [p for name, p in self.named_parameters() if not name.startswith(film_prefix)]
+            film_named_params = [p for name, p in self.named_parameters() if name.startswith(film_prefix)]
+            film_weight_decay = weight_decay if self.regime_film_weight_decay is None else float(self.regime_film_weight_decay)
+            optimizer_params = [
+                {"params": base_named_params, "lr": base_lr, "weight_decay": weight_decay},
+                {"params": film_named_params, "lr": base_lr * self.regime_film_lr_mult, "weight_decay": film_weight_decay},
+            ]
+        else:
+            optimizer_params = self.parameters()
+        if optimiser_name == 'Laprop':
+            self.optimizer = LaProp(optimizer_params, lr=base_lr, eps=config.Models.WorldModel.Laprop.Epsilon, weight_decay=weight_decay)
+        else:
+            self.optimizer = torch.optim.AdamW(optimizer_params, lr=base_lr, weight_decay=weight_decay)
         lr_schedule = config.Models.WorldModel.get('LRSchedule', 'constant')
         if lr_schedule == 'cosine':
             # Cosine + warmup is the standard recipe for Mamba pretraining.
@@ -558,11 +656,29 @@ class WorldModel(nn.Module):
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
+
+
+    def _direction_class_weight(self, flat_targets, dtype):
+        """Per-batch inverse-frequency class weights for the direction cross-entropy, or None.
+
+        Returns None when class balancing is off so the cross-entropy is the plain unweighted mean
+        exactly as before. When on, each class is weighted by the reciprocal of its count in the
+        batch so the flat majority no longer dominates the gradient; cross-entropy already divides by
+        the summed target weights, so only the relative weights matter and an absent class's weight is
+        never indexed.
+        """
+        if not self.direction_class_balanced:
+            return None
+        counts = torch.bincount(flat_targets, minlength=self.direction_num_classes).to(dtype=dtype)
+        return counts.clamp(min=1.0).reciprocal()
+
+
     def update(self, obs, action, reward, termination, global_step, epoch_step,
                logger=None, accum_steps: int = 1, is_last_accum: bool = True,
                event_counts: torch.Tensor | None = None,
                outcome: torch.Tensor | None = None,
-               time_to_expiry_frac: torch.Tensor | None = None):
+               time_to_expiry_frac: torch.Tensor | None = None,
+               spot_signed_distance: torch.Tensor | None = None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -580,12 +696,27 @@ class WorldModel(nn.Module):
             else:
                 obs_hat = decoder_out
             # Compute sequence-model hidden states.
-            regime_logits = None
+            regime_aux = None
             if self.model == 'Transformer':
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
                 dist_feat = self.sequence_model(flattened_sample, action, temporal_mask)
             elif self.use_regime_film:
-                dist_feat, regime_logits = self.sequence_model(flattened_sample, action, return_regime=True)
+                # When FeedObsVol is set, hand the router the realized volatility measured from the obs
+                # midprice so it can actually discriminate the regime it is supervised toward; otherwise
+                # the modulator falls back to its latent-speed proxy.
+                regime_vol = None
+                if self.regime_film_feed_obs_vol:
+                    assert self.midprice_index >= 0, (
+                        "RegimeFiLM.FeedObsVol needs the obs midprice channel index; enable the direction head."
+                    )
+                    supervise_index = self.regime_film_supervise_index if self.regime_film_supervise_index is not None else self.midprice_index
+                    if self.regime_film_supervise_axis == "predictability":
+                        regime_vol = efficiency_ratio_conditioning_feature(obs[..., supervise_index], self.regime_film_vol_window)
+                    else:
+                        regime_vol = realized_vol_conditioning_feature(obs[..., supervise_index], self.regime_film_vol_window)
+                dist_feat, regime_aux = self.sequence_model(
+                    flattened_sample, action, return_regime=True, regime_vol=regime_vol
+                )
             else:
                 dist_feat = self.sequence_model(flattened_sample, action)
             conditioned_dist_feat = self.condition_dist_feat(dist_feat)
@@ -633,24 +764,27 @@ class WorldModel(nn.Module):
             if self.use_direction_head:
                 mid_norm = obs[..., self.midprice_index]
                 direction_logits = self.direction_head(conditioned_dist_feat[:, :-1])
+                flat_logits = direction_logits.reshape(-1, direction_logits.shape[-1])
                 if self.direction_thresholds is not None:
                     # Multi-threshold sweep averages cross-entropy across the threshold curve.
                     # This stops the head from being pinned to a single bucket.
                     losses = []
                     for thr in self.direction_thresholds:
                         targets, _ = DirectionHead.make_targets(mid_norm, float(thr))
+                        flat_targets = targets.reshape(-1)
                         losses.append(
                             F.cross_entropy(
-                                direction_logits.reshape(-1, direction_logits.shape[-1]),
-                                targets.reshape(-1),
+                                flat_logits, flat_targets,
+                                weight=self._direction_class_weight(flat_targets, flat_logits.dtype),
                             )
                         )
                     direction_loss = torch.stack(losses).mean()
                 else:
                     direction_targets, _ = DirectionHead.make_targets(mid_norm, self.direction_threshold)
+                    flat_targets = direction_targets.reshape(-1)
                     direction_loss = F.cross_entropy(
-                        direction_logits.reshape(-1, direction_logits.shape[-1]),
-                        direction_targets.reshape(-1),
+                        flat_logits, flat_targets,
+                        weight=self._direction_class_weight(flat_targets, flat_logits.dtype),
                     )
             else:
                 direction_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
@@ -668,20 +802,58 @@ class WorldModel(nn.Module):
             if self.use_settlement_head and outcome is not None:
                 settle_logits = self.settlement_head(conditioned_dist_feat).reshape(-1)
                 outcome_flat = outcome.reshape(-1).to(dtype=settle_logits.dtype)
-                if outcome_flat.shape[0] != settle_logits.shape[0]:
-                    if outcome.dim() == 1:
-                        outcome_flat = outcome.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1]).reshape(-1).to(dtype=settle_logits.dtype)
+                if outcome_flat.shape[0] != settle_logits.shape[0] and outcome.dim() == 1:
+                    outcome_flat = outcome.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1]).reshape(-1).to(dtype=settle_logits.dtype)
+                # Phase 0.3: concentrate the realized-outcome supervision near expiry, where the binary
+                # outcome is determined, rather than pooling the uninformative early ticks with it.
                 ttf_flat = None
-                if time_to_expiry_frac is not None:
+                if self.settlement_tte_weighted and time_to_expiry_frac is not None:
                     ttf_flat = time_to_expiry_frac.reshape(-1).to(dtype=settle_logits.dtype)
                 settlement_loss = SettlementHead.bce(settle_logits, outcome_flat, ttf_flat)
+                # The observable running spot sign is the same rule the contract settles on, so an
+                # early auxiliary toward it gives a dense, learnable target and keeps the causal sign
+                # salient in the latent. tte_frac weights it toward the start (complement of the outcome).
+                if self.use_settlement_spot_sign and spot_signed_distance is not None:
+                    aux_ttf = time_to_expiry_frac.reshape(-1) if time_to_expiry_frac is not None else None
+                    spot_sign_loss = SettlementHead.spot_sign_bce(
+                        settle_logits, spot_signed_distance.reshape(-1), aux_ttf
+                    )
+                    settlement_loss = settlement_loss + self.settlement_spot_sign_weight * spot_sign_loss
             else:
                 settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             # Regime-FiLM load-balance regularizer keeps the inferred regime distribution from collapsing.
-            if self.use_regime_film and regime_logits is not None:
-                regime_loss = (self.regime_film_entropy_coef * regime_load_balance_loss(regime_logits)).to(reconstruction_loss.dtype)
+            # The entropy, gamma deviation and beta magnitude reported beside it are diagnostics only: they
+            # reveal whether the router collapsed and whether FiLM ever left its identity init, never the loss.
+            regime_zero = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            if self.use_regime_film and regime_aux is not None:
+                regime_loss = (self.regime_film_entropy_coef * regime_load_balance_loss(regime_aux.regime_logits)).to(reconstruction_loss.dtype)
+                # Regime supervision pins the router to the realized-volatility axis so FiLM stops being a
+                # constant bias. The bucket labels come from the obs midprice over the same VolWindow the
+                # router's vol proxy uses, so training, imagination and eval see one consistent definition.
+                if self.regime_film_supervise_vol:
+                    assert self.midprice_index >= 0, (
+                        "RegimeFiLM.SuperviseVol needs the obs midprice channel index, which is only set "
+                        "when the direction head is enabled; enable Models.WorldModel.Direction."
+                    )
+                    supervise_index = self.regime_film_supervise_index if self.regime_film_supervise_index is not None else self.midprice_index
+                    if self.regime_film_supervise_axis == "predictability":
+                        regime_labels = efficiency_ratio_bucket_labels(
+                            obs[:batch_size, :, supervise_index], self.regime_film_vol_window, self.regime_film_num_regimes
+                        )
+                    else:
+                        regime_labels = realized_vol_bucket_labels(
+                            obs[:batch_size, :, supervise_index], self.regime_film_vol_window, self.regime_film_num_regimes
+                        )
+                    supervision = regime_supervision_loss(regime_aux.regime_logits[:batch_size], regime_labels)
+                    regime_loss = regime_loss + (self.regime_film_supervision_weight * supervision).to(reconstruction_loss.dtype)
+                regime_entropy = regime_assignment_entropy(regime_aux.regime_logits).to(reconstruction_loss.dtype)
+                film_gamma_dev = regime_aux.gamma_dev.to(reconstruction_loss.dtype)
+                film_beta_mag = regime_aux.beta_mag.to(reconstruction_loss.dtype)
             else:
-                regime_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+                regime_loss = regime_zero
+                regime_entropy = regime_zero
+                film_gamma_dev = regime_zero
+                film_beta_mag = regime_zero
             total_loss = (
                 reconstruction_loss + reward_loss + termination_loss
                 + dynamics_loss + self.representation_loss_weight * representation_loss
@@ -702,7 +874,7 @@ class WorldModel(nn.Module):
                 )
             self.optimizer.zero_grad(set_to_none=True)
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-            return (zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero, zero)
+            return (zero,) * 15
         self._nan_skip_count = 0
         # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()
@@ -737,5 +909,6 @@ class WorldModel(nn.Module):
             reconstruction_loss.detach(), reward_loss.detach(), termination_loss.detach(),
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
             representation_real_kl_div.detach(), direction_loss.detach(),
-            hawkes_loss.detach(), settlement_loss.detach(), regime_loss.detach(), total_loss.detach(),
+            hawkes_loss.detach(), settlement_loss.detach(), regime_loss.detach(),
+            film_gamma_dev.detach(), film_beta_mag.detach(), regime_entropy.detach(), total_loss.detach(),
         )
