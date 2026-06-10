@@ -38,8 +38,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-val", required=True, type=Path)
     p.add_argument("--horizon", type=int, default=10, help="FI-2010 label horizon: one of 10, 20, 30, 50, 100.")
     p.add_argument("--window", type=int, default=100, help="Observations per input window; the paper uses 100.")
-    p.add_argument("--baselines", default="deeplob,majority",
-                   help="Comma-separated subset of {deeplob,majority,world_model}.")
+    p.add_argument("--baselines", default="deeplob,majority,linear_ar",
+                   help="Comma-separated subset of {deeplob,majority,linear_ar,world_model}.")
     p.add_argument("--world-checkpoint", type=Path, default=None,
                    help="FI-2010-trained world_model.pth; required if 'world_model' is in --baselines.")
     p.add_argument("--epochs-deeplob", type=int, default=20)
@@ -146,6 +146,24 @@ def _train_eval_world_model_probe(args, Xtr, ytr, Xva, yva, device) -> dict[str,
     return classification_metrics(probs, yva)
 
 
+def _eval_linear_ar(train_norm, val_norm, k_levels: int, f_level: int, threshold: float) -> dict[str, float]:
+    """Closed-form linear-AR direction floor on the normalized flat features (next-tick target).
+
+    Regresses the next-tick mid return on a flat lookback window and reads the sign, the simplest
+    linear predictor a real sequence model must beat. It labels the next-tick direction by design (not
+    the published horizon-k trend the DeepLOB rows use), so it is reported as a next-tick floor, not a
+    same-target competitor; the midprice index is derived from the schema geometry.
+    """
+    from finmamba3.baselines.linear_ar import LinearAR, LinearARConfig
+    midprice_index = k_levels * f_level
+    ar = LinearAR(LinearARConfig(lookback=16, threshold=threshold, midprice_index=midprice_index))
+    ar.fit(train_norm.to_flat().astype(np.float32))
+    predicted, actual = ar.direction_labels(val_norm.to_flat().astype(np.float32))
+    if predicted.size == 0:
+        return {"accuracy": float("nan"), "macro_f1": float("nan"), "brier": float("nan")}
+    return classification_metrics(np.eye(3)[predicted], actual)
+
+
 def _format_fi2010_table(rows: list[dict], horizon: int) -> str:
     head = (
         f"FI-2010 benchmark (horizon k={horizon}), macro-F1 comparable to LOBCAST Table 2.\n\n"
@@ -181,6 +199,10 @@ def main() -> int:
     if "majority" in methods:
         rows.append({"method": "majority", **_eval_majority(ytr, yva)})
         logger.info(f"majority: {rows[-1]}")
+    if "linear_ar" in methods:
+        rows.append({"method": "linear_ar (next-tick floor)",
+                     **_eval_linear_ar(train_norm, val_norm, FI2010_K_LEVELS, FI2010_F_LEVEL, 0.0)})
+        logger.info(f"linear_ar: {rows[-1]}")
     if "deeplob" in methods:
         rows.append({"method": "deeplob", **_train_eval_deeplob(args, Xtr, ytr, Xva, yva, FI2010_K_LEVELS, FI2010_F_LEVEL, device)})
         logger.info(f"deeplob: {rows[-1]}")

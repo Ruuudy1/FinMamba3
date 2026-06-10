@@ -53,7 +53,7 @@ JointTrainAgent:
 Models:
   WorldModel:
     dtype: float32
-    Backbone: Mamba3
+    Backbone: Mamba
     Act: SiLU
     CategoricalDim: 16
     ClassDim: 16
@@ -111,10 +111,10 @@ Models:
       NumLayers: 2
       NumHeads: 8
     Mamba:
-      n_layer: 2
+      n_layer: 4
       d_intermediate: 0
       ssm_cfg:
-        d_state: 16
+        d_state: 128
     Mamba3:
       Enabled: true
       n_layer: 4
@@ -130,7 +130,6 @@ Models:
       NumClasses: 3
       Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
       LossWeight: 0.5
-      ClassBalanced: False             # Inverse-frequency CE weighting; the robustness re-run sets True to stop the head collapsing to the flat majority.
       Dropout: 0.0
       UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
     Regime:
@@ -148,11 +147,6 @@ Models:
       WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default. Raise it as an overfitting guard.
       ConditionOnVol: False   # Append a causal rolling midprice volatility feature to the router input so regimes align with the volatility-shift axis the eval splits on.
       VolWindow: 16           # Trailing events over which the causal volatility conditioning feature is measured.
-      SuperviseVol: False              # Add a router cross-entropy toward the regime bucket; the escalation sets True.
-      SuperviseAxis: vol               # 'vol' or 'predictability' (the ER bucket); the predictability escalation supervises on the ER axis.
-      SupervisionWeight: 0.0           # Scales the router-supervision cross-entropy.
-      FeedObsVol: False                # Route the obs-derived regime feature into the router input.
-      DecoupleRouterFromFiLM: False    # Detach the router logits on the path into the FiLM hypernetwork.
     EpisodicMemory:
       Enabled: False
       Capacity: 50000

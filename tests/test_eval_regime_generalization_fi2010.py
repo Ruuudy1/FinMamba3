@@ -19,7 +19,11 @@ from finmamba3.envs.fi2010_loader import (
     FI2010_F_TICK,
     FI2010_K_LEVELS,
 )
-from finmamba3.eval.eval_regime_generalization_fi2010 import _METRIC_SPEC, _feature_indices
+from finmamba3.eval.eval_regime_generalization_fi2010 import (
+    _METRIC_SPEC,
+    _feature_indices,
+    _regime_windows,
+)
 # endregion
 _LEVEL_WIDTH = FI2010_K_LEVELS * FI2010_F_LEVEL
 
@@ -195,6 +199,67 @@ def test_metric_spec_direction_is_higher_is_better_without_studentt():
     assert spec["higher_is_better"]
     assert not spec["needs_studentt"]
     assert spec["mask"] is None
+
+
+def test_metric_spec_recon_nll_is_full_studentt():
+    spec = _METRIC_SPEC["recon_nll"]
+    assert spec["needs_studentt"]
+    assert not spec["higher_is_better"]
+    assert spec["mask"] == "all"
+
+
+# ===========================================================================
+# 3. The all-mask covers every channel for both schemas
+# ===========================================================================
+
+def test_all_mask_covers_fi2010_schema():
+    idx = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "all")
+    assert idx == list(range(FI2010_FEATURE_DIM))
+
+
+def test_all_mask_covers_kaggle_schema():
+    # The Kaggle 8/14 schema (94 channels) must round-trip through the all-mask unchanged.
+    idx = _feature_indices(10, 8, 14, "all")
+    assert idx == list(range(94))
+
+
+# ===========================================================================
+# 4. Regime-axis dispatch (predictability primary, spot_vol secondary)
+# ===========================================================================
+
+def test_regime_windows_predictability_routes_high_er_to_reference():
+    window_len = 8
+    ramp = np.linspace(0.0, 1.0, window_len)
+    oscillation = (-1.0) ** np.arange(window_len, dtype=np.float64)
+    segments = []
+    for w in range(6):
+        base = 100.0 + 10.0 * w
+        segments.append(base + 5.0 * ramp if w % 2 == 0 else base + 0.5 * oscillation)
+    mid = np.concatenate(segments)
+    reference, shifted, desc = _regime_windows("predictability", mid, window_len, 0.5)
+    assert reference == [(0, 8), (16, 24), (32, 40)], "Trending windows are the forecastable reference."
+    assert shifted == [(8, 16), (24, 32), (40, 48)], "Chop windows are the random-walk shifted regime."
+    assert desc.startswith("win8-ER>=")
+
+
+def test_regime_windows_spot_vol_routes_low_vol_to_reference():
+    window_len = 8
+    oscillation = (-1.0) ** np.arange(window_len, dtype=np.float64)
+    segments = []
+    for w in range(6):
+        amplitude = 0.001 if w % 2 == 0 else 1.0
+        segments.append(100.0 + 10.0 * w + amplitude * oscillation)
+    mid = np.concatenate(segments)
+    reference, shifted, desc = _regime_windows("spot_vol", mid, window_len, 0.5)
+    assert reference == [(0, 8), (16, 24), (32, 40)], "Calm windows are the low-vol reference."
+    assert shifted == [(8, 16), (24, 32), (40, 48)], "Wild windows are the high-vol shifted regime."
+    assert desc.startswith("win8-vol>")
+
+
+def test_regime_windows_invalid_axis_raises():
+    mid = np.linspace(100.0, 110.0, 64)
+    with pytest.raises(ValueError, match="regime-axis"):
+        _regime_windows("bogus", mid, 16, 0.5)
 
 
 # ===========================================================================

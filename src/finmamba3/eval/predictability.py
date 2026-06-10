@@ -10,10 +10,11 @@ exponent as corroborating measures. Thresholds are fit on the train split, never
 # region imports
 from __future__ import annotations
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import numpy as np
 from finmamba3.backtester.strategy import MarketLifecycle
-from finmamba3.eval.regime_split import market_spot_series
+from finmamba3.eval.regime_split import market_spot_series, window_bounds
 # endregion
 if TYPE_CHECKING:
     from finmamba3.backtester.data_loader import TickData
@@ -102,3 +103,44 @@ def predictability_from_timeline(
     for slug, series in market_spot_series(timeline, lifecycles).items():
         score_by_slug[slug] = metric_func(series)
     return score_by_slug
+
+
+@dataclass
+class PredictabilityWindowSplit:
+    reference_windows: list[tuple[int, int]]  # High-ER (forecastable) windows; the reference regime.
+    shifted_windows: list[tuple[int, int]]    # Low-ER (random-walk) windows; the shifted regime.
+    description: str
+
+
+def window_predictability_split(
+    midprice: np.ndarray,
+    window_len: int,
+    quantile: float = 0.5,
+) -> PredictabilityWindowSplit:
+    """Split one concatenated LOB stream into forecastable (high-ER) and random-walk (low-ER) windows.
+
+    The Efficiency Ratio over each non-overlapping window measures how forecastable that window is:
+    near 1 is a clean trend the model can predict, near 0 a random walk it cannot. Windows at or above
+    the train-free ER quantile form the forecastable reference regime and the rest the random-walk
+    shifted regime, so degradation = metric(reference) - metric(shifted) asks whether the model loses
+    skill when the regime stops being forecastable. This is the primary G1 axis: a selectively-betting
+    or regime-conditioned model has a genuine reason to encode "how forecastable is this window". The
+    tiling matches window_volatility_split exactly; only the per-window scalar changes (ER for vol), so
+    the predictability and spot-vol axes stay a fair comparison.
+    """
+    num_events = int(midprice.shape[0])
+    mid = np.asarray(midprice, dtype=np.float64)
+    bounds = window_bounds(num_events, window_len)
+    efficiency = np.fromiter(
+        (efficiency_ratio(mid[start:end]) for start, end in bounds),
+        dtype=np.float64,
+        count=len(bounds),
+    )
+    threshold = float(np.quantile(efficiency, quantile))
+    reference_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] >= threshold]
+    shifted_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] < threshold]
+    return PredictabilityWindowSplit(
+        reference_windows=reference_windows,
+        shifted_windows=shifted_windows,
+        description=f"win{window_len}-ER>={threshold:.4f}",
+    )

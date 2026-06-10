@@ -23,11 +23,12 @@ import sys
 from pathlib import Path
 import numpy as np
 import torch
-from finmamba3.envs.fi2010_loader import load_fi2010_split
-from finmamba3.envs.lob_features import apply_normalization, load_normalization
 from finmamba3.eval.compare_direction import load_world_model
 from finmamba3.eval.eval_regime_generalization import _arch_overrides, _device_from_arg, _load_config
+from finmamba3.eval.eval_regime_generalization_fi2010 import _load_val_sequence
 from finmamba3.models.regime_modulation import (
+    efficiency_ratio_bucket_labels,
+    efficiency_ratio_conditioning_feature,
     realized_vol_bucket_labels,
     realized_vol_conditioning_feature,
     regime_assignment_entropy,
@@ -41,10 +42,18 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Diagnose whether the regime-FiLM router discriminates volatility")
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--checkpoint", required=True, type=Path, help="A RegimeFiLM-on checkpoint.")
+    p.add_argument("--dataset", choices=("fi2010", "kaggle"), default=None,
+                   help="Which loader builds the val stream; default reads Dataset.Kind from the config.")
     p.add_argument("--data-val", required=True, type=Path)
     p.add_argument("--norm-path", required=True, type=Path)
     p.add_argument("--horizon", type=int, default=10)
     p.add_argument("--max-events", type=int, default=None)
+    p.add_argument("--supervise-axis", choices=("vol", "predictability"), default=None,
+                   help="Rebuild the router on this axis to match the checkpoint's training (the config "
+                        "default is not the CLI override the escalation trained with).")
+    p.add_argument("--feed-obs-vol", action="store_true",
+                   help="Rebuild with FeedObsVol on so the diagnostic feeds the router the same obs-derived "
+                        "conditioning feature it trained on.")
     p.add_argument("--window-len", type=int, default=64)
     p.add_argument("--num-windows", type=int, default=256)
     p.add_argument("--device", default=None)
@@ -55,12 +64,21 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
     device = _device_from_arg(args.device)
-    cfg = _load_config(args.config, _arch_overrides(True, False, None))
+    regime_overrides = []
+    if args.supervise_axis is not None:
+        regime_overrides += ["--Models.WorldModel.RegimeFiLM.SuperviseAxis", args.supervise_axis]
+    if args.feed_obs_vol:
+        regime_overrides += ["--Models.WorldModel.RegimeFiLM.FeedObsVol", "true"]
+    cfg = _load_config(args.config, _arch_overrides(True, False, None) + regime_overrides)
     wm = load_world_model(cfg, args.checkpoint, device)
     assert wm.use_regime_film, "checkpoint has no regime-FiLM router to diagnose."
-    bundle = load_fi2010_split(args.data_val, split="validation", horizon=args.horizon, max_events=args.max_events)
-    stats = load_normalization(args.norm_path)
-    flat = apply_normalization(bundle.sequence, stats).to_flat()
+    # The router was supervised toward (and conditioned on) either the realized-vol or the predictability
+    # bucket; read the axis off the checkpoint so the diagnostic scores agreement against the same target.
+    axis = wm.regime_film_supervise_axis
+    bucket_labels_fn = efficiency_ratio_bucket_labels if axis == "predictability" else realized_vol_bucket_labels
+    conditioning_fn = efficiency_ratio_conditioning_feature if axis == "predictability" else realized_vol_conditioning_feature
+    dataset_kind = args.dataset or cfg.Dataset.get("Kind", "fi2010")
+    flat = _load_val_sequence(dataset_kind, cfg, args).to_flat()
     total = flat.shape[0]
     length = args.window_len
     rng = np.random.default_rng(0)
@@ -77,22 +95,22 @@ def main() -> int:
         # diagnostic reads matches training; a non-FeedObsVol checkpoint passes None and uses its proxy.
         regime_vol = None
         if wm.regime_film_feed_obs_vol:
-            regime_vol = realized_vol_conditioning_feature(obs[..., wm.midprice_index], wm.regime_film_vol_window)
+            regime_vol = conditioning_fn(obs[..., wm.midprice_index], wm.regime_film_vol_window)
         _, regime_aux = wm.sequence_model(flattened_sample, action, return_regime=True, regime_vol=regime_vol)
     regime_logits = regime_aux.regime_logits.float()
     mid = obs[:, :, wm.midprice_index]
-    vol_labels = realized_vol_bucket_labels(mid, wm.regime_film_vol_window, wm.regime_film_num_regimes)
+    regime_labels = bucket_labels_fn(mid, wm.regime_film_vol_window, wm.regime_film_num_regimes)
     batch_mean_entropy = float(regime_assignment_entropy(regime_logits))
     per_sample_entropy = float(regime_per_sample_entropy(regime_logits))
     predicted = regime_logits.argmax(dim=-1)
-    agreement = float((predicted == vol_labels).float().mean())
+    agreement = float((predicted == regime_labels).float().mean())
     max_entropy = float(np.log(wm.regime_film_num_regimes))
     chance = 1.0 / wm.regime_film_num_regimes
     logger.info(
-        f"router diagnostic ({len(starts)} windows of {length}): "
+        f"router diagnostic [{dataset_kind}, {axis} bucket] ({len(starts)} windows of {length}): "
         f"reg_H(batch-mean)={batch_mean_entropy:.4f}/{max_entropy:.4f}  "
         f"per_sample_H={per_sample_entropy:.4f}/{max_entropy:.4f}  "
-        f"argmax-vs-vol-bucket agreement={agreement:.4f} (chance={chance:.4f})"
+        f"argmax-vs-{axis}-bucket agreement={agreement:.4f} (chance={chance:.4f})"
     )
     return 0
 if __name__ == "__main__":

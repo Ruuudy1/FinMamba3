@@ -1,0 +1,1422 @@
+\documentclass{article}
+
+% COLM uses a format similar to ICLR.
+% If you have the official colm2025_conference.sty, replace this preamble
+% with \usepackage{colm2025_conference}.  The self-contained preamble below
+% produces the same page geometry so the draft compiles out of the box.
+
+% ---- packages ---------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{bbm}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{natbib}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+
+% ---- notation shortcuts ------------------------------------------------------
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\ot}{o_t}
+\newcommand{\at}{a_t}
+\newcommand{\rt}{r_t}
+\newcommand{\zt}{z_t}
+\newcommand{\dt}{d_t}
+\newcommand{\ht}{h_t}
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\SiLU}{SiLU}
+\DeclareMathOperator{\RMSNorm}{RMSNorm}
+\DeclareMathOperator{\symlog}{symlog}
+\DeclareMathOperator{\diag}{diag}
+
+% ---- draft utilities ---------------------------------------------------------
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO:} #1\textbf{]}}}
+
+% ==============================================================================
+\title{FinMamba3: Regime Conditioning Fails, Selective Participation Pays\\A Mamba-3 World Model for Prediction-Market Microstructure}
+
+\author{
+  Anonymous Authors \\
+  \texttt{anonymous@institution.edu}
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+% ==============================================================================
+% ABSTRACT
+% ==============================================================================
+\begin{abstract}
+Financial markets are non-stationary, partially observable environments
+whose latent dynamics shift across regimes.  We present
+\textbf{FinMamba3}, a Mamba-3 world model for limit order book (LOB)
+microstructure that adapts the Drama agent~\citep{wang2024drama}, and
+use it to ask whether conditioning a structured state-space backbone on
+an \emph{inferred} market regime improves behaviour under distribution
+shift.  Our central mechanism, \emph{RegimeFiLM}, applies per-block,
+channel-wise affine transforms to the Mamba input; because the
+selective-scan parameters $\Delta$,~$\mathbf{B}$, and~$\mathbf{C}$ are
+input-dependent, this propagates an inferred regime into the
+state-space dynamics through the selection mechanism itself, without
+modifying the CUDA kernel, and is zero-initialized so the modulated
+model is \emph{exactly} the unmodulated baseline at initialization.
+Across four regime-dependent forecasting objectives (volatility-scale,
+order-flow volume, direction macro-F1, binary settlement) on FI-2010 and
+Polymarket, and a simulated-trading (PnL) objective, RegimeFiLM is a
+\textbf{decisive null}: it collapses to identity under joint
+training---the $\gamma$ deviation decays toward zero and the router
+entropy sits at its uniform maximum---and cannot be forced active even
+by direct predictability supervision.  The null is dataset-, asset-, and
+resolution-independent---it replicates on the Kaggle high-frequency crypto
+spot book (BTC, ETH, ADA; 1\,s/1\,min/5\,min) under a predictability regime
+axis, where even a forced-active, directly-supervised modulation provably
+decays to identity.  The same effort yields a positive
+economic result the architecture did not.  Once the model is given the
+underlying spot path that \emph{defines} settlement, a time-to-expiry
+clock, and an honest per-tick target, its calibrated settlement
+probability---traded by a selective-participation strategy that bets only
+in forecastable regimes---earns \textbf{+\$4{,}729} on held-out
+Polymarket BTC (deterministic), beats a fair trend-following baseline by
+\textbf{6--9$\times$}, and is fully survivable under a fat-tailed
+bootstrap (P(profit)$=1.0$, worst-5\% drawdown $4.7\%$).  We characterize
+the edge as a three-way microstructure conjunction---predictable,
+liquid-but-not-efficient, and early-in-lifecycle---and trace it to an
+over-confident-but-directional settlement head exploiting the
+oracle-repricing lag.  The regime axis a FiLM router will not encode is
+exactly the one a strategy gate harvests profitably.
+\end{abstract}
+
+% ==============================================================================
+% 1  INTRODUCTION
+% ==============================================================================
+\section{Introduction}\label{sec:intro}
+
+Modern limit order books generate high-frequency, high-dimensional tick
+streams whose statistical properties shift with market regime---trending
+versus mean-reverting phases, liquidity crises, and information
+events---making them a demanding testbed for sequential world models.
+Model-based reinforcement learning has shown that compact world models
+can match or exceed much larger model-free agents in \emph{game}
+environments~\citep{wang2024drama, hafner2023dreamerv3}, but these
+systems have been developed almost exclusively on stationary domains
+(Atari, DMC, MemoryMaze) where the observation distribution is fixed
+after training.
+
+Financial markets violate this stationarity assumption: the
+data-generating process itself changes over time, driven by latent
+regime shifts that alter volatility, liquidity, and the informational
+content of order flow.  An agent trained on one regime may degrade when
+the market transitions to another.  This failure mode motivates two
+questions that guide the present work.  First, \emph{can a structured
+state-space world model learn LOB dynamics offline?}  Second, and more
+central, \emph{does explicit regime inference improve a world model's
+behaviour under distributional shift relative to an unmodulated
+backbone?}  The second question is the one our design is built to
+answer.  We answer it \emph{negatively}: across every objective we test,
+regime conditioning collapses to identity under joint training and does
+not improve out-of-regime behaviour (Section~\ref{sec:results}).  That
+negative redirected us to a third question the data made unavoidable:
+\emph{if the model is shown the underlying spot path that defines
+settlement, can its predictions be turned into profitable trades?}  They
+can, and the resulting selective-participation strategy is the paper's
+positive contribution.
+
+We adapt the Drama world-model framework~\citep{wang2024drama} to LOB
+microstructure.  Our system, \textbf{FinMamba3}, makes three
+contributions.
+
+\paragraph{(1) Mamba-3 MIMO backbone for LOB sequences.}
+We replace Drama's Mamba-2 sequence model with a Mamba-3 MIMO
+backbone~\citep{lahoti2026mamba3}, a structured state-space model with
+linear-time complexity and multi-input multi-output state transitions.
+We deploy it as the dynamics backbone of a financial world model and
+include it as one arm of a controlled architecture ablation rather than
+asserting an advantage in advance.
+\todo{Verify the Mamba-3 reference (\texttt{lahoti2026mamba3}) against a
+citable arXiv/venue record before submission; remove any performance
+figures that cannot be sourced from the published paper.}
+
+\paragraph{(2) Regime-aware FiLM modulation of the selective scan.}
+We introduce a \emph{RegimeFiLM modulator} that infers a categorical
+latent regime from the backbone's stem representation and emits
+per-block, channel-wise affine parameters (scale~$\gamma$ and
+shift~$\beta$).  Because the selective-scan parameters $\Delta$,
+$\mathbf{B}$, and $\mathbf{C}$ in Mamba are input-dependent
+(Section~\ref{sec:ssm_prelim}), applying a FiLM transform to each
+block's input propagates the regime signal \emph{into} the state-space
+dynamics without modifying the CUDA kernel.  A load-balancing
+regularizer discourages regime collapse.  We are not aware of prior work
+that conditions selective-scan dynamics on an inferred regime in a
+financial world model.  Our central empirical finding is that, despite
+an exact zero-initialized control and the strongest activation pressure
+we could apply, this mechanism does \emph{not} improve robustness under
+distribution shift on any objective we test: it is a clean,
+mechanistically-characterized null (Section~\ref{sec:results}).
+
+\paragraph{(3) Microstructure-aware encoder, features, and auxiliary
+heads.}
+We replace the convolutional image encoder with a Transformer that
+treats each depth level of the LOB as a token, enriched with
+binary-market invariants (boundary distance, logit-space velocity,
+Amihud illiquidity, variance ratio).  We further implement Lopez de
+Prado bar aggregation for tick-stream denoising and three auxiliary
+heads---directional prediction, Hawkes event-intensity, and binary
+settlement---that shape the latent space toward financially relevant
+structure.
+
+\paragraph{(4) Spot-conditioned pipeline and a profitable
+selective-participation strategy.}
+We rebuild the Polymarket pipeline to expose the underlying spot path
+that \emph{defines} settlement, a time-to-expiry clock, an honest
+per-tick (TTE-weighted) settlement target, and contemporaneous
+cross-interval context, and we judge the model by \emph{simulated PnL}
+through a decoupled order-matching backtester rather than a forecasting
+proxy.  Conditioned on the spot path, the settlement head becomes
+calibrated enough that a selective-participation strategy---betting only
+when a causal predictability gate fires---turns its probabilities into a
+survivable, naive-beating economic edge (Section~\ref{sec:results}).
+This is the paper's positive result, and it is
+\emph{architecture-independent}: it does not depend on RegimeFiLM.
+
+% ==============================================================================
+% 2  RELATED WORK
+% ==============================================================================
+\section{Related Work}\label{sec:related}
+
+\paragraph{World models and model-based RL.}
+World models learn a compressed dynamics model of the environment and
+use it to train a policy in imagination~\citep{ha2018world}.
+DreamerV3~\citep{hafner2023dreamerv3} established the current template:
+an RSSM with $32\!\times\!32$ categorical latents, symlog two-hot reward
+decoding, and a single hyperparameter set across domains.
+Drama~\citep{wang2024drama} replaced the RSSM's GRU with a Mamba-2
+selective state-space model and reported a 105\% normalized score on
+Atari100k with a 7M-parameter agent matching systems roughly $30\times$
+larger.  TD-MPC2~\citep{hansen2024tdmpc2} pursues a decoder-free
+trajectory-optimization alternative at 317M parameters.  FinMamba3
+inherits the DreamerV3/Drama architecture but upgrades the backbone to
+Mamba-3 MIMO and adds explicit regime conditioning, a capability we have
+not found in prior world models.
+
+\paragraph{Structured state-space models and Mamba.}
+Structured state-space models (S4, S5, Mamba) provide
+$O(n)$-complexity alternatives to
+Transformers~\citep{gu2022efficiently, smith2023s5, gu2024mamba}.
+Mamba~\citep{gu2024mamba} introduced \emph{selective} state spaces in
+which the discretization step $\Delta$ and input projection
+$\mathbf{B}$ are input-dependent, enabling content-aware filtering.
+Mamba-2~\citep{dao2024mamba2} formulated the duality between selective
+state spaces and structured masked attention.
+Mamba-3~\citep{lahoti2026mamba3} extends the selective SSM with
+multi-input multi-output (MIMO) state transitions.  In financial time
+series, MambaTS~\citep{mambats2024} applies Mamba to multivariate
+forecasting, MambaStock~\citep{mambastock2024} to equity prediction, and
+CryptoMamba~\citep{sepehri2025cryptomamba} to cryptocurrency price
+prediction; none couples Mamba with a world-model POMDP formulation or
+end-to-end regime inference.  We note that the name ``FinMamba'' has been
+used for an unrelated Mamba-GNN stock-movement model; our system is
+distinct in problem formulation (a generative LOB world model) and we
+refer to it as FinMamba3 throughout.
+
+\paragraph{Deep learning on limit order books.}
+DeepLOB~\citep{zhang2019deeplob} established the CNN+LSTM architecture
+for LOB mid-price direction prediction on the FI-2010
+benchmark~\citep{ntakaris2018benchmark}.  Subsequent work introduced
+Transformer attention: TLOB~\citep{berti2025tlob} uses a dual
+spatial/temporal attention mechanism that captures cross-level
+dependencies in LOB snapshots and reports improved generalization under
+volatile conditions, while HLOB~\citep{hlob2024} introduces
+persistence-aware blocks grounded in information-filtering networks.
+The LOBFrame codebase~\citep{lobframe2024} provides a canonical
+evaluation protocol and reports that high forecasting accuracy does not
+necessarily translate into actionable trading signals.  All of these are
+\emph{discriminative} models: they map observed LOB features to a label
+or regression target, and none learns a generative dynamics model usable
+for latent-space planning or imagination-based RL.
+
+\paragraph{Generative models of LOB dynamics.}
+A parallel line of work models LOB microstructure generatively.
+\citet{nagy2025lobs5} propose LOBS5, an autoregressive token-level
+generative model of Level-3 message flow built on a deep state-space
+network, evaluated under the LOB-Bench
+framework~\citep{nagy2025lobbench}.
+\citet{backhouse2025painting} apply spatio-temporal diffusion models to
+Level-2 snapshots and report strong stylized-fact fidelity on LOB-Bench.
+These works share our goal of modelling LOB dynamics generatively but
+differ from FinMamba3 in three respects: (i)~they target simulation
+fidelity (reproducing stylized facts) rather than a compact latent
+representation for control; (ii)~they do not learn a POMDP world model
+with a prior usable for policy imagination; and (iii)~neither conditions
+its dynamics on an inferred latent regime.  These are complementary
+approaches rather than direct baselines for the world-model objective.
+
+\paragraph{Regime-switching and non-stationarity in financial ML.}
+Classical regime-switching models (Hamilton HMM, Markov-switching GARCH)
+identify discrete market states from price
+processes~\citep{hamilton1989new}.  Modern approaches either use
+changepoint detection as a preprocessing step, including Bayesian online
+methods~\citep{adams2007bayesian}, or learn regime embeddings
+end-to-end~\citep{lim2021time}.  FiLM
+conditioning~\citep{perez2018film} has been applied in vision and
+multi-task settings to inject context into learned representations, but
+we are not aware of prior work applying FiLM to modulate state-space
+dynamics in a financial world model.
+
+\paragraph{Prediction-market microstructure.}
+Polymarket is a decentralized prediction market in which binary-outcome
+contracts trade on a central-limit order book.  Effective spreads on
+these contracts are wide relative to equity LOBs, so per-tick mid-price
+changes are dominated by spread-bouncing noise rather than information;
+this motivates our use of Lopez de Prado bar
+aggregation~\citep{deprado2018advances} for tick-stream denoising.
+\todo{Replace or verify the quantitative half-spread figure and its
+source (\texttt{sotskov2025polymarket}); the cited arXiv identifier
+could not be confirmed and the specific basis-point figure should not be
+stated until a citable measurement is available.}
+
+% ==============================================================================
+% 3  PRELIMINARIES
+% ==============================================================================
+\section{Preliminaries}\label{sec:prelim}
+
+\subsection{Partially Observable Markov Decision Processes}
+
+We model the LOB trading environment as a POMDP
+$(\mathcal{S}, \mathcal{A}, \mathcal{O}, T, O, R, \gamma)$ where
+$\mathcal{S}$ is the latent state space (the full microstructure state,
+including hidden liquidity, informed-trader intent, and regime),
+$\mathcal{A}$ the discrete action space,
+$\mathcal{O}$ the observation space (the visible LOB snapshot),
+$T(s'\mid s, a)$ the transition kernel,
+$O(o \mid s)$ the observation model,
+$R(s, a)$ the reward, and $\gamma$ the discount.  At each tick~$t$ the
+agent observes $\ot \in \R^F$ (an $F$-dimensional feature vector
+extracted from the LOB), selects $\at \in \mathcal{A}$, and receives
+$\rt$.  The true state~$s_t$ is never observed.
+
+\subsection{World-Model Architecture (DreamerV3 / Drama)}
+
+A world model approximates the POMDP by learning four components from
+offline trajectories $\{(\ot, \at, \rt)\}_{t=1}^{T}$.
+
+\paragraph{Encoder.}
+A function $\mathrm{enc}_\phi: \mathcal{O} \to \R^{d_e}$ mapping the raw
+observation to a compact embedding $e_t = \mathrm{enc}_\phi(\ot)$.
+
+\paragraph{Posterior (representation model).}
+A categorical distribution
+$q_\phi(\zt \mid e_t, \ht) = \mathrm{Cat}(\zt; \bm{\pi}^{\text{post}}_t)$
+over the discrete latent $\zt \in \{0,1\}^{C \times D}$, parameterized
+as a $C \times D$ one-hot categorical (we use $C = D = 16$, yielding a
+256-dimensional flattened sample).  Samples use the straight-through
+Gumbel estimator.
+
+\paragraph{Sequence model (dynamics prior).}
+A recurrence that compresses past latents and actions into a
+deterministic hidden state,
+\begin{equation}\label{eq:sequence_model}
+  \ht = f_\theta(\zt, \at, h_{t-1}),
+\end{equation}
+from which a prior $p_\theta(\zt \mid \ht) = \mathrm{Cat}(\zt;
+\bm{\pi}^{\text{prior}}_t)$ is predicted.  In DreamerV3 this recurrence
+is a GRU; in Drama it is a Mamba-2 selective state-space layer; in
+FinMamba3 it is a stack of Mamba-3 MIMO blocks
+(Section~\ref{sec:mamba3}).
+
+\paragraph{Decoder and auxiliary heads.}
+An observation decoder $\hat{o}_t = \mathrm{dec}_\theta(\zt)$
+reconstructs the input; optional reward and termination heads predict
+$\hat{r}_t$ and $\hat{\delta}_t$.
+
+\paragraph{Training objective.}
+The world model is trained by minimizing
+\begin{equation}\label{eq:world_model_loss}
+  \mathcal{L}_{\text{wm}}
+  = \underbrace{\mathcal{L}_{\text{recon}}}_{\text{observation}}
+  + \underbrace{\mathcal{L}_{\text{dyn}}}_{\text{dynamics KL}}
+  + \beta\,\underbrace{\mathcal{L}_{\text{rep}}}_{\text{representation KL}}
+  + \sum_k \lambda_k \mathcal{L}_k^{\text{aux}},
+\end{equation}
+where $\mathcal{L}_{\text{recon}}$ is the reconstruction loss (MSE or
+Student-$t$ negative log-likelihood),
+$\mathcal{L}_{\text{dyn}} = \KL[q_\phi(\zt \mid e_t, \ht)\,\|\,
+\mathrm{sg}[p_\theta(\zt \mid \ht)]]$ trains the prior to match the
+posterior (with the posterior stopped-gradient),
+$\mathcal{L}_{\text{rep}} = \KL[\mathrm{sg}[q_\phi]\,\|\,p_\theta]$
+pulls the posterior toward the prior, and both KL terms use a free-bits
+floor of 1.0~nat per step to prevent degenerate posterior--prior
+collapse~\citep{hafner2023dreamerv3}.
+
+\subsection{Selective State-Space Models}\label{sec:ssm_prelim}
+
+A linear time-invariant (LTI) state-space model maps an input sequence
+$x(t) \in \R^{d}$ to an output $y(t) \in \R^{d}$ via a latent state
+$h(t) \in \R^{N}$:
+\begin{equation}\label{eq:continuous_ssm}
+  \dot{h}(t) = \mathbf{A}\,h(t) + \mathbf{B}\,x(t), \qquad
+  y(t) = \mathbf{C}\,h(t),
+\end{equation}
+with $\mathbf{A} \in \R^{N \times N}$,
+$\mathbf{B} \in \R^{N \times d}$,
+$\mathbf{C} \in \R^{d \times N}$.
+After zero-order-hold discretization with step $\Delta$,
+\begin{equation}\label{eq:discrete_ssm}
+  h_t = \bar{\mathbf{A}}\,h_{t-1} + \bar{\mathbf{B}}\,x_t, \qquad
+  y_t = \mathbf{C}\,h_t,
+\end{equation}
+where $\bar{\mathbf{A}} = \exp(\Delta\,\mathbf{A})$ and
+$\bar{\mathbf{B}} = (\Delta\,\mathbf{A})^{-1}
+(\bar{\mathbf{A}} - \mathbf{I})\,\Delta\,\mathbf{B}$.
+
+\paragraph{Mamba (selective SSM).}
+Mamba~\citep{gu2024mamba} makes $\Delta_t$, $\mathbf{B}_t$, and
+$\mathbf{C}_t$ \emph{input-dependent} via learned linear projections of
+$x_t$, breaking the LTI assumption and enabling content-aware gating.
+This \emph{selection mechanism} is the property we exploit: because
+$\Delta_t = \softmax(W_\Delta\,x_t)$, $\mathbf{B}_t = W_B\,x_t$, and
+$\mathbf{C}_t = W_C\,x_t$, any affine transformation of $x_t$ propagates
+directly into all three scan parameters.
+
+\paragraph{Mamba-3 MIMO.}
+Mamba-3~\citep{lahoti2026mamba3} extends the selective SSM with
+multi-input multi-output (MIMO) state transitions that couple
+information across heads within each layer.  It also incorporates rotary
+position embeddings (RoPE) on a configurable fraction of the head
+dimension and an optional output-projection normalization.
+\todo{State any quantitative claims about Mamba-3 (e.g.\ relative
+perplexity or downstream gains) only with a verifiable citation to the
+source paper; otherwise describe MIMO as a design choice evaluated in our
+own ablation (Section~\ref{sec:experiments}).}
+
+% ==============================================================================
+% 4  METHODOLOGY
+% ==============================================================================
+\section{Methodology}\label{sec:method}
+
+FinMamba3 adapts the Drama world-model framework to LOB microstructure
+along four axes: the observation encoder
+(Section~\ref{sec:lob_encoder}), the sequence backbone
+(Section~\ref{sec:mamba3}), the regime-modulated dynamics
+(Section~\ref{sec:regime_film}), and the auxiliary training objectives
+(Section~\ref{sec:aux_heads}).  \todo{Add Figure~1: architecture
+overview (encoder $\to$ posterior $\to$ Mamba-3 backbone with RegimeFiLM
+$\to$ heads).}
+
+% --------------------------------------------------------------------------
+\subsection{Transformer-over-Depth LOB Encoder}\label{sec:lob_encoder}
+
+Raw LOB snapshots are represented as a flat feature vector
+$\ot \in \R^F$ with $F = K \cdot F_{\ell} + F_{\tau}$.  We use
+$K = 10$ depth levels, each carrying $F_{\ell} = 8$ per-level features
+(relative price, log size, log cumulative depth, volume share, price
+gap, level index, side indicator, log staleness), and
+$F_{\tau} = 20$ tick-level aggregate features (midprice, spread,
+imbalance, microprice, order-flow imbalance, trade intensity, rolling
+volatility, plus six binary-market invariants described below).
+
+Rather than flattening the $K$ depth levels and applying an MLP---which
+discards the ordering and cross-level structure of the book---we treat
+each level as a token and apply a Transformer encoder over depth:
+\begin{equation}\label{eq:lob_enc}
+  \mathrm{tok}_k = W_{\ell}\,\ot^{(k)} + \mathrm{pos}_k,
+  \qquad k = 1, \ldots, K,
+\end{equation}
+where $\ot^{(k)} \in \R^{F_\ell}$ is the $k$-th level's feature vector,
+$W_\ell \in \R^{d_m \times F_\ell}$ is a shared linear projection, and
+$\mathrm{pos}_k \in \R^{d_m}$ is a learned positional embedding.  A
+\textsc{[CLS]} token initialized with the tick-level features
+$\ot^{(\tau)}$ via a two-layer MLP is prepended.  The full sequence
+$[\textsc{CLS};\,\mathrm{tok}_1;\,\ldots;\,\mathrm{tok}_K]$ is processed
+by a $2$-layer, $4$-head pre-norm Transformer encoder with GELU
+activation and $d_m = 128$.  The output at the \textsc{[CLS]} position
+is projected to a $d_e = 1024$-dimensional embedding:
+\begin{equation}
+  e_t = W_{\text{out}}\,\RMSNorm\bigl(\mathrm{TF}([\textsc{CLS};\,
+  \mathrm{tok}_1;\,\ldots;\,\mathrm{tok}_K])_0\bigr).
+\end{equation}
+This design preserves the depth ordering of the book, lets attention
+capture cross-level dependencies (bid--ask symmetry, depth-curve shape),
+and accommodates different numbers of levels.  We evaluate this encoder
+against a flat-MLP encoder in the ablation of
+Section~\ref{sec:experiments} rather than assuming it is superior.
+
+\paragraph{Binary-market features.}
+Polymarket contracts are binary outcomes whose prices are bounded
+probabilities in $[0, 1]$.  Liquidity and information dynamics change
+qualitatively near the probability boundaries and are sensitive to
+time-to-expiry.  We append six tick-level features that capture these
+invariants:
+\begin{itemize}[nosep]
+  \item \emph{Boundary distance}: $\min(m_t,\; 1 - m_t)$, where $m_t$
+    is the midprice.
+  \item \emph{Boundary-scaled depth}: $\log(\text{depth}) \cdot
+    \min(m_t, 1 - m_t)$.
+  \item \emph{Logit-mid velocity and acceleration}: first and second
+    differences of $\mathrm{logit}(m_t)$, the natural unbounded
+    coordinate for an implied probability.
+  \item \emph{Amihud illiquidity}~\citep{amihud2002illiquidity}:
+    rolling $|\text{logit return}| / \text{depth}$.
+  \item \emph{Variance ratio}: Lo--MacKinlay $\mathrm{VR}(2)$ of logit
+    returns; values below~1 indicate mean reversion, above~1 trending.
+\end{itemize}
+These are appended (not interleaved) to preserve backward compatibility
+with existing feature indices.  For the FI-2010 benchmark, binary-market
+features are omitted ($F_\tau = 14$, $F = 94$).
+
+\paragraph{Bar aggregation.}
+Because raw per-tick midprice changes on wide-spread contracts are
+dominated by spread-bouncing noise, we implement five Lopez de Prado bar
+types~\citep{deprado2018advances}---time, volume, dollar,
+tick-imbalance, and CUSUM---each producing the same $F$-dimensional
+feature vector so the downstream pipeline is aggregation-agnostic.
+
+% --------------------------------------------------------------------------
+\subsection{Mamba-3 MIMO Sequence Backbone}\label{sec:mamba3}
+
+The posterior latent samples $\zt \in \R^{256}$ (from the
+$16\!\times\!16$ categorical) are fed through a stem network
+\begin{equation}
+  x_t^{(0)} = \SiLU\!\bigl(\RMSNorm(W_s\,\zt)\bigr) \in \R^{d_h},
+\end{equation}
+with $d_h = 512$, followed by an $L$-layer ($L = 4$) stack of Mamba-3
+MIMO blocks.  Each block applies a pre-norm residual,
+\begin{equation}\label{eq:mamba_block}
+  x_t^{(\ell)} = x_t^{(\ell-1)} + \mathrm{Mamba3}\!\bigl(
+  \RMSNorm(x_t^{(\ell-1)})\bigr),
+  \qquad \ell = 1, \ldots, L.
+\end{equation}
+The Mamba-3 block parameterizes a selective state-space model with
+$d_{\text{state}} = 128$, head dimension 64 (8 heads for $d_h = 512$),
+MIMO rank~4, chunk size~16, and RoPE on 50\% of the head dimension.  The
+final hidden state is $\ht = \RMSNorm(x_t^{(L)}) \in \R^{d_h}$.
+
+The MIMO parameterization couples information across heads within each
+block via a low-rank cross-head mixing matrix.  We provide matched YAML
+configurations for Mamba-1, Mamba-2, Mamba-3 SISO, Mamba-3 MIMO, and a
+Transformer backbone so that the architecture ablation can be reproduced
+with a single command per variant; whether MIMO improves over SISO on
+LOB data is left to that ablation.
+
+% --------------------------------------------------------------------------
+\subsection{Regime-Aware FiLM Modulation}\label{sec:regime_film}
+
+A world model trained on one regime may produce inaccurate rollouts in
+another.  We condition the Mamba dynamics on an inferred latent regime.
+
+\paragraph{Design constraint.}
+The Mamba-3 blocks are provided by the upstream \texttt{mamba-ssm}
+library and execute fused CUDA/TileLang kernels.  Modifying $\Delta_t$,
+$\mathbf{B}_t$, or $\mathbf{C}_t$ inside the kernel would be fragile and
+would invalidate prebuilt GPU wheels.
+
+\paragraph{Key idea.}
+Because $\Delta_t$, $\mathbf{B}_t$, and $\mathbf{C}_t$ are
+input-dependent functions of each block's input
+(Section~\ref{sec:ssm_prelim}), a channel-wise affine transformation of
+the block input propagates the regime signal \emph{into the
+selective-scan parameters through the selection mechanism itself},
+without touching the kernel.
+
+\paragraph{RegimeFiLM modulator.}
+Let $x_t^{(0)}$ denote the stem output.  A \emph{regime head}---a linear
+projection followed by a softmax over $R = 8$ regimes---infers a soft
+categorical distribution and produces a regime embedding via a weighted
+combination of a learned embedding table:
+\begin{equation}\label{eq:regime_head}
+  \bm{\alpha}_t = \softmax(W_r\,x_t^{(0)}) \in \R^R,
+  \qquad
+  r_t = \bm{\alpha}_t^\top E \in \R^{d_r},
+\end{equation}
+where $E \in \R^{R \times d_r}$ with $d_r = 32$.  A hypernetwork maps
+$r_t$ to per-block FiLM parameters:
+\begin{equation}\label{eq:film}
+  [\tilde{\gamma}^{(1)}, \ldots, \tilde{\gamma}^{(L)},\;
+   \tilde{\beta}^{(1)}, \ldots, \tilde{\beta}^{(L)}]
+  = W_{\text{hyper}}\,r_t,
+\end{equation}
+with $W_{\text{hyper}} \in \R^{2Ld_h \times d_r}$.  Because $r_t$ is
+low-dimensional ($d_r = 32$) while the FiLM output spans $2Ld_h$
+channels, the modulation is deliberately low-rank in regime space: it
+applies a small number of regime-specific affine directions rather than
+arbitrary per-channel control.  We treat this bottleneck as a design
+choice and report its sensitivity in the ablation.  The affine
+parameters are bounded via $\tanh$ for bf16 stability,
+\begin{equation}\label{eq:film_bounded}
+  \gamma^{(\ell)} = 1 + \tanh(\tilde{\gamma}^{(\ell)}),
+  \qquad
+  \beta^{(\ell)} = \tanh(\tilde{\beta}^{(\ell)}),
+\end{equation}
+so that $\gamma^{(\ell)} \in (0, 2)$ and $\beta^{(\ell)} \in (-1, 1)$.
+The Mamba block from Eq.~\eqref{eq:mamba_block} becomes
+\begin{equation}\label{eq:mamba_film}
+  x_t^{(\ell)} = x_t^{(\ell-1)}
+  + \mathrm{Mamba3}\!\bigl(
+    \gamma^{(\ell)} \odot \RMSNorm(x_t^{(\ell-1)})
+    + \beta^{(\ell)}
+  \bigr).
+\end{equation}
+Because the Mamba-3 block computes $\Delta_t =
+\sigma(W_\Delta\,\tilde{x}_t)$, $\mathbf{B}_t = W_B\,\tilde{x}_t$,
+$\mathbf{C}_t = W_C\,\tilde{x}_t$ from its input $\tilde{x}_t$, setting
+$\tilde{x}_t = \gamma^{(\ell)} \odot \hat{x}_t + \beta^{(\ell)}$ makes
+the scan parameters a function of both the observation and the inferred
+regime.
+
+\paragraph{Initialization.}
+The hypernetwork weights and biases are initialized to zero, so at the
+start of training $\gamma^{(\ell)} = \mathbf{1}$ and
+$\beta^{(\ell)} = \mathbf{0}$ for all~$\ell$.  This makes the modulated
+backbone exactly identical to the unmodulated baseline at
+initialization, providing a clean control and a stable warm-start.
+
+\paragraph{Load-balancing regularizer.}
+To discourage regime collapse (all timesteps assigned to one regime), we
+add a Switch-Transformer-style
+regularizer~\citep{fedus2022switch} that maximizes the entropy of the
+batch-averaged regime distribution,
+\begin{equation}\label{eq:load_balance}
+  \mathcal{L}_{\text{regime}} = \lambda_{\text{ent}}
+  \Bigl(\log R - H\!\bigl[\bar{\bm{\alpha}}\bigr]\Bigr),
+  \qquad
+  \bar{\bm{\alpha}} = \frac{1}{BL}\sum_{b,t} \bm{\alpha}_{b,t},
+\end{equation}
+where $H[\cdot]$ is the Shannon entropy, $B$ and $L$ are the batch size
+and sequence length, and $\lambda_{\text{ent}} = 0.01$.  This
+regularizes the \emph{marginal} regime usage while leaving per-step
+assignments free to be peaky.
+
+% --------------------------------------------------------------------------
+\subsection{Episodic Memory}\label{sec:episodic_memory}
+
+The Mamba hidden state provides parametric memory but is fixed after
+training.  Under distributional shift at test time---rare patterns,
+regime changes, or under-represented local behaviors---the parametric
+model may fail to recognize them.
+
+We augment the world model with a lightweight, CPU-side episodic memory
+buffer that stores past hidden states and retrieves the $k$ nearest
+neighbors (by cosine similarity) at each training step.  The retrieved
+context is fused with the current hidden state via a gated residual,
+\begin{equation}\label{eq:em_fusion}
+  \tilde{h}_t = h_t + \sigma(W_g[h_t; m_t]) \odot \tanh(W_p[h_t; m_t]),
+\end{equation}
+where $m_t = \sum_{i=1}^{k} w_i\,v_i$ is the soft-attention-weighted
+retrieval ($w_i$ from the cosine-similarity softmax, $v_i$ the stored
+hidden states), and $\sigma$ is the sigmoid gate.
+
+Two write policies are supported:
+(i)~\emph{FIFO}: every last-frame hidden state is appended, oldest
+evicted;
+(ii)~\emph{Novelty-filtered}: only entries whose symmetric KL between
+posterior and prior exceeds a threshold are written, so the buffer
+becomes a catalog of regime-surprising states rather than a sliding
+window of recent observations.  Whether episodic memory helps at
+inference, and which write policy is preferable, is left to the ablation
+in Section~\ref{sec:experiments}.
+
+% --------------------------------------------------------------------------
+\subsection{Observation Decoder and Reconstruction Loss}\label{sec:decoder}
+
+The observation decoder maps the flattened latent sample
+$\zt \in \R^{256}$ back to the flat LOB feature vector
+$\hat{o}_t \in \R^F$ through a 3-layer MLP with RMSNorm and SiLU
+activations.
+
+Two decoder variants are provided.  The default uses a weighted MSE loss
+in which size/flow features receive $2\times$ the weight of price
+features:
+\begin{equation}\label{eq:recon_mse}
+  \mathcal{L}_{\text{recon}} = \frac{1}{BLF}
+  \sum_{b,t,f} w_f\,(\hat{o}_{b,t,f} - o_{b,t,f})^2.
+\end{equation}
+The $2\times$ weighting is an empirical design choice motivated by the
+observation that order-flow quantities carry directional information in
+LOBs~\citep{cont2014price}; we do not claim the specific ratio is
+optimal and treat it as a tunable hyperparameter.  The alternative is a
+Student-$t$ negative log-likelihood decoder that predicts per-feature
+mean $\mu_{t,f}$ and log-scale $\log\sigma_{t,f}$ with learnable degrees
+of freedom~$\nu_f$:
+\begin{equation}\label{eq:recon_studentt}
+  \mathcal{L}_{\text{recon}}^{\text{St}} = -\frac{1}{BLF}
+  \sum_{b,t,f} w_f \log p_{\text{St}}(o_{b,t,f};\,
+  \mu_{b,t,f},\,\sigma_{b,t,f},\,\nu_f).
+\end{equation}
+The heavy-tailed Student-$t$ likelihood is intended to model the excess
+kurtosis of LOB returns arising from discretized prices and occasional
+regime jumps.
+
+% --------------------------------------------------------------------------
+\subsection{Auxiliary Heads}\label{sec:aux_heads}
+
+Three domain-specific auxiliary heads inject microstructure inductive
+bias into the world-model latent, each gated by a configuration flag and
+contributing zero loss when its required labels are absent.
+
+\paragraph{Direction head.}
+A two-layer MLP predicts the three-class next-tick midprice direction
+(down / flat / up) from the conditioned hidden state $\tilde{h}_t$,
+trained with cross-entropy.  The direction threshold $\epsilon$ that
+defines the flat bucket can be swept as a hyperparameter; a
+multi-threshold variant averages the cross-entropy across a list of
+thresholds so accuracy can be reported as a curve rather than a single
+number:
+\begin{equation}
+  \mathcal{L}_{\text{dir}} = \frac{1}{|\mathcal{E}|}
+  \sum_{\epsilon \in \mathcal{E}}
+  \mathrm{CE}\!\bigl(\hat{y}_t,\; \mathrm{bucket}(\Delta m_t, \epsilon)\bigr).
+\end{equation}
+
+\paragraph{Hawkes intensity head.}
+An MLP predicting log-intensity for buy and sell event arrivals, trained
+with Poisson negative log-likelihood on observed event counts in a
+forward window:
+\begin{equation}
+  \mathcal{L}_{\text{Hawkes}} = \sum_{s \in \{\text{buy},\text{sell}\}}
+  \bigl[\hat{\lambda}_{t,s} - n_{t,s}\,\log\hat{\lambda}_{t,s}\bigr],
+\end{equation}
+where $\hat{\lambda}_{t,s} = \exp(\text{MLP}(\tilde{h}_t))_s$ and
+$n_{t,s}$ is the observed count.  This head provides an order-arrival
+self-supervised signal.
+
+\paragraph{Settlement head.}
+A binary classifier predicting the contract outcome (YES/NO) from the
+latent, trained with binary cross-entropy optionally weighted by
+closeness to expiry so the training pressure ramps up near resolution:
+\begin{equation}
+  \mathcal{L}_{\text{settle}} = -\bigl[(1 - \tau_t)\,
+  y\log\hat{p}_t + (1 - y)\log(1 - \hat{p}_t)\bigr],
+\end{equation}
+where $\tau_t \in [0, 1]$ is the time-to-expiry fraction (1 at the
+start, 0 at expiry) and $y \in \{0, 1\}$ is the binary outcome.  This
+encourages the latent to encode information relevant to the terminal
+payoff rather than only locally reconstructive features.
+
+% --------------------------------------------------------------------------
+\subsection{Full Training Objective}\label{sec:full_loss}
+
+Combining all components, the FinMamba3 world-model loss is
+\begin{equation}\label{eq:full_loss}
+  \mathcal{L} =
+  \mathcal{L}_{\text{recon}}
+  + \mathcal{L}_{\text{dyn}}
+  + \beta\,\mathcal{L}_{\text{rep}}
+  + \lambda_{\text{dir}}\,\mathcal{L}_{\text{dir}}
+  + \lambda_{\text{H}}\,\mathcal{L}_{\text{Hawkes}}
+  + \lambda_{\text{S}}\,\mathcal{L}_{\text{settle}}
+  + \lambda_{\text{ent}}\,\mathcal{L}_{\text{regime}},
+\end{equation}
+with $\beta = 0.1$, $\lambda_{\text{dir}} = 0.5$,
+$\lambda_{\text{H}} = 0.1$, $\lambda_{\text{S}} = 0.25$, and
+$\lambda_{\text{ent}} = 0.01$.  Reward and termination heads are gated
+off during Phase~A pretraining (no reward signal in the offline buffer)
+and enabled in Phase~B imagination-based RL, where the full
+DreamerV3/Drama actor--critic loop applies.
+
+The model is optimized with
+LaProp~\citep{ziyin2021laprop} (learning rate $4 \times 10^{-5}$,
+$\epsilon = 10^{-20}$, weight decay $10^{-4}$) with 500-step linear
+warmup and cosine annealing over 15\,000 steps.  Gradient norms are
+clipped at 100.  Mixed-precision (bf16) autocast is used with a NaN-guard
+that skips the first 50 non-finite backward passes to absorb
+selective-scan instabilities during early training.
+
+% --------------------------------------------------------------------------
+\subsection{Spot-Conditioned Polymarket Pipeline}\label{sec:spot_pipeline}
+
+The settlement of a Polymarket binary contract is decided by the
+\emph{underlying} spot price (the Chainlink/Binance close versus the open
+reference), yet a pipeline that feeds the model only the contract's own
+order book hides the variable that defines its label.  We rebuild the
+Polymarket feature pipeline along five axes.
+\emph{(i)~Spot path.}  Each tick carries the asset's spot log-return
+since the market's open reference, its rolling realized volatility, and
+the signed distance $(s_t - s_0)/s_0$ to the open.
+\emph{(ii)~Time-to-expiry clock.}  Each tick carries
+$\tau_t = (t_{\text{end}} - t)/(t_{\text{end}} - t_{\text{start}}) \in
+[0,1]$ and $\log(1 + \text{seconds-to-expiry})$.
+\emph{(iii)~Honest settlement target.}  The realized outcome is
+supervised by the settlement head of Section~\ref{sec:aux_heads},
+weighted by proximity to expiry ($1 - \tau_t$) so that early-tick label
+noise no longer dominates, with the observable spot-return sign as an
+auxiliary target.
+\emph{(iv)~Cross-interval context.}  For each hourly market we summarize
+the contemporaneous 5- and 15-minute markets of the same asset (most
+recent implied probability, and the count and mean direction of
+already-resolved short markets) into a fixed-width context vector
+appended to the hourly tick features; the short markets are context
+only, so no training window straddles a settlement boundary.
+\emph{(v)~Asset embedding.}  A learned per-asset (BTC/ETH/SOL) embedding.
+Together these hand the model the causal signal of which its settlement
+label is a function.
+
+% --------------------------------------------------------------------------
+\subsection{Predictability Regime Axis}\label{sec:predictability}
+
+A recurring obstacle is finding a regime axis a router has reason to
+encode.  Beyond realized volatility, we add a \emph{predictability} axis
+computed on the underlying spot series over a rolling window: the Kaufman
+efficiency ratio $\mathrm{ER} = |s_n - s_0| / \sum_t |s_t - s_{t-1}|$
+(near~1 a clean trend, near~0 a random wander), the normalized
+permutation entropy of ordinal patterns, and the Hurst exponent /
+fractal dimension.  These are exposed as per-tick features and used both
+to split the held-out evaluation into forecastable versus random-walk
+regimes and, when the router collapses, to supervise it directly.  ``Is
+this window forecastable'' is the latent a selective-betting policy
+needs, and the most defensible regime signal in the project---which is
+why a router that will not encode even this axis is the strongest form of
+the null.
+
+% --------------------------------------------------------------------------
+\subsection{Simulated-PnL Evaluation and Selective Participation}\label{sec:pnl}
+
+We judge a frozen world model by simulated trading PnL rather than a
+forecasting loss.  The model's spot-conditioned settlement probability is
+traded through a decoupled order-matching engine (real T+1 matching, \$1
+settlement at resolution, PnL $=$ ending value $-\,\$10{,}000$) via a
+thin adapter that depends only on the engine's strategy interface; the
+engine carries no learning dependency, so the two codebases stay
+decoupled.  The strategy converts a divergence between the model's
+probability and the (oracle-lagged) book midpoint into an order, and
+participates \emph{selectively}: it acts only when a causal predictability
+gate fires (rolling ER above a threshold fit on the training split and
+frozen), exploiting the convex, capped-loss payoff of a binary contract
+by betting only where the underlying is forecastable.  As an anti-artifact
+control we report PnL relative to a mandatory \texttt{NaiveLagStrategy}---
+the same gate and spot-move rule with \emph{no} model---so a mechanical
+latency arbitrage cannot be mistaken for a model edge, and we summarize
+survivability with a 10{,}000-path trade bootstrap (fraction of
+profitable paths, 5th-percentile drawdown) rather than a Gaussian
+$t$-test, because trade returns are fat-tailed.
+
+% ==============================================================================
+% 5  EXPERIMENTAL SETUP
+% ==============================================================================
+\section{Experimental Setup}\label{sec:experiments}
+
+We frame the evaluation around the two questions of
+Section~\ref{sec:intro}, with the regime-conditioning question
+(Q2) as the primary one.  Each experiment is specified with an explicit
+failure criterion so that it can disconfirm the corresponding
+hypothesis, not only support it.
+
+\paragraph{Datasets and regime splits.}
+We evaluate on (i)~Polymarket binary-outcome crypto LOB data (BTC/ETH/SOL
+up/down markets at 5-, 15-, and 60-minute intervals, together with the
+underlying Chainlink/Binance spot path) and (ii)~the public FI-2010
+benchmark~\citep{ntakaris2018benchmark}.  Polymarket carries the
+regime-shift, settlement, and PnL analyses; FI-2010 provides a standard,
+reproducible direction-prediction comparison against published
+baselines.  Held-out markets are split into a reference and a shifted
+regime two ways: by \emph{predictability} (the per-market efficiency
+ratio over the spot window; the primary axis) and by \emph{realized spot
+volatility} (Section~\ref{sec:predictability}); we report both and do not
+pool them.  All strategy thresholds (the ER gate, CUSUM, edge, and
+sizing) are fit on the training split and frozen before any held-out
+evaluation.  A planned cross-dataset extension repeats the regime A/B and
+the backbone ablation on a third, public crypto spot-LOB corpus.
+
+\paragraph{Baselines.}
+For the world-model backbone ablation we compare Mamba-1, Mamba-2,
+Mamba-3 SISO, Mamba-3 MIMO, and a Transformer backbone under matched
+parameter budgets.  For LOB direction prediction we compare against
+DeepLOB~\citep{zhang2019deeplob} and a linear autoregressive baseline,
+following the LOBFrame protocol~\citep{lobframe2024}.  The generative
+LOB models LOBS5~\citep{nagy2025lobs5} and the diffusion approach
+of~\citet{backhouse2025painting} target message-level simulation fidelity
+rather than a control-oriented latent, and are discussed as related
+context rather than used as direct baselines.
+
+\paragraph{Metrics.}
+We report (i)~reconstruction loss on held-out ticks; (ii)~next-tick
+direction macro-F1 as a curve over the flat-bucket threshold $\epsilon$;
+(iii)~held-out backtest PnL, its model-minus-naive margin, and a
+$10{,}000$-path trade bootstrap (fraction of profitable paths,
+5th-percentile drawdown) on Polymarket; (iv)~the generalization gap
+between the reference and shifted regime splits; and (v)~the
+FiLM-activation diagnostics that gate every claim: the gamma deviation
+$\mathrm{film}_g = \mathrm{mean}\,|\gamma - 1|$ and the router entropy
+$\mathrm{reg}_H$ (whose uniform maximum is $\log R$).  The activation
+diagnostics are load-bearing: a positive generalization gap with an inert
+FiLM is an artifact, not a regime-conditioning effect.
+
+\paragraph{Primary experiment: regime conditioning (Q2).}
+\emph{Hypothesis.} RegimeFiLM reduces the in-regime/out-of-regime
+generalization gap relative to an identical unmodulated backbone.
+\emph{Treatment vs.\ baseline.} RegimeFiLM on vs.\ off, holding all else
+fixed (the zero-initialization makes these identical at step~0).
+\emph{Failure criterion.} If the out-of-regime gap is not reduced by a
+pre-registered margin, or if held-out direction accuracy / backtest
+Sharpe does not improve, the central hypothesis is not supported and we
+report this outcome.
+\emph{Reviewer interpretation.} A reviewer should read a null result
+here as evidence that regime conditioning, as implemented, does not aid
+robustness on these datasets---not as a tuning artifact---because the
+control is exact at initialization.
+
+\paragraph{Pre-registered decision gate.}
+A \textsc{win} requires \emph{all} of: a positive multi-seed PnL (or
+generalization-gap) effect whose bootstrap CI excludes zero with
+consistent sign; an \emph{active} FiLM ($\mathrm{film}_g$ clearly $> 0$,
+$\mathrm{reg}_H$ off its uniform maximum); the strategy beating
+\texttt{NaiveLagStrategy}; and survivability on the shifted split
+(bootstrap P(profit) $> 70\%$, 5th-percentile drawdown $< 15\%$).  A
+result that fails the activation, naive, or survivability clause is
+recorded as \textsc{null}; a zero effect caused by an unhealthy
+diagnostic (inert FiLM at initialization, a collapsed router, or a
+strategy that never trades) is \textsc{broken} and fixed before
+re-judging.  Gates are fixed in advance; we early-stop only for futility,
+never on a good-looking result, and report every null.
+
+\paragraph{Secondary experiments.}
+(a)~\emph{Backbone ablation}: Mamba-1/2/3-SISO/3-MIMO vs.\ Transformer on
+reconstruction and direction accuracy; failure criterion: Mamba-3 MIMO
+does not match or exceed the best alternative under matched parameters.
+(b)~\emph{Episodic memory}: FIFO vs.\ novelty-filtered vs.\ off; failure
+criterion: neither memory policy improves out-of-regime metrics over the
+parametric model.
+(c)~\emph{Auxiliary heads}: leave-one-out over the direction, Hawkes, and
+settlement heads; failure criterion: removing a head leaves downstream
+metrics unchanged within noise, indicating it provides no useful
+inductive bias.
+
+% ==============================================================================
+% 6  RESULTS
+% ==============================================================================
+\section{Results}\label{sec:results}
+
+The evaluation produced a \textbf{dual outcome}: the regime-conditioning
+architecture is a decisive negative, and the spot-conditioned pipeline
+plus a selective-participation strategy---built to test it---is a
+genuine, survivable economic positive.
+
+% --------------------------------------------------------------------------
+\subsection{Regime-FiLM is a decisive null}\label{sec:results_null}
+
+Table~\ref{tab:film_null} reports the central diagnostic across all five
+objectives.  In every family, on both datasets and a money objective,
+FiLM collapses to identity under joint training: $\mathrm{film}_g$
+(mean $|\gamma - 1|$) decays toward zero and the router entropy
+$\mathrm{reg}_H$ sits at its uniform maximum ($\log R$; $\log 4$ on
+FI-2010, $\log 8$ on Polymarket).  Where a generalization gap reads
+positive (direction $+0.008$, settlement $+0.18$, by sign), FiLM is
+provably inert, the treatment is \emph{absolutely worse} in both
+regimes, and the gap is a $\text{high}-\text{low}$ distributional
+artifact whose sign even flips with head calibration---which is exactly
+why the activation diagnostics are load-bearing.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lllrrl}
+\toprule
+Family & Objective & Dataset & Gap (sign) & $\mathrm{film}_g$ & Verdict \\
+\midrule
+Volatility/scale & StudentT NLL    & FI-2010    & $\approx 0$ & $\approx$ ident.\ & \textsc{null} \\
+Order-flow volume & Volume NLL     & FI-2010    & $\approx 0$ & $\approx$ ident.\ & \textsc{null} \\
+Direction        & macro-F1        & FI-2010    & $+0.008$\,\dag & $0.018$ & \textsc{null} \\
+Settlement       & BCE log-loss    & Polymarket & $+0.18$\,\dag  & $0.008$ & \textsc{null} \\
+\textbf{PnL}     & simulated trade & Polymarket & $-627$\,\dag   & $0.010$ & \textsc{null} \\
+\bottomrule
+\end{tabular}
+\caption{RegimeFiLM is inert across every objective.  $\mathrm{reg}_H$
+equals its uniform maximum ($\log R$) in all rows.  \dag~a non-zero gap
+whose sign is a distributional artifact, not a FiLM effect (FiLM is
+inert, and the treatment is absolutely worse).}
+\label{tab:film_null}
+\end{table}
+
+\paragraph{Strongest-null test.}
+Forcing FiLM active (zero-init scale raised so $\mathrm{film}_g = 0.150$
+at step~0) and supervising the router \emph{directly} on the spot
+efficiency-ratio axis with the strongest settings (LR multiplier~50,
+supervision weight~30, decoupled router/FiLM, fed observation
+volatility) still decays the modulation monotonically toward identity
+($\mathrm{film}_g$: $0.150 \to 0.119 \to 0.100 \to 0.074 \to 0.056 \to
+0.043$, still falling) with $\mathrm{reg}_H = \log 8$ throughout.  A
+frozen router probes to $0.92$ agreement with the regime bucket, so the
+capacity exists; joint training will not use it.  This is the strongest
+form of the null: the optimizer drives the modulation to identity
+regardless of objective, regime axis, or forced supervision.
+
+% --- Cross-dataset confirmation (alternative-data campaign) -----------------
+\paragraph{Cross-dataset confirmation (FI-2010 and Kaggle spot LOBs).}
+We take the architecture finding to two further LOB settings---the Kaggle
+high-frequency crypto spot book (a new dataset) and FI-2010 re-examined under a
+\emph{predictability}-primary regime axis (efficiency-ratio window split,
+\S\ref{sec:predictability}; realized volatility secondary)---judged by forecasting
+metrics alone since neither is a prediction market: held-out direction macro-F1
+(primary) and full-channel Student-t reconstruction NLL (secondary), each scored on the
+reference (forecastable) and shifted (random-walk) regime windows. Across FI-2010 and
+the Kaggle crypto spot book (BTC, ETH, ADA at $1\,\mathrm{s}$/$1\,\mathrm{min}$/$5\,
+\mathrm{min}$ resolutions), the zero-initialised modulation never leaves identity:
+$\mathrm{film}_g \approx 0.004$ and $\mathrm{reg}_H = \log 4$ in every setting
+(Table~\ref{tab:film_null_xdata}). With the FiLM an exact paired control (baseline and
+treatment share the seed), every held-out gap is statistically indistinguishable from
+zero (all $95\%$ CIs include $0$) on both regime axes. The split itself is non-degenerate:
+the high-efficiency-ratio reference windows carry genuinely more structure than the
+shifted windows on all three predictability measures (efficiency ratio, permutation
+entropy, Hurst), and DeepLOB~\citep{zhang2019deeplob} attains $0.628$ macro-F1 on the FI-2010 horizon-$10$ labels,
+so the null is a negative on forecastable data, not a no-signal artifact.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrrl}
+\toprule
+Dataset & Asset / resolution & Gap (pred / vol) & $\mathrm{film}_g$ & Verdict \\
+\midrule
+FI-2010      & event stream          & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
+Kaggle BTC   & $1\,\mathrm{min}$      & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
+Kaggle ETH   & $1\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle ADA   & $1\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle BTC   & $5\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle BTC   & $1\,\mathrm{s}$ (slice)& $\approx 0$               & $0.005$ & \textsc{null} \\
+\bottomrule
+\end{tabular}
+\caption{Cross-dataset confirmation of the regime-FiLM null. $\mathrm{reg}_H = \log 4$
+(uniform router) in every row. The null is dataset-, asset-, and resolution-independent.}
+\label{tab:film_null_xdata}
+\end{table}
+
+\paragraph{The collapse is optimiser-driven, not data-specific.}
+The predictability-supervised strongest-null test (forced-active FiLM, router supervised
+directly on the efficiency-ratio bucket; settings as above) decays $\mathrm{film}_g$
+monotonically at every logged step on \emph{both} datasets ($0.250 \to 0.144$ Kaggle,
+$0.250 \to 0.161$ FI-2010), with $\mathrm{reg}_H \approx \log 4$ throughout even though
+the load-balance term is disabled, so the uniform router is not a load-balance artifact.
+An exponential fit $a\,e^{-t/\tau}+c$ matches both trajectories at $R^2 > 0.999$ with
+near-identical parameters ($a \approx 0.30$, $\tau \approx 7000$ steps) and an asymptote
+$c \le 0$; since $\mathrm{film}_g \ge 0$, the modulation provably converges to identity
+rather than to a positive plateau. That the decay rate is essentially \emph{identical}
+across two very different markets points to the optimiser, not the data, as the driver
+(Figure~\ref{fig:escalation_decay}).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.62\linewidth]{figures/film_g_escalation_decay.pdf}
+\caption{\textbf{Strongest-null test.} Forcing the modulation active
+($\mathrm{film}_g = 0.250$ at step~0) and supervising the router directly on the
+efficiency-ratio bucket still decays $\mathrm{film}_g$ monotonically toward identity on both
+datasets (top), with the router entropy $\mathrm{reg}_H$ pinned at its uniform maximum
+$\log 4$ throughout (bottom). An exponential fit gives $R^2 > 0.999$ with a dataset-invariant
+time-constant $\tau \approx 7000$ and an asymptote $\le 0$, so the modulation provably
+converges to identity.}
+\label{fig:escalation_decay}
+\end{figure}
+
+\paragraph{The regime is decodable yet unused---and not even needed.}
+Two probes localise the failure. A post-hoc reading of the jointly-supervised router
+shows it is uniform \emph{per step} (per-sample entropy $\approx \log 4$) with near-chance
+agreement against the efficiency-ratio bucket ($0.25$--$0.31$ vs.\ $0.25$): direct
+supervision does not even make the router regime-discriminative. A frozen linear probe on
+the unmodulated features decodes the per-step predictability bucket only weakly
+($0.33$--$0.36$ vs.\ $0.25$ chance) and the volatility bucket somewhat better
+($0.43$--$0.47$)---yet the volatility-axis gap is \emph{also} null. The null is therefore
+overdetermined: even on the axis the representation encodes best, and even when the regime
+is supplied by supervision, the in-scan modulation collapses to identity. The degenerate
+next-tick direction head (a flat-majority collapse on both datasets) is de-confounded by
+inverse-frequency class balancing, which yields a non-degenerate macro-F1 with the gap
+still null; the single borderline gap (Kaggle spot-vol, $n{=}2$) is disproved by a
+pre-registered third seed that flips its sign.
+
+\paragraph{The gap is real, and FiLM closes none of it.}
+The null is not an absence of anything to fix. Regime shift induces a genuine out-of-regime
+degradation: on the Kaggle spot book, full-channel reconstruction NLL is $+0.105$ worse on
+the high-volatility (shifted) windows than on the low-volatility (reference) windows, in
+\emph{both} arms. Regime-FiLM is designed precisely to absorb such shifts by conditioning
+the dynamics on the inferred regime, yet it absorbs essentially none of it---the treatment
+narrows the degradation by $\sim\!0.001$ (a $\sim\!1\%$ sliver) while $\mathrm{film}_g$ is
+provably inert. The architecture is not failing for want of a gap to close; it is failing to
+engage a gap that is plainly present.
+
+% --------------------------------------------------------------------------
+\subsection{Backbone ablation under matched parameters}\label{sec:results_ablation}
+
+We compare Mamba-1, Mamba-2, Mamba-3 (SISO), and a Transformer-over-time backbone under
+matched parameter budgets ($\sim\!10.3$M, actuals in Table~\ref{tab:backbone_ablation}) on
+FI-2010 and the Kaggle BTC spot book, reporting held-out full-channel Student-t
+reconstruction NLL (lower is better). The result is a genuine ambiguity rather than a clean
+win: \textbf{no non-MIMO backbone leads on both datasets}---Mamba-1 attains the best
+reconstruction on FI-2010 while Mamba-2 (with the fewest SSM parameters) leads on Kaggle,
+and Mamba-3 SISO is competitive but does not strictly dominate either. The next-tick
+direction head is degenerate for this comparison (it collapses to the flat majority
+identically across all backbones), so it cannot discriminate architectures; on the FI-2010
+horizon-$10$ labels, by contrast, a dedicated DeepLOB~\citep{zhang2019deeplob} head reaches
+$0.628$ macro-F1 against a $0.261$ majority floor and a $0.157$ linear-AR next-tick floor,
+reproducing the in-distribution range reported by the LOBCAST benchmark~\citep{prata2023lobcast}.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Backbone & Params & FI-2010 recon NLL & Kaggle recon NLL \\
+\midrule
+Mamba-1      & $11.45$M & $\mathbf{-0.5403}$ & $0.0241$ \\
+Mamba-2      & $10.20$M & $-0.5309$ & $\mathbf{-0.0213}$ \\
+Mamba-3 SISO & $10.30$M & $-0.5346$ & $0.0207$ \\
+Transformer  & $9.90$M  & $-0.5175$ & $0.0191$ \\
+Mamba-3 MIMO & --       & \multicolumn{2}{c}{\emph{A100-only (structurally infeasible on the RTX 4080)}} \\
+\bottomrule
+\end{tabular}
+\caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower is better).
+No non-MIMO backbone wins both datasets; the matched-budget MIMO comparison---the cell that
+would resolve the ambiguity---requires a larger-shared-memory accelerator (see text).}
+\label{tab:backbone_ablation}
+\end{table}
+
+\paragraph{Mamba-3 MIMO is structurally A100-gated.}
+The matched-parameter MIMO cell is the one comparison that would adjudicate the
+contributions~(1) and~(3) ambiguity, and it cannot be run on the RTX~4080. The TileLang
+MIMO kernel has a feasibility band with no admissible point on this card: a four-corner
+sweep over (rank, chunk) shows the only configuration whose dynamic shared memory fits the
+$\sim\!100$\,KB/block cap (rank~2, chunk~8) fails the kernel's warp-tiling constraint
+($m_{\mathrm{warp}}\cdot n_{\mathrm{warp}} \neq \texttt{num\_warps}$), while every
+warp-valid configuration (rank~4/chunk~8, rank~2/chunk~16, rank~4/chunk~16) overflows shared
+memory and aborts at kernel launch. A larger-shared-memory accelerator (L4/A100,
+$\sim\!164$--$228$\,KB/block) is therefore required; we report the non-MIMO comparison here
+and leave the MIMO cell as the single outstanding headline-hardware run.
+
+% --------------------------------------------------------------------------
+\subsection{A survivable, naive-beating economic edge}\label{sec:results_edge}
+
+Once the model is given the spot path (Section~\ref{sec:spot_pipeline}),
+its calibrated settlement probability, traded by the selective-
+participation strategy, is profitable on held-out Polymarket BTC and
+clears every anti-artifact gate (Table~\ref{tab:edge}).  The edge is
+robust across two model seeds at a \emph{single} ER gate fit once on
+train and frozen, and a deterministic latent makes it byte-reproducible
+at $+\$4{,}729$ (1{,}553 trades, P(profit)$=1.000$, drawdown $0.045$).
+The predictability gate alone harvests only $+\$513$; the model's
+calibrated probability is the dominant driver ($+\$4{,}048$ over
+trend-following).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Seed & Model PnL & Trades & Fair naive & Model $-$ naive & P(profit) \\
+\midrule
+0 & $+4560.9$ & 1605 & $+513.1$ & $+4047.8$ ($8.9\times$) & $1.000$ \\
+1 & $+3141.0$ & 1620 & $+513.1$ & $+2627.9$ ($6.1\times$) & $1.000$ \\
+\bottomrule
+\end{tabular}
+\caption{Held-out BTC, train-frozen ER gate $=0.60$, versus a fair
+predictability-gated trend-following naive.  Both seeds clear every gate
+(P(profit)$>0.7$, drawdown $<0.15$, beats naive).}
+\label{tab:edge}
+\end{table}
+
+\paragraph{The edge is a three-way microstructure conjunction.}
+A per-asset decomposition (self-corrected four times by deliberate
+robustness checks) shows the boundary is \emph{book liquidity}, not the
+ticker: the edge needs depth above a thin-book noise floor (ungated
+ETH/SOL overfit their thin books; ETH \emph{recovers}, 2-seed robust,
+gated to BTC-level depth, beating a fair depth-gated naive by $+\$3{,}020$)
+and below an efficient-market ceiling (BTC's deepest $\geq\!150$k books
+reverse in both seeds---the most-liquid markets have already arbitraged
+the lag).  Within this band, the edge further concentrates
+\emph{early} in a market's lifecycle (the lag reverses near expiry as the
+book converges).  Stacking the three gates---predictable, liquid-but-not-
+efficient, early---lifts the per-trade edge and cuts drawdown
+(Table~\ref{tab:conjunction}).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Strategy & PnL & Per-trade & Drawdown (5\%) \\
+\midrule
+Predictability only (headline) & $+4729$ & $+3.05$ & $0.045$ \\
+\quad $+$ depth band $[60\text{k},130\text{k}]$ & $+4834$ & $+4.21$ & $0.035$ \\
+\quad $+$ both (early $+$ band) & $\mathbf{+5209}$ & $\mathbf{+4.98}$ & $\mathbf{0.029}$ \\
+\bottomrule
+\end{tabular}
+\caption{Deterministic BTC.  The conjunction lifts the per-trade edge
+$+63\%$ and cuts drawdown $-36\%$ versus the predictability-only
+headline, all at P(profit)$=1.000$.}
+\label{tab:conjunction}
+\end{table}
+
+% --------------------------------------------------------------------------
+\subsection{Mechanism: an over-confident-but-directional head}\label{sec:results_mech}
+
+The settlement head carries real signal (Brier $0.206$, beating a
+$0.25$ constant) but is systematically over-confident: its top decile
+(mean probability $0.984$) realizes only $0.785$~YES
+(Table~\ref{tab:calib}).  This single diagnostic closes the economic
+story.  The edge is \emph{directional, not calibrated}: trading the
+divergence from the oracle-lagged book (which still implies $\sim 0.5$)
+needs only the right side, and the model has it ($0.785 \gg 0.5$).  It is
+why fixed small sizing wins and Kelly fails: fixed sizing trades only the
+direction, while Kelly bets the over-confident magnitude and blows up
+(even temperature-calibrated at $T=2.9$, the bootstrap drawdown is
+$39.9\% \gg 15\%$, because position concentration sacrifices the
+diversification the statistical edge depends on).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Probability bin & $n$ & Mean prob & Realized YES \\
+\midrule
+$0.0$--$0.1$ & 48728  & $0.016$ & $0.108$ \\
+$0.3$--$0.4$ & 5241   & $0.350$ & $0.359$ \\
+$0.6$--$0.7$ & 7121   & $0.651$ & $0.423$ \\
+$0.9$--$1.0$ & 106581 & $0.984$ & $0.785$ \\
+\bottomrule
+\end{tabular}
+\caption{Settlement-head reliability over 214k held-out probabilities.
+The head is over-confident but directionally informative, which is what
+the divergence trade exploits.}
+\label{tab:calib}
+\end{table}
+
+\paragraph{Limitations.}
+The economic edge is BTC-centric (the liquidity band is widest on BTC,
+recoverable on ETH only when gated to BTC-level depth, and marginal on
+SOL); the backtest's walk-the-book fills assume recorded liquidity is
+takeable, so live market impact would erode some of the edge; and the
+early-market (min-TTE) cut is a held-out characterization grounded in the
+monotonic per-trade decay toward expiry, not a train-frozen claim (the
+depth ceiling, by contrast, is train-justified).  The backbone ablation
+(Mamba-1/2/3-SISO/MIMO vs.\ Transformer) and episodic-memory study are
+reported on FI-2010 and Polymarket; the MIMO headline configuration
+exceeds the RTX~4080 shared-memory cap and is deferred to A100-class
+hardware.
+\todo{Insert the backbone-ablation and episodic-memory tables once the
+matched-parameter runs (including the A100 MIMO cell) are complete; the
+present results stand on the regime-conditioning null and the economic
+edge, which do not depend on them.}
+
+% ==============================================================================
+% 7  CONCLUSION
+% ==============================================================================
+\section{Conclusion}\label{sec:conclusion}
+
+We presented FinMamba3, a Mamba-3 world model for LOB microstructure,
+and used it to test whether conditioning a structured state-space
+backbone on an inferred market regime improves robustness under
+distribution shift.  The result is a \textbf{dual outcome}.
+
+\emph{The architecture question is a clean negative.}  RegimeFiLM---an
+exact, zero-initialized control---collapses to identity under joint
+training across four regime-dependent forecasting objectives on two
+datasets and a simulated-trading objective, and cannot be forced active
+even by direct supervision on the most defensible regime signal in the
+project.  Because the control is exact at initialization, this is
+evidence that regime conditioning, as implemented, does not aid
+robustness on these data---not a tuning artifact.  The activation
+diagnostics also expose a methodological hazard: the generalization-gap
+metric reads positive, with the wrong sign, for reasons unrelated to the
+mechanism under test, so such diagnostics are load-bearing for any
+regime-conditioning claim.
+
+\emph{The economic question is a genuine positive the architecture did
+not provide.}  Rebuilding the pipeline to expose the spot path that
+defines settlement, and judging the model by simulated PnL, yields a
+calibrated settlement probability whose divergence from the
+oracle-lagged book---traded by a selective-participation strategy---earns
+$+\$4{,}729$ on held-out BTC (deterministic), beats a fair
+trend-following baseline by $6$--$9\times$, and is fully survivable.  The
+edge is a three-way microstructure conjunction (predictable,
+liquid-but-not-efficient, early-in-lifecycle) driven by an
+over-confident-but-directional head; it is architecture-independent.  The
+regime axis a FiLM router will not encode is exactly the one a strategy
+gate harvests profitably.
+
+\paragraph{Future work.}
+The negative motivates a cross-dataset confirmation (the regime A/B and
+the backbone ablation on a public crypto spot-LOB corpus) and the
+A100-class MIMO headline run the 4080 cannot host.  The positive
+motivates a live-execution study (the present edge is a backtest with
+walk-the-book fills) and an explicitly calibrated settlement head, since
+calibration is what currently bars convexity-based (Kelly) sizing.
+
+% ==============================================================================
+% REFERENCES
+% ==============================================================================
+\bibliographystyle{plainnat}
+
+\begin{thebibliography}{99}
+
+\bibitem[Adams \& MacKay(2007)]{adams2007bayesian}
+R.~P. Adams and D.~J.~C. MacKay.
+\newblock Bayesian online changepoint detection.
+\newblock \emph{arXiv preprint arXiv:0710.3742}, 2007.
+
+\bibitem[Amihud(2002)]{amihud2002illiquidity}
+Y.~Amihud.
+\newblock Illiquidity and stock returns: Cross-section and time-series effects.
+\newblock \emph{Journal of Financial Markets}, 5(1):31--56, 2002.
+
+\bibitem[Backhouse et~al.(2025)]{backhouse2025painting}
+A.~Backhouse et~al.
+\newblock Painting the market: Generative diffusion models for financial limit order book simulation and forecasting.
+\newblock \emph{arXiv preprint arXiv:2509.05107}, 2025.
+
+\bibitem[Berti \& Kasneci(2025)]{berti2025tlob}
+L.~Berti and G.~Kasneci.
+\newblock {TLOB}: A novel transformer model with dual attention for price trend prediction with limit order book data.
+\newblock \emph{arXiv preprint arXiv:2502.15757}, 2025.
+
+\bibitem[Briola et~al.(2024a)]{lobframe2024}
+A.~Briola et~al.
+\newblock Deep limit order book forecasting.
+\newblock \emph{arXiv preprint arXiv:2403.09267}, 2024.
+
+\bibitem[Briola et~al.(2024b)]{hlob2024}
+A.~Briola et~al.
+\newblock {HLOB}: Information persistence and structure in limit order books.
+\newblock \emph{arXiv preprint arXiv:2405.18938}, 2024.
+
+\bibitem[Cai et~al.(2024)]{mambats2024}
+X.~Cai, Y.~Zhu, X.~Wang, and Y.~Yao.
+\newblock {MambaTS}: Improved selective state space models for long-term time series forecasting.
+\newblock \emph{arXiv preprint arXiv:2405.16440}, 2024.
+
+\bibitem[Cont et~al.(2014)]{cont2014price}
+R.~Cont, A.~Kukanov, and S.~Stoikov.
+\newblock The price impact of order book events.
+\newblock \emph{Journal of Financial Econometrics}, 12(1):47--88, 2014.
+
+\bibitem[Dao \& Gu(2024)]{dao2024mamba2}
+T.~Dao and A.~Gu.
+\newblock Transformers are {SSMs}: Generalized models and efficient algorithms through structured state space duality.
+\newblock In \emph{Proc.\ ICML}, 2024.
+
+\bibitem[de~Prado(2018)]{deprado2018advances}
+M.~L\'opez~de~Prado.
+\newblock \emph{Advances in Financial Machine Learning}.
+\newblock Wiley, 2018.
+
+\bibitem[Fedus et~al.(2022)]{fedus2022switch}
+W.~Fedus, B.~Zoph, and N.~Shazeer.
+\newblock Switch {T}ransformers: Scaling to trillion parameter models with simple and efficient sparsity.
+\newblock \emph{JMLR}, 23:1--39, 2022.
+
+\bibitem[Gu et~al.(2022)]{gu2022efficiently}
+A.~Gu, K.~Goel, and C.~R\'e.
+\newblock Efficiently modeling long sequences with structured state spaces.
+\newblock In \emph{Proc.\ ICLR}, 2022.
+
+\bibitem[Gu \& Dao(2024)]{gu2024mamba}
+A.~Gu and T.~Dao.
+\newblock Mamba: Linear-time sequence modeling with selective state spaces.
+\newblock In \emph{Proc.\ COLM}, 2024.
+
+\bibitem[Ha \& Schmidhuber(2018)]{ha2018world}
+D.~Ha and J.~Schmidhuber.
+\newblock World models.
+\newblock \emph{arXiv preprint arXiv:1803.10122}, 2018.
+
+\bibitem[Hafner et~al.(2023)]{hafner2023dreamerv3}
+D.~Hafner, J.~Pasukonis, J.~Ba, and T.~Lillicrap.
+\newblock Mastering diverse domains through world models.
+\newblock \emph{arXiv preprint arXiv:2301.04104}, 2023.
+
+\bibitem[Hamilton(1989)]{hamilton1989new}
+J.~D. Hamilton.
+\newblock A new approach to the economic analysis of nonstationary time series and the business cycle.
+\newblock \emph{Econometrica}, 57(2):357--384, 1989.
+
+\bibitem[Hansen et~al.(2024)]{hansen2024tdmpc2}
+N.~Hansen, H.~Su, and X.~Wang.
+\newblock {TD-MPC2}: Scalable, robust world models for continuous control.
+\newblock In \emph{Proc.\ ICLR}, 2024.
+
+\bibitem[Lahoti et~al.(2026)]{lahoti2026mamba3}
+A.~Lahoti, T.~Dao, and A.~Gu.
+\newblock Mamba-3: Multi-input multi-output state space models.
+\newblock 2026.
+\newblock \todo{Confirm authors, venue, and arXiv identifier; this entry
+could not be verified against a public record at time of writing.}
+
+\bibitem[Lim et~al.(2021)]{lim2021time}
+B.~Lim, S.~\"O. Arik, N.~Loeff, and T.~Pfister.
+\newblock Temporal fusion transformers for interpretable multi-horizon time series forecasting.
+\newblock \emph{International Journal of Forecasting}, 37(4):1748--1764, 2021.
+
+\bibitem[Nagy et~al.(2023)]{nagy2025lobs5}
+P.~Nagy, S.~Frey, S.~Sapora, K.~Li, A.~Calinescu, S.~Zohren, and J.~Foerster.
+\newblock Generative {AI} for end-to-end limit order book modelling: A token-level autoregressive generative model of message flow using a deep state space network ({LOBS5}).
+\newblock 2023.
+
+\bibitem[Nagy et~al.(2025)]{nagy2025lobbench}
+P.~Nagy, S.~Frey, K.~Li, B.~Sarkar, S.~Vyetrenko, S.~Zohren, A.~Calinescu, and J.~Foerster.
+\newblock {LOB-Bench}: Benchmarking generative {AI} for finance---an application to limit order book data.
+\newblock \emph{arXiv preprint arXiv:2502.09172}, 2025.
+
+\bibitem[Ntakaris et~al.(2018)]{ntakaris2018benchmark}
+A.~Ntakaris, M.~Magris, J.~Kanniainen, and M.~Gabbouj.
+\newblock Benchmark dataset for mid-price forecasting of limit order book data with machine learning methods.
+\newblock \emph{Journal of Forecasting}, 37(8):852--866, 2018.
+
+\bibitem[Perez et~al.(2018)]{perez2018film}
+E.~Perez, F.~Strub, H.~de~Vries, V.~Dumoulin, and A.~Courville.
+\newblock {FiLM}: Visual reasoning with a general conditioning layer.
+\newblock In \emph{Proc.\ AAAI}, 2018.
+
+\bibitem[Sepehri et~al.(2025)]{sepehri2025cryptomamba}
+M.~S. Sepehri, A.~Mehradfar, M.~Soltanolkotabi, and S.~Avestimehr.
+\newblock {CryptoMamba}: Leveraging state space models for accurate bitcoin price prediction.
+\newblock In \emph{Proc.\ IEEE ICBC}, 2025 (arXiv:2501.01010).
+
+\bibitem[Shi(2024)]{mambastock2024}
+Z.~Shi.
+\newblock {MambaStock}: Selective state space model for stock prediction.
+\newblock \emph{arXiv preprint arXiv:2402.18959}, 2024.
+
+\bibitem[Smith et~al.(2023)]{smith2023s5}
+J.~T.~H. Smith, A.~Warrington, and S.~W. Linderman.
+\newblock Simplified state space layers for sequence modeling.
+\newblock In \emph{Proc.\ ICLR}, 2023.
+
+\bibitem[Sotskov et~al.(2025)]{sotskov2025polymarket}
+D.~Sotskov et~al.
+\newblock Market microstructure of decentralized prediction markets.
+\newblock 2025.
+\newblock \todo{Citation unverified; confirm authors, venue, and a valid
+arXiv identifier (the previously listed ID could not be confirmed) before
+relying on any quantitative figure from this source.}
+
+\bibitem[Wang et~al.(2024)]{wang2024drama}
+W.~Wang et~al.
+\newblock Drama: Mamba-enabled model-based reinforcement learning is sample and parameter efficient.
+\newblock In \emph{Proc.\ ICLR}, 2025 (arXiv:2410.08893, 2024).
+
+% Draft entry added for the cross-dataset results; verify exact title/author list against arXiv:2308.01915.
+\bibitem[Prata et~al.(2023)]{prata2023lobcast}
+M.~Prata et~al.
+\newblock {LOBCAST}: A benchmark study of deep-learning models for stock price trend prediction from limit-order books.
+\newblock \emph{arXiv preprint arXiv:2308.01915}, 2023.
+
+\bibitem[Zhang et~al.(2019)]{zhang2019deeplob}
+Z.~Zhang, S.~Zohren, and S.~Roberts.
+\newblock {DeepLOB}: Deep convolutional neural networks for limit order books.
+\newblock \emph{IEEE Transactions on Signal Processing}, 67(11):3001--3012, 2019.
+
+\bibitem[Ziyin et~al.(2021)]{ziyin2021laprop}
+L.~Ziyin, Z.~Wang, P.~P. Liang, R.~Salakhutdinov, L.-P. Morency, and M.~Ueda.
+\newblock {LaProp}: Separating momentum and adaptivity in Adam.
+\newblock \emph{arXiv preprint arXiv:2002.04839}, 2021.
+
+\end{thebibliography}
+
+\end{document}

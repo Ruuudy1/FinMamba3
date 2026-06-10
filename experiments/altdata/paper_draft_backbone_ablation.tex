@@ -1,0 +1,53 @@
+% =====================================================================================
+% DRAFT results subsection for the backbone ablation (paper contributions 1 & 3).
+% Numbers are final (RESULTS.md Section 5.1, fi2010-film.md / kaggle-film.md Section 5);
+% prose is a draft for the author. Notation matches the paper. Suggested placement: a new
+% \subsection in the results, near \ref{sec:mamba3}/\ref{sec:results_null}.
+% =====================================================================================
+
+\subsection{Backbone ablation under matched parameters}\label{sec:results_ablation}
+
+We compare Mamba-1, Mamba-2, Mamba-3 (SISO), and a Transformer-over-time backbone under
+matched parameter budgets ($\sim\!10.3$M, actuals in Table~\ref{tab:backbone_ablation}) on
+FI-2010 and the Kaggle BTC spot book, reporting held-out full-channel Student-t
+reconstruction NLL (lower is better). The result is a genuine ambiguity rather than a clean
+win: \textbf{no non-MIMO backbone leads on both datasets}---Mamba-1 attains the best
+reconstruction on FI-2010 while Mamba-2 (with the fewest SSM parameters) leads on Kaggle,
+and Mamba-3 SISO is competitive but does not strictly dominate either. The next-tick
+direction head is degenerate for this comparison (it collapses to the flat majority
+identically across all backbones), so it cannot discriminate architectures; on the FI-2010
+horizon-$10$ labels, by contrast, a dedicated DeepLOB head reaches $0.628$ macro-F1 against
+a $0.261$ majority floor and a $0.157$ linear-AR next-tick floor, reproducing the
+in-distribution range reported by LOBCAST.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Backbone & Params & FI-2010 recon NLL & Kaggle recon NLL \\
+\midrule
+Mamba-1      & $11.45$M & $\mathbf{-0.5403}$ & $0.0241$ \\
+Mamba-2      & $10.20$M & $-0.5309$ & $\mathbf{-0.0213}$ \\
+Mamba-3 SISO & $10.30$M & $-0.5346$ & $0.0207$ \\
+Transformer  & $9.90$M  & $-0.5175$ & $0.0191$ \\
+Mamba-3 MIMO & --       & \multicolumn{2}{c}{\emph{A100-only (structurally infeasible on the RTX 4080)}} \\
+\bottomrule
+\end{tabular}
+\caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower is better).
+No non-MIMO backbone wins both datasets; the matched-budget MIMO comparison---the cell that
+would resolve the ambiguity---requires a larger-shared-memory accelerator (see text).}
+\label{tab:backbone_ablation}
+\end{table}
+
+\paragraph{Mamba-3 MIMO is structurally A100-gated.}
+The matched-parameter MIMO cell is the one comparison that would adjudicate the
+contributions~(1) and~(3) ambiguity, and it cannot be run on the RTX~4080. The TileLang
+MIMO kernel has a feasibility band with no admissible point on this card: a four-corner
+sweep over (rank, chunk) shows the only configuration whose dynamic shared memory fits the
+$\sim\!100$\,KB/block cap (rank~2, chunk~8) fails the kernel's warp-tiling constraint
+($m_{\mathrm{warp}}\cdot n_{\mathrm{warp}} \neq \texttt{num\_warps}$), while every
+warp-valid configuration (rank~4/chunk~8, rank~2/chunk~16, rank~4/chunk~16) overflows shared
+memory and aborts at kernel launch. A larger-shared-memory accelerator (L4/A100,
+$\sim\!164$--$228$\,KB/block) is therefore required; we report the non-MIMO comparison here
+and leave the MIMO cell as the single outstanding headline-hardware run.

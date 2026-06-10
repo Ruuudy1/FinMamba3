@@ -61,7 +61,9 @@ from finmamba3.eval.eval_regime_generalization import (
     _regime_prediction_mse,
     generalization_gap,
 )
+from finmamba3.eval.predictability import window_predictability_split
 from finmamba3.eval.regime_split import window_volatility_split
+from finmamba3.sequence_builder import build_kaggle_sequences
 # endregion
 logger = logging.getLogger(__name__)
 # The scoring path samples 64-event windows inside each segment, so a vol window shorter than
@@ -74,6 +76,9 @@ _METRIC_SPEC = {
     "prediction_mse": {"needs_studentt": False, "higher_is_better": False, "mask": None},
     "studentt_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "price_scale"},
     "volume_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "volume"},
+    # The full-channel Student-t NLL is the schema-agnostic held-out reconstruction NLL (the G1
+    # secondary diagnostic); price_scale/volume are FI-2010-layout refinements kept for reproduction.
+    "recon_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "all"},
     "direction_macro_f1": {"needs_studentt": False, "higher_is_better": True, "mask": None},
 }
 
@@ -83,6 +88,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", required=True, type=Path, help="FI-2010 config (e.g. configs/fi2010_studentt.yaml).")
     p.add_argument("--metric", choices=tuple(_METRIC_SPEC), default="prediction_mse",
                    help="Regime-dependent quantity the gap is measured on; see the module docstring.")
+    p.add_argument("--dataset", choices=("fi2010", "kaggle"), default=None,
+                   help="Which loader builds the val stream; default reads Dataset.Kind from the config.")
+    p.add_argument("--regime-axis", choices=("predictability", "spot_vol"), default="predictability",
+                   help="predictability = Efficiency-Ratio window split (G1 primary axis); "
+                        "spot_vol = realized-vol window split (secondary axis).")
     p.add_argument("--baseline-checkpoint", required=True, type=Path,
                    help="world_model_*.pth from the RegimeFiLM-off FI-2010 run")
     p.add_argument("--treatment-checkpoint", required=True, type=Path,
@@ -129,6 +139,9 @@ def _feature_indices(k_levels: int, f_level: int, f_tick: int, mask_name: str) -
     a re-binned schema stays correct without hardcoding 46.
     """
     level_width = k_levels * f_level
+    if mask_name == "all":
+        # The full feature vector: the schema-agnostic reconstruction NLL over every channel.
+        return list(range(level_width + f_tick))
     price_levels = [k * f_level + 0 for k in range(k_levels)] + [k * f_level + 2 for k in range(k_levels)]
     size_levels = [k * f_level + 1 for k in range(k_levels)] + [k * f_level + 3 for k in range(k_levels)]
     # Tick semantic offsets fixed by the FI-2010 schema: mid=0, microprice=4, log_total_vol=5.
@@ -237,6 +250,46 @@ def _build_arms(config_path: Path, metric: str, baseline_ckpt: Path, treatment_c
     return arms
 
 
+def _load_val_sequence(dataset_kind: str, base_cfg, args) -> LOBSequence:
+    """Normalized held-out val sequence for the chosen dataset, on the train normalization scale.
+
+    FI-2010 loads its validation text file; Kaggle reproduces the exact chronological val carve the
+    trainer used (the tail after HoursTrain) so the eval feature pipeline matches training with no skew.
+    """
+    if dataset_kind == "fi2010":
+        bundle = load_fi2010_split(args.data_val, split="validation", horizon=args.horizon,
+                                   max_events=args.max_events)
+        stats = load_normalization(args.norm_path)
+        return apply_normalization(bundle.sequence, stats)
+    if dataset_kind == "kaggle":
+        kaggle_cfg = base_cfg.Dataset.Kaggle
+        val_norm, _, _ = build_kaggle_sequences(
+            args.data_val, asset=str(kaggle_cfg.Asset), resolution=str(kaggle_cfg.Resolution),
+            split="validation", hours_train=float(kaggle_cfg.HoursTrain),
+            hours_val=float(kaggle_cfg.HoursVal), norm_path=args.norm_path, fit_stats=False,
+            norm_clip=float(base_cfg.BasicSettings.get("NormClip", 8.0)),
+            flat_threshold=float(kaggle_cfg.get("FlatThreshold", 0.0)),
+        )
+        return val_norm
+    raise ValueError(f"--dataset must be fi2010 or kaggle, got {dataset_kind!r}.")
+
+
+def _regime_windows(axis: str, midprice, window_len: int, quantile: float):
+    """(reference, shifted) window bounds and a description for the chosen regime axis.
+
+    predictability routes high-ER (forecastable) windows to the reference regime and low-ER (random-walk)
+    windows to the shifted regime; spot_vol routes low realized-vol to the reference and high-vol to the
+    shifted, the prior FI-2010 axis. The evaluator computes degradation = metric(reference) - metric(shifted).
+    """
+    if axis == "predictability":
+        split = window_predictability_split(midprice, window_len, quantile)
+        return split.reference_windows, split.shifted_windows, split.description
+    if axis == "spot_vol":
+        split = window_volatility_split(midprice, window_len, quantile)
+        return split.low_vol_windows, split.high_vol_windows, split.description
+    raise ValueError(f"--regime-axis must be predictability or spot_vol, got {axis!r}.")
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
@@ -260,22 +313,22 @@ def main() -> int:
     if spec["mask"] is not None:
         index_list = _feature_indices(k_levels, f_level, f_tick, spec["mask"])
         feature_indices = torch.tensor(index_list, dtype=torch.long, device=device)
-    bundle = load_fi2010_split(args.data_val, split="validation", horizon=args.horizon,
-                               max_events=args.max_events)
-    stats = load_normalization(args.norm_path)
-    val_norm = apply_normalization(bundle.sequence, stats)
-    split = window_volatility_split(val_norm.midprice, args.window_len, args.volatility_quantile)
-    assert split.low_vol_windows and split.high_vol_windows, (
-        f"window volatility split is degenerate: low={len(split.low_vol_windows)} "
-        f"high={len(split.high_vol_windows)}. Lower --window-len or pass a longer split so both "
+    dataset_kind = args.dataset or base_cfg.Dataset.get("Kind", "fi2010")
+    val_norm = _load_val_sequence(dataset_kind, base_cfg, args)
+    reference_windows, shifted_windows, split_desc = _regime_windows(
+        args.regime_axis, val_norm.midprice, args.window_len, args.volatility_quantile
+    )
+    assert reference_windows and shifted_windows, (
+        f"{args.regime_axis} window split is degenerate: reference={len(reference_windows)} "
+        f"shifted={len(shifted_windows)}. Lower --window-len or pass a longer val split so both "
         f"regimes are non-empty."
     )
     logger.info(
-        f"window vol split ({split.description}): low-vol={len(split.low_vol_windows)} "
-        f"high-vol={len(split.high_vol_windows)} windows of {args.window_len} events"
+        f"{dataset_kind} {args.regime_axis} split ({split_desc}): reference={len(reference_windows)} "
+        f"shifted={len(shifted_windows)} windows of {args.window_len} events"
     )
-    low_seqs = _regime_segments(val_norm, split.low_vol_windows)
-    high_seqs = _regime_segments(val_norm, split.high_vol_windows)
+    low_seqs = _regime_segments(val_norm, reference_windows)
+    high_seqs = _regime_segments(val_norm, shifted_windows)
     rows = []
     degradation_by_arm: dict[str, float] = {}
     for arm_name, wm in arms:
@@ -285,11 +338,11 @@ def main() -> int:
         degradation_by_arm[arm_name] = degradation
         rows.append({"arm": arm_name, "low": low_value, "high": high_value, "degradation": degradation})
         logger.info(
-            f"{arm_name} [{args.metric}]: low-vol={low_value:.5f} high-vol={high_value:.5f} "
+            f"{arm_name} [{args.metric}]: reference={low_value:.5f} shifted={high_value:.5f} "
             f"degradation={degradation:+.5f}"
         )
     gap_value = generalization_gap(degradation_by_arm["baseline"], degradation_by_arm["treatment"])
-    table = _format_table(rows, gap_value, split.description, args.metric)
+    table = _format_table(rows, gap_value, split_desc, args.metric, regime_labels=("reference", "shifted"))
     print(table)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(table + "\n")

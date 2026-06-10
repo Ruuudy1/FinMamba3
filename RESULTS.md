@@ -139,3 +139,115 @@ the activation clause fails regardless of gap sign). **No A100/H100 run was spen
 positive multi-seed family with an active FiLM, which does not exist. The Polymarket MIMO headline config exceeds the
 RTX 4080's shared-memory cap and segfaults; all runs used the non-MIMO Mamba-3 path. The MIMO headline model genuinely
 needs an A100+ — flagged, not spent.
+
+---
+
+## 5. Cross-dataset confirmation (Kaggle crypto spot LOB + FI-2010 predictability axis)
+
+A follow-up campaign replicated the regime-FiLM generalization-gap A/B on two more real LOB datasets, judged by
+forecasting metrics only (no PnL — these are spot books with no settlement). The regime axis is now **predictability
+primary** (Efficiency-Ratio window split via `eval/predictability.py`) with **spot-vol secondary**; the metric is
+held-out **direction macro-F1** (primary) + full-channel Student-t **reconstruction NLL** (secondary). Both arms share
+the seed, so the zero-init FiLM is an exact paired control. Detailed sheets: `fi2010-film.md`, `kaggle-film.md`.
+
+| dataset | config | treatment `film_g` | `reg_H` | direction gap (pred/vol) | recon-NLL gap | verdict |
+|---|---|---:|---:|---:|---|---|
+| FI-2010 (seeds 0,1) | `fi2010_studentt.yaml` | 0.0043 / 0.0040 | ln 4 (1.386) | +0.000 / +0.000 | 95% CI includes 0 both axes, signs flip | **NULL** |
+| Kaggle BTC 1min (seeds 0,1) | `kaggle_btc.yaml` | 0.0048 / 0.0038 | ln 4 (1.386) | +0.000 / +0.000 | 95% CI includes 0 both axes | **NULL** |
+| Kaggle ETH 1min (seed 0) | `kaggle_eth.yaml` | 0.0047 | ln 4 (1.386) | +0.000 | -0.0008 (≈ 0) | **NULL** |
+| Kaggle ADA 1min (seed 0) | `kaggle_ada.yaml` | 0.0049 | ln 4 (1.386) | +0.000 | -0.0010 (≈ 0) | **NULL** |
+
+- **Mechanism (identical to the Polymarket families).** From an exact identity init, joint training leaves `film_g`
+  ≈ 0.004 (the modulation never grows) and the load-balance pins `reg_H` at its uniform maximum `ln 4`. With FiLM inert,
+  the treatment reproduces the baseline, so every direction gap is *exactly* 0 and every recon-NLL gap straddles 0 with
+  signs flipping across seeds. The lone sign-consistent gap (Kaggle recon spot-vol, ~+0.001) rides a +0.105 genuine
+  regime degradation and co-occurs with an inert FiLM — an artifact, not a win, exactly as the prior settlement/direction
+  gaps were. (The *exactly*-0 direction gap is specific to the degenerate flat-collapsed head; class-balanced re-runs on
+  *both* datasets de-collapse the head to a non-degenerate macro-F1 — FI-2010 0.20-0.27, Kaggle 0.30-0.33 — with the
+  gap's 95% CI still including 0. The head stays near-chance, `dir ≈ ln 3` — next-tick direction is genuinely hard for
+  the world-model auxiliary head. The Kaggle CB spot-vol gap *looked* sign-consistent negative at n=2 (-0.019, p=0.087),
+  so per the goal's "add seed 2 if borderline" protocol a third seed was run — it flipped to +0.016, so at n=3 the gap
+  is mean -0.007, signs --+, CI [-0.057, +0.043]: the apparent consistency was spurious inert-FiLM noise on a near-chance
+  head, not an effect. See `fi2010-film.md`/`kaggle-film.md` §6.)
+- **Strongest-null test (predictability-supervised escalation, both datasets).** Forcing FiLM active (`InitScale 0.1`,
+  `film_g` starts at 0.250) and supervising the router directly on the Efficiency-Ratio bucket (`SuperviseAxis
+  predictability`, `SupervisionWeight 30`, `LRMult 50`, decoupled, `FeedObsVol`, `EntropyCoef 0`) still decays `film_g`
+  **monotonically every logged step** with `reg_H ≈ ln 4` throughout — Kaggle BTC 0.250 → 0.144 (2950) and FI-2010
+  0.250 → 0.161 (2500), both still falling. An exponential fit `a·exp(-t/τ)+c` nails both trajectories (R² > 0.999) with
+  near-identical dynamics (a ≈ 0.30, τ ≈ 7000 steps) and an asymptote `c ≤ 0` (Kaggle -0.049, FI-2010 -0.050); since
+  `film_g ≥ 0`, the decay extrapolates *through* identity — it provably converges to 0, not to a positive near-identity
+  plateau, so "still falling at 2950 steps" is the early phase of a clean decay-to-identity, not an arbitrary stopping
+  point. The optimizer drives the in-scan modulation to identity even when it is
+  initialized active and the router is supervised on the primary axis — the strongest cross-dataset form of the null,
+  mirroring the Polymarket escalation (0.150 → 0.043, still falling). Note `EntropyCoef 0` here removes the load-balance
+  term, so the persistent `reg_H ≈ ln 4` is the router collapsing to uniform *on its own* (not a load-balance artifact),
+  which strengthens the null beyond the baseline A/B (where `EntropyCoef 0.01` could be credited for the uniformity).
+  Figure: `reports/film_g_escalation_decay.png` (top: `film_g` decay to identity both datasets; bottom: `reg_H` at `ln 4`).
+- **Cross-asset (ETH, ADA).** The Kaggle null is not BTC-specific: ETH and ADA both leave `film_g` inert (~0.005) with
+  `reg_H = ln 4` and gaps ≈ 0 (recon-NLL gaps tiny and *negative*, opposite sign to BTC — init/seed noise, not an effect).
+- **Cross-resolution (BTC).** Nor is it specific to the 1min bar: 5min (`film_g` 0.0048) and 1sec (4h slice, `film_g`
+  0.0046) both leave FiLM inert with `reg_H = ln 4` and gaps ≈ 0 — the null holds across all three resolutions.
+- **Router capacity (predictability axis, honest nuance).** Two probes on the escalation/baseline checkpoints
+  (`diag_router.py`, a frozen linear probe) localize *why* FiLM gains nothing: (a) the jointly-supervised router is
+  uniform **per-step** (per-sample entropy ≈ ln 4) with near-chance ER-bucket agreement (Kaggle 0.252, FI-2010 0.314
+  vs 0.250) despite `SupervisionWeight 30`; (b) a frozen linear probe on the baseline features decodes the per-step ER
+  bucket only **weakly** — and only modestly better with a cleaner (longer) ER window: at probe window-len 128 the
+  val accuracy is Kaggle 0.291 / FI-2010 0.290 for a 16-event ER target and Kaggle 0.355 / FI-2010 0.332 for a
+  64-event one (chance 0.250). So a noisier target explains only ~+0.04-0.06 of the gap to chance; the weak signal is
+  **largely real** — the unmodulated representation genuinely under-encodes the predictability regime (well below the
+  strong decodability the prior Polymarket *vol* axis showed, ~0.92 via a frozen router, albeit a softer comparison
+  across probe/axis/target). So on the predictability axis the null is **overdetermined**: the per-step regime is only
+  faintly present in the representation *even with a cleaner target*, and the modulation decays to identity regardless —
+  there is little for a regime-conditioner to exploit, and what little exists, joint training does not harness. A
+  clean-regime escalation would feed only a marginally-stronger-but-still-weak signal into a modulation that decays
+  regardless, so it would reproduce the null; it is not run. (The *window*-level ER split the gap is measured on is
+  clean — validated by the PE/Hurst contrast — so the gap-null itself is not a weak-split artifact.)
+- **Which regime is encoded — vol vs predictability (rules out the under-representation escape).** A frozen linear
+  probe on the same baseline features decodes the realized-vol bucket *better* than the ER bucket on both datasets
+  (Kaggle 0.468 vs 0.359, FI-2010 0.426 vs 0.334, chance 0.250) — so the goal's chosen predictability axis is the
+  *harder* one to read from the representation. Crucially, the **spot-vol A/B gap is also null**: FiLM is inert even on
+  the axis the representation encodes best, so the null does **not** hinge on the regime being under-represented — it is
+  the in-scan modulation collapsing, not merely a missing signal.
+- **Reading.** Regime-FiLM is now a decisive null across **Polymarket** (vol/settlement/PnL), **FI-2010**, and **Kaggle
+  crypto spot (BTC, ETH, ADA)** — five-plus settings spanning prediction-market and spot LOBs and three crypto assets.
+  The failure mechanism — the dynamics gradient drives the modulation to identity and the load-balance pins the router
+  uniform under joint training — is dataset- and asset-independent. Figure `reports/film_g_across_settings.png`:
+  treatment `film_g` inert at ~0.004 across all 10 A/B settings (FI-2010, BTC/ETH/ADA, 5min/1sec, class-balanced),
+  far below an active FiLM.
+
+### 5.1 Backbone ablation (G2)
+
+Mamba-1, Mamba-2, Mamba-3 SISO, and a Transformer under matched parameter budgets (~10.3M, actuals reported), seed 0,
+3000 steps, on FI-2010 and Kaggle BTC. Held-out full-channel Student-t reconstruction NLL (lower is better):
+
+| backbone | params | FI-2010 recon NLL | Kaggle recon NLL |
+|---|---:|---:|---:|
+| Mamba-1      | ~11.45M | **-0.5403** | 0.0241 |
+| Mamba-2      | ~10.20M | -0.5309 | **-0.0213** |
+| Mamba-3 SISO | ~10.30M | -0.5346 | 0.0207 |
+| Transformer  | ~9.90M  | -0.5175 | 0.0191 |
+| Mamba-3 MIMO | — | _A100-only — flagged, not launched_ | _A100-only — flagged_ |
+
+- **Honest G2 read.** Under matched parameters on the 4080, **no non-MIMO backbone wins both datasets**: Mamba-1 leads
+  FI-2010 recon NLL, Mamba-2 leads Kaggle recon NLL, and Mamba-3 SISO is competitive but does **not** strictly dominate.
+  The pre-registered MIMO-advantage claim is therefore **untested on the 4080** and rests entirely on the flagged A100
+  Mamba-3 MIMO cell. **Verified on this 4080 (not just cited):** the MIMO module *builds* (12,005,533 params) but the
+  TileLang MIMO CUDA kernel **segfaults / dumps core at the first forward** (`CUDAModuleNode::GetFunc`), its dynamic SMEM
+  exceeding the RTX 4080's ~100 KB/block cap. A four-corner config sweep shows the A100 requirement is **structural, not
+  incidental**: the kernel has a feasibility band where the only SMEM-feasible config fails the warp-tiling constraint
+  and every warp-valid config overflows SMEM —
+
+  | config (rank/chunk) | warp tiling (`num_warps=4`) | dynamic SMEM | 4080 result |
+  |---|---|---|---|
+  | 2 / 8  | **invalid** (`m_warp*n_warp=1≠4`) | ~60 KB (fits) | TVM warp-tiling error |
+  | 4 / 8  | valid | ~120 KB (over cap) | core-dump |
+  | 2 / 16 | valid | ~120 KB (over cap) | core-dump |
+  | 4 / 16 (headline) | valid | ~219 KB (over cap) | core-dump |
+
+  So **no 4080-feasible MIMO config exists** — a larger-SMEM card (L4/A100, ~164–228 KB/block) is genuinely required.
+  This is the one remaining headline-hardware run; the user decides whether to spend the A100.
+- **Direction macro-F1 is degenerate for the ablation:** the world-model next-tick head collapses identically across all
+  backbones (FI-2010 0.289, Kaggle 0.178, seed-invariant), so it cannot discriminate architectures. The FI-2010 DeepLOB
+  benchmark on the published horizon-10 labels is the real direction reference: **DeepLOB macro-F1 0.628** vs majority
+  0.261 and a linear-AR next-tick floor 0.157 — reproducing the LOBCAST in-distribution range and confirming FI-2010
+  carries genuine short-horizon signal (so the FiLM null is a real negative, not a no-signal artifact).

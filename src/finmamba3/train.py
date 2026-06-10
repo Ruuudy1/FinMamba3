@@ -34,6 +34,7 @@ from finmamba3.replay_buffer import ReplayBuffer
 from finmamba3.train_step import train_world_model_step
 from finmamba3.sequence_builder import (
     build_fi2010_sequences,
+    build_kaggle_sequences,
     build_market_sequences,
     build_sequences,
     populate_buffer,
@@ -318,7 +319,7 @@ def main() -> None:
     pre_parser.add_argument("--norm-path", type=Path,
                             default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     pre_parser.add_argument(
-        "--dataset", choices=("polymarket", "fi2010"), default=None,
+        "--dataset", choices=("polymarket", "fi2010", "kaggle"), default=None,
         help="Override Dataset.Kind from the config file.",
     )
     pre_parser.add_argument(
@@ -458,6 +459,32 @@ def main() -> None:
             train_seq = make_aggregate_only(train_seq)
             val_seq = make_aggregate_only(val_seq)
         # FI-2010 is a single sequence; the buffer's segment flags stay all-False.
+        train_seqs = [train_seq]
+    elif dataset_kind == "kaggle":
+        kaggle_cfg = dataset_cfg.get("Kaggle", None) if dataset_cfg is not None else None
+        if kaggle_cfg is None:
+            raise ValueError("Dataset.Kind=kaggle requires a Dataset.Kaggle config block (Asset/Resolution/HoursTrain/HoursVal).")
+        asset = str(kaggle_cfg.get("Asset", "BTC"))
+        resolution = str(kaggle_cfg.get("Resolution", "1min"))
+        hours_train = float(kaggle_cfg.get("HoursTrain", 168.0))
+        hours_val = float(kaggle_cfg.get("HoursVal", 72.0))
+        flat_threshold = float(kaggle_cfg.get("FlatThreshold", 0.0))
+        logger.info(f"loading Kaggle {asset} {resolution} train slice from {pre_args.data_train}")
+        train_seq, slug, stats = build_kaggle_sequences(
+            pre_args.data_train, asset=asset, resolution=resolution, split="train",
+            hours_train=hours_train, hours_val=hours_val, norm_path=pre_args.norm_path,
+            fit_stats=True, norm_clip=norm_clip, flat_threshold=flat_threshold,
+        )
+        logger.info(f"loading Kaggle {asset} {resolution} validation slice from {pre_args.data_val}")
+        val_seq, _, _ = build_kaggle_sequences(
+            pre_args.data_val, asset=asset, resolution=resolution, split="validation",
+            hours_train=hours_train, hours_val=hours_val, norm_path=pre_args.norm_path,
+            fit_stats=False, norm_clip=norm_clip, flat_threshold=flat_threshold,
+        )
+        if aggregate_only:
+            train_seq = make_aggregate_only(train_seq)
+            val_seq = make_aggregate_only(val_seq)
+        # Kaggle is a single continuous stream; the buffer's segment flags stay all-False.
         train_seqs = [train_seq]
     else:
         raise ValueError(f"Unknown dataset kind: {dataset_kind!r}")

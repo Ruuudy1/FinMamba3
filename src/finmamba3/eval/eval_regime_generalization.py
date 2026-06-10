@@ -261,14 +261,18 @@ def _degradation(low_value: float, high_value: float, higher_is_better: bool) ->
     return high_value - low_value
 
 
-def _format_table(rows: list[dict], gap_value: float, regime_desc: str, metric: str) -> str:
+def _format_table(rows: list[dict], gap_value: float, regime_desc: str, metric: str,
+                  regime_labels: tuple = ("low_vol", "high_vol")) -> str:
     """Render the per-arm degradation table and the headline generalization gap.
 
     gap = baseline_degradation - treatment_degradation, where degradation is the quality lost
-    crossing into the high-vol regime. A positive gap means the treatment degrades less than the
+    crossing into the shifted regime. A positive gap means the treatment degrades less than the
     baseline, the thesis's prediction, regardless of whether the metric is higher- or lower-better.
+    regime_labels names the two regime columns so the predictability axis can read reference/shifted
+    instead of the volatility axis's low_vol/high_vol.
     """
-    head = f"| arm | low_vol_{metric} | high_vol_{metric} | degradation |\n|---|---:|---:|---:|"
+    reference_label, shifted_label = regime_labels
+    head = f"| arm | {reference_label}_{metric} | {shifted_label}_{metric} | degradation |\n|---|---:|---:|---:|"
     lines = [head]
     for r in rows:
         lines.append(f"| {r['arm']} | {r['low']:.5f} | {r['high']:.5f} | {r['degradation']:+.5f} |")

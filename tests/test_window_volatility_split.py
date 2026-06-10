@@ -10,8 +10,21 @@ import numpy as np
 import pytest
 from finmamba3.envs.lob_features import LOBSequence
 from finmamba3.eval.eval_regime_generalization_fi2010 import _slice_sequence
-from finmamba3.eval.regime_split import window_volatility_split
+from finmamba3.eval.regime_split import window_bounds, window_volatility_split
 # endregion
+
+
+def test_window_bounds_tiles_exactly():
+    assert window_bounds(40, 10) == [(0, 10), (10, 20), (20, 30), (30, 40)]
+
+
+def test_window_bounds_drops_ragged_tail():
+    assert window_bounds(45, 10) == [(0, 10), (10, 20), (20, 30), (30, 40)]
+
+
+def test_window_bounds_fails_fast_on_single_window():
+    with pytest.raises(AssertionError):
+        window_bounds(12, 10)
 
 
 def _alternating_vol_mid(window_len: int, num_windows: int) -> np.ndarray:

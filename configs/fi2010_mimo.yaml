@@ -118,11 +118,11 @@ Models:
     Mamba3:
       Enabled: true
       n_layer: 4
-      is_mimo: false
+      is_mimo: true
       mimo_rank: 4
       d_state: 128
       headdim: 64
-      chunk_size: 16
+      chunk_size: 8
       is_outproj_norm: false
       rope_fraction: 0.5
     Direction:

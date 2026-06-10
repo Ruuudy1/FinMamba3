@@ -1,0 +1,91 @@
+% =====================================================================================
+% DRAFT subsection for the paper's "Regime-FiLM is a decisive null" section
+% (\label{sec:results_null} in finmamba3-paper.tex). Numbers are final (from RESULTS.md
+% Section 5/5.1, fi2010-film.md, kaggle-film.md); the prose is a draft for the author to
+% revise/trim. Notation matches the paper ($\mathrm{film}_g$, $\mathrm{reg}_H$, $\log R$).
+% Intended placement: immediately after the "Strongest-null test" paragraph of
+% \subsection{Regime-FiLM is a decisive null}, or promoted to its own \subsection.
+% =====================================================================================
+
+\paragraph{Cross-dataset confirmation (FI-2010 and Kaggle spot LOBs).}
+We take the architecture finding to two further real LOB datasets under a
+\emph{predictability}-primary regime axis (efficiency-ratio window split,
+\S\ref{sec:predictability}; realized volatility secondary), judged by forecasting
+metrics alone since neither is a prediction market: held-out direction macro-F1
+(primary) and full-channel Student-t reconstruction NLL (secondary), each scored on the
+reference (forecastable) and shifted (random-walk) regime windows. Across FI-2010 and
+the Kaggle crypto spot book (BTC, ETH, ADA at $1\,\mathrm{s}$/$1\,\mathrm{min}$/$5\,
+\mathrm{min}$ resolutions), the zero-initialised modulation never leaves identity:
+$\mathrm{film}_g \approx 0.004$ and $\mathrm{reg}_H = \log 4$ in every setting
+(Table~\ref{tab:film_null_xdata}). With the FiLM an exact paired control (baseline and
+treatment share the seed), every held-out gap is statistically indistinguishable from
+zero (all $95\%$ CIs include $0$) on both regime axes. The split itself is non-degenerate:
+the high-efficiency-ratio reference windows carry genuinely more structure than the
+shifted windows on all three predictability measures (efficiency ratio, permutation
+entropy, Hurst), and DeepLOB attains $0.628$ macro-F1 on the FI-2010 horizon-$10$ labels,
+so the null is a negative on forecastable data, not a no-signal artifact.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llrrl}
+\toprule
+Dataset & Asset / resolution & Gap (pred / vol) & $\mathrm{film}_g$ & Verdict \\
+\midrule
+FI-2010      & event stream          & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
+Kaggle BTC   & $1\,\mathrm{min}$      & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
+Kaggle ETH   & $1\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle ADA   & $1\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle BTC   & $5\,\mathrm{min}$      & $\approx 0$               & $0.005$ & \textsc{null} \\
+Kaggle BTC   & $1\,\mathrm{s}$ (slice)& $\approx 0$               & $0.005$ & \textsc{null} \\
+\bottomrule
+\end{tabular}
+\caption{Cross-dataset confirmation of the regime-FiLM null. $\mathrm{reg}_H = \log 4$
+(uniform router) in every row. The null is dataset-, asset-, and resolution-independent.}
+\label{tab:film_null_xdata}
+\end{table}
+
+\paragraph{The collapse is optimiser-driven, not data-specific.}
+The predictability-supervised strongest-null test (forced-active FiLM, router supervised
+directly on the efficiency-ratio bucket; settings as above) decays $\mathrm{film}_g$
+monotonically at every logged step on \emph{both} datasets ($0.250 \to 0.144$ Kaggle,
+$0.250 \to 0.161$ FI-2010), with $\mathrm{reg}_H \approx \log 4$ throughout even though
+the load-balance term is disabled, so the uniform router is not a load-balance artifact.
+An exponential fit $a\,e^{-t/\tau}+c$ matches both trajectories at $R^2 > 0.999$ with
+near-identical parameters ($a \approx 0.30$, $\tau \approx 7000$ steps) and an asymptote
+$c \le 0$; since $\mathrm{film}_g \ge 0$, the modulation provably converges to identity
+rather than to a positive plateau. That the decay rate is essentially \emph{identical}
+across two very different markets points to the optimiser, not the data, as the driver.
+
+\paragraph{The regime is decodable yet unused---and not even needed.}
+Two probes localise the failure. A post-hoc reading of the jointly-supervised router
+shows it is uniform \emph{per step} (per-sample entropy $\approx \log 4$) with near-chance
+agreement against the efficiency-ratio bucket ($0.25$--$0.31$ vs.\ $0.25$): direct
+supervision does not even make the router regime-discriminative. A frozen linear probe on
+the unmodulated features decodes the per-step predictability bucket only weakly
+($0.33$--$0.36$ vs.\ $0.25$ chance) and the volatility bucket somewhat better
+($0.43$--$0.47$)---yet the volatility-axis gap is \emph{also} null. The null is therefore
+overdetermined: even on the axis the representation encodes best, and even when the regime
+is supplied by supervision, the in-scan modulation collapses to identity. The degenerate
+next-tick direction head (a flat-majority collapse on both datasets) is de-confounded by
+inverse-frequency class balancing, which yields a non-degenerate macro-F1 with the gap
+still null; the single borderline gap (Kaggle spot-vol, $n{=}2$) is disproved by a
+pre-registered third seed that flips its sign.
+
+\paragraph{The gap is real, and FiLM closes none of it.}
+The null is not an absence of anything to fix. Regime shift induces a genuine out-of-regime
+degradation: on the Kaggle spot book, full-channel reconstruction NLL is $+0.105$ worse on
+the high-volatility (shifted) windows than on the low-volatility (reference) windows, in
+\emph{both} arms. Regime-FiLM is designed precisely to absorb such shifts by conditioning
+the dynamics on the inferred regime, yet it absorbs essentially none of it---the treatment
+narrows the degradation by $\sim\!0.001$ (a $\sim\!1\%$ sliver) while $\mathrm{film}_g$ is
+provably inert. The architecture is not failing for want of a gap to close; it is failing to
+engage a gap that is plainly present.
+
+\paragraph{MIMO feasibility.}
+The matched-parameter Mamba-3 MIMO headline cell is structurally infeasible on the
+RTX~4080: a four-corner sweep shows the only configuration that fits the
+$\sim$100~KB/block shared-memory cap fails the kernel's warp-tiling constraint, while
+every warp-valid configuration overflows shared memory and aborts at launch. The MIMO
+comparison therefore requires a larger-shared-memory accelerator (L4/A100) and is left as
+the one outstanding headline-hardware run.

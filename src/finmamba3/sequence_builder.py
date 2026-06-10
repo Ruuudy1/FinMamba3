@@ -13,6 +13,7 @@ import numpy as np
 from finmamba3.backtester import build_timeline
 from finmamba3.backtester.data_loader import _asset_from_slug
 from finmamba3.envs.fi2010_loader import load_fi2010_split
+from finmamba3.envs.kaggle_lob_loader import load_kaggle_lob, max_rows_for_hours
 from finmamba3.envs.lob_features import (
     LOBSequence,
     apply_normalization,
@@ -313,6 +314,67 @@ def build_fi2010_sequences(
         stats = fit_normalization(seq, clip_value=norm_clip)
         save_normalization(stats, norm_path)
         logger.info(f"FI-2010 normalization fit on {seq.market_slug}, saved to {norm_path}")
+    else:
+        stats = load_normalization(norm_path)
+    seq_norm = apply_normalization(seq, stats)
+    return seq_norm, seq.market_slug, stats
+
+
+def _slice_lob_sequence(seq: LOBSequence, start: int, end: int) -> LOBSequence:
+    # A row-aligned slice of every field is a valid shorter sequence; the Kaggle val split is the
+    # tail carved out of the same stream the train split is the head of, so no future tick leaks back.
+    return LOBSequence(
+        market_slug=seq.market_slug,
+        per_level=seq.per_level[start:end],
+        per_tick=seq.per_tick[start:end],
+        midprice=seq.midprice[start:end],
+        ts_sec=seq.ts_sec[start:end],
+        yes_outcome=None if seq.yes_outcome is None else seq.yes_outcome[start:end],
+    )
+
+
+def build_kaggle_sequences(
+    data_dir: Path,
+    asset: str,
+    resolution: str,
+    split: str,
+    hours_train: float,
+    hours_val: float,
+    norm_path: Path,
+    fit_stats: bool,
+    norm_clip: float,
+    flat_threshold: float = 0.0,
+) -> tuple[LOBSequence, str, object]:
+    """Kaggle mirror of build_fi2010_sequences over one per-asset CSV. Returns (sequence, slug, stats).
+
+    The Kaggle dataset ships a single continuous stream per asset and resolution, so the train and
+    validation splits are carved chronologically from one file: train is the first hours_train, val
+    the next hours_val, disjoint so no future tick leaks into training. Normalization is fit on the
+    train slice and reused for validation, matching the FI-2010 and Polymarket flows.
+    """
+    rows_train = max_rows_for_hours(hours_train, resolution)
+    rows_val = max_rows_for_hours(hours_val, resolution)
+    if rows_train is None or rows_val is None:
+        raise ValueError("Kaggle train/val hours must both be positive so the single stream can be split.")
+    csv_path = Path(data_dir) / f"{asset}_{resolution}.csv"
+    if split == "train":
+        bundle = load_kaggle_lob(csv_path, asset, resolution, max_rows=rows_train, flat_threshold=flat_threshold)
+        seq = bundle.sequence
+    elif split == "validation":
+        bundle = load_kaggle_lob(csv_path, asset, resolution, max_rows=rows_train + rows_val, flat_threshold=flat_threshold)
+        total_rows = bundle.sequence.per_level.shape[0]
+        if total_rows <= rows_train + 1:
+            raise RuntimeError(
+                f"Kaggle CSV {csv_path} has {total_rows} rows but the train slice alone wants {rows_train}; "
+                f"lower HoursTrain or point at a longer file so the validation tail is non-empty."
+            )
+        seq = _slice_lob_sequence(bundle.sequence, rows_train, total_rows)
+    else:
+        raise ValueError(f"split must be 'train' or 'validation', got {split!r}.")
+    if fit_stats:
+        stats = fit_normalization(seq, clip_value=norm_clip)
+        save_normalization(stats, norm_path)
+        logger.info(f"Kaggle normalization fit on {seq.market_slug} ({split}), saved to {norm_path}")
     else:
         stats = load_normalization(norm_path)
     seq_norm = apply_normalization(seq, stats)

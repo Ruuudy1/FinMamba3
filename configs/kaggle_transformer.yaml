@@ -1,6 +1,6 @@
 BasicSettings:
   ObsMode: features
-  FeatureDim: 46          # K(10) * F_level(4) + F_tick(6)
+  FeatureDim: 94          # K(10) * F_level(8) + F_tick(14); the Polymarket base schema (no binary/spot block).
   ReplayBufferOnGPU: True
   Seed: 3710
   Env_name: LOB
@@ -12,10 +12,13 @@ BasicSettings:
   SavePath: None
 
 Dataset:
-  Kind: fi2010
-  FI2010:
-    Horizon: 10              # Events ahead for direction labels. One of 10, 20, 30, 50, 100.
-    MaxEvents: 0             # 0 = use the full file; positive caps to the most recent N events.
+  Kind: kaggle
+  Kaggle:
+    Asset: BTC                # One of BTC, ETH, ADA; selects data/<Asset>_<Resolution>.csv.
+    Resolution: 1min          # One of 1sec, 1min, 5min. Start on 1min/5min; 1sec is ~1.8 GB.
+    HoursTrain: 168           # 7 days of 1min bars (~10080 ticks) for the train stream.
+    HoursVal: 72              # The next 3 days (~4320 ticks); chronological, non-overlapping, no leakage.
+    FlatThreshold: 0.0        # Loader's diagnostic next-tick label band only; training uses Direction.Threshold.
 
 Evaluate:
   EpisodeNum: 10
@@ -53,7 +56,7 @@ JointTrainAgent:
 Models:
   WorldModel:
     dtype: float32
-    Backbone: Mamba3
+    Backbone: Transformer
     Act: SiLU
     CategoricalDim: 16
     ClassDim: 16
@@ -79,8 +82,8 @@ Models:
     Encoder:
       Type: lob
       K: 10
-      FeatureDimLevel: 4         # FI-2010 levels: (ask_price, ask_size, bid_price, bid_size).
-      FeatureDimTick: 6          # Derived aggregates: mid, spread, log_spread, imbalance, microprice, log_total_vol.
+      FeatureDimLevel: 8         # 5 best bid + 5 best ask levels, each in the LEVEL_FEATURE_NAMES layout.
+      FeatureDimTick: 14         # TICK_FEATURE_NAMES aggregates; no binary-market block (spot data).
       DModel: 256
       NumLayers: 4
       NumHeads: 8
@@ -90,14 +93,14 @@ Models:
       AggregateOnly: False
       GradientCheckpointing: False
     Decoder:
-      Kind: studentt
+      Kind: studentt                   # Heavy-tailed NLL so the recon-NLL secondary metric can see the regime's 2nd moment.
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0
       LearnableNu: True
-      SizeWeight: 1.0                  # FI-2010 features are pre-normalized; no size/price asymmetry to correct.
-      LevelSizeIndices: [1, 3]         # ask_size, bid_size.
-      TickSizeIndices: [5]             # log_total_vol.
+      SizeWeight: 2.0                  # Crypto notionals carry a size/price magnitude asymmetry, unlike pre-normalized FI-2010.
+      LevelSizeIndices: [1, 2, 3]      # log_size, log_cum_depth, vol_share (the 8-feature level size channels).
+      TickSizeIndices: [6, 7, 11, 12]  # log_bid_vol, log_ask_vol, ofi_top, trade_intensity.
     Reward:
       Enabled: false
       HiddenUnits: 256
@@ -108,7 +111,7 @@ Models:
       LayerNum: 1
     Transformer:
       FinalFeatureWidth: 4
-      NumLayers: 2
+      NumLayers: 3
       NumHeads: 8
     Mamba:
       n_layer: 2
@@ -128,28 +131,27 @@ Models:
     Direction:
       Enabled: True
       NumClasses: 3
-      Threshold: 0.0                   # Unused for FI-2010; the loader ships pre-labelled directions.
+      Threshold: 0.01                  # Normalized-mid next-tick band; buckets sub-band moves as flat for a 3-class split.
       LossWeight: 0.5
-      ClassBalanced: False             # Inverse-frequency CE weighting; the robustness re-run sets True to stop the head collapsing to the flat majority.
+      ClassBalanced: False             # Match the FI-2010 baseline; the threshold already gives a populated flat class.
       Dropout: 0.0
-      UseDatasetLabels: True           # Supervise the head with FI-2010's k-horizon labels rather than rolling-mid deltas.
     Regime:
       Enabled: False
       NumRegimes: 8
       EmbedDim: 32
     RegimeFiLM:
       Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
-      NumRegimes: 4           # Fewer regimes than the original 8: FI-2010 carries only a handful of vol regimes, and 8 spreads the router thin.
+      NumRegimes: 4           # FI-2010 carries only a handful of regimes; 4 keeps the router from spreading thin.
       EmbedDim: 32
       EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
-      InitScale: 0.0          # Hypernetwork output init std. 0.0 keeps the exact identity-at-init baseline; a small positive value (e.g. 0.01) escapes the slow zero-init warmup.
+      InitScale: 0.0          # Hypernetwork output init std. 0.0 keeps the exact identity-at-init baseline.
       Dropout: 0.0            # Dropout on the regime embedding; overfitting guard on the hypernetwork's added capacity.
-      LRMult: 1.0             # Multiplies the world-model LR for the modulator params so the zero-init FiLM can learn faster than the backbone.
-      WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default. Raise it as an overfitting guard.
-      ConditionOnVol: False   # Append a causal rolling midprice volatility feature to the router input so regimes align with the volatility-shift axis the eval splits on.
+      LRMult: 1.0             # Multiplies the world-model LR for the modulator params so the zero-init FiLM can learn faster.
+      WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default.
+      ConditionOnVol: False   # Append a causal rolling-mid volatility feature to the router input.
       VolWindow: 16           # Trailing events over which the causal volatility conditioning feature is measured.
       SuperviseVol: False              # Add a router cross-entropy toward the regime bucket; the escalation sets True.
-      SuperviseAxis: vol               # 'vol' or 'predictability' (the ER bucket); the predictability escalation supervises on the ER axis.
+      SuperviseAxis: vol               # 'vol' or 'predictability' (the ER bucket); the escalation supervises on predictability.
       SupervisionWeight: 0.0           # Scales the router-supervision cross-entropy.
       FeedObsVol: False                # Route the obs-derived regime feature into the router input.
       DecoupleRouterFromFiLM: False    # Detach the router logits on the path into the FiLM hypernetwork.
@@ -220,4 +222,4 @@ Wandb:
   Init:
     Mode: offline
     Project: Drama_LOB_pretrain
-n: lob
+n: kaggle

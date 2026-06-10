@@ -39,6 +39,25 @@ class WindowSplitResult:
     description: str
 
 
+def window_bounds(num_events: int, window_len: int) -> list[tuple[int, int]]:
+    """Non-overlapping [start, end) windows tiling a stream of num_events, dropping the ragged tail.
+
+    Both regime axes (realized vol and predictability) tile the stream identically and differ only in
+    the per-window scalar they bucket on, so the tiling lives here once to keep the two splits a fair
+    comparison. Fails fast on a stream too short to yield two windows, the minimum for a median split.
+    """
+    assert window_len >= 2, "window_len must be at least 2 to estimate a per-window statistic."
+    bounds = [
+        (start, start + window_len)
+        for start in range(0, num_events - window_len + 1, window_len)
+    ]
+    assert len(bounds) >= 2, (
+        f"stream of {num_events} events yields fewer than two full windows at "
+        f"window_len={window_len}; lower window_len or pass a longer stream."
+    )
+    return bounds
+
+
 def window_volatility_split(
     midprice: np.ndarray,
     window_len: int,
@@ -63,16 +82,8 @@ def window_volatility_split(
     needs a consistent volatility ordering across windows measured on the same scale.
     """
     num_events = int(midprice.shape[0])
-    assert window_len >= 2, "window_len must be at least 2 to estimate volatility."
     mid = np.asarray(midprice, dtype=np.float64)
-    bounds = [
-        (start, start + window_len)
-        for start in range(0, num_events - window_len + 1, window_len)
-    ]
-    assert len(bounds) >= 2, (
-        f"stream of {num_events} events yields fewer than two full windows at "
-        f"window_len={window_len}; lower window_len or pass a longer stream."
-    )
+    bounds = window_bounds(num_events, window_len)
     vols = np.fromiter(
         (float(np.std(np.diff(mid[start:end]))) for start, end in bounds),
         dtype=np.float64,
