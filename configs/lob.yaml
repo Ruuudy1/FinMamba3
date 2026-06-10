@@ -27,7 +27,7 @@ JointTrainAgent:
   NumEnvs: 1
   BatchSize: 64        # Reverted from 512: the big batch converged worse (val 390 vs 368) and ran ~5x slower.
   AccumSteps: 2        # Effective batch 128; the known-good config that reached val 368 in ~38 min.
-  BatchLength: 32
+  BatchLength: 48
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
