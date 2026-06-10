@@ -46,8 +46,11 @@ KAGGLE_ASSET = "BTC"
 KAGGLE_RESOLUTION = "1min"
 MAX_STEPS = 3000          # matches the 4080 non-MIMO ablation step budget
 SEED = 0
+SMOKE_TEST = True         # run a 5-step plumbing check first (verifies the MIMO kernel builds/runs in ~1 min)
+UPLOAD_EVERY = 200        # sync the checkpoint to HF every N steps (crash-safety); needs HF_TOKEN write access
 
 HF_REPO = "sj-hryi/FinMamba3"
+CKPT_REPO = "sj-hryi/FinMamba3-checkpoints"   # where periodic + final checkpoints are uploaded
 WORK_ROOT = Path.home() / "finmamba3_mimo"
 PROJECT_DIR = str(WORK_ROOT / "FinMamba3")
 CACHE_ROOT = WORK_ROOT / "cache"
@@ -201,28 +204,50 @@ code('''def latest_ckpt(root):
     return max(paths, key=os.path.getmtime) if paths else None
 
 
-def run(cmd):
-    print("Running:", " ".join(str(c) for c in cmd))
-    subprocess.check_call([str(c) for c in cmd])
+def stream(cmd):
+    # Stream output LIVE. Colab hides subprocess output under check_call (esp. tqdm), so we read it
+    # line-by-line and re-print with flush -- you see per-step loss / progress in real time.
+    print("Running:", " ".join(str(c) for c in cmd), flush=True)
+    proc = subprocess.Popen([str(c) for c in cmd], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+    rc = proc.wait()
+    if rc:
+        raise subprocess.CalledProcessError(rc, cmd)
 
 
 rows = {}
 for ds in DATASETS:
     cfg = PER_DATASET[ds]
     norm = f"saved_models/lob/{ds}_mimo_norm.json"
-    print(f"\\n{'='*64}\\nTRAIN Mamba-3 MIMO on {ds} ({MAX_STEPS} steps)\\n{'='*64}")
-    run([sys.executable, "-u", "-m", "finmamba3.train", "--config", cfg["config"],
-         "--data-train", cfg["data_train"], "--data-val", cfg["data_val"], "--dataset", ds,
-         "--BasicSettings.Seed", SEED, "--JointTrainAgent.SampleMaxSteps", MAX_STEPS, "--norm-path", norm])
+    base = [sys.executable, "-u", "-m", "finmamba3.train", "--config", cfg["config"],
+            "--data-train", cfg["data_train"], "--data-val", cfg["data_val"], "--dataset", ds,
+            "--BasicSettings.Seed", SEED]
+    # Plumbing check: build + run the MIMO TileLang kernel for 5 steps (~1 min once compiled). If THIS
+    # produces no step output, the kernel build is the issue -- interrupt and report it (don't burn hours).
+    if SMOKE_TEST:
+        print(f"\\n--- SMOKE TEST: {ds} MIMO, 5 steps (verifies the kernel builds + runs) ---", flush=True)
+        stream(base + ["--JointTrainAgent.SampleMaxSteps", 5, "--JointTrainAgent.SaveModels", "False",
+                       "--norm-path", f"saved_models/lob/{ds}_smoke_norm.json"])
+        print(f"SMOKE TEST PASSED for {ds}\\n", flush=True)
+    print(f"\\n{'='*64}\\nTRAIN Mamba-3 MIMO on {ds} ({MAX_STEPS} steps)\\n{'='*64}", flush=True)
+    train_cmd = base + ["--JointTrainAgent.SampleMaxSteps", MAX_STEPS, "--norm-path", norm]
+    if HF_TOKEN:   # crash-safety: sync the checkpoint to HF every UPLOAD_EVERY steps (needs write access)
+        train_cmd += ["--ckpt-repo", CKPT_REPO, "--ckpt-upload-every", UPLOAD_EVERY]
+        print(f"checkpoints -> {CKPT_REPO} every {UPLOAD_EVERY} steps", flush=True)
+    else:
+        print("no HF_TOKEN set: checkpoints stay local (set the HF_TOKEN Colab secret to sync them to HF)", flush=True)
+    stream(train_cmd)
     ckpt = latest_ckpt(cfg["ckpt_root"])
-    print("checkpoint:", ckpt)
-    print(f"\\n{'='*64}\\nEVAL Mamba-3 MIMO on {ds}\\n{'='*64}")
+    print("checkpoint:", ckpt, flush=True)
+    print(f"\\n{'='*64}\\nEVAL Mamba-3 MIMO on {ds}\\n{'='*64}", flush=True)
     out_md = f"reports/mimo_{ds}.md"
-    run([sys.executable, "-m", "finmamba3.eval.eval_backbone_metrics", "--config", cfg["config"],
-         "--dataset", ds, "--checkpoint", ckpt, "--data-val", cfg["data_val"], "--norm-path", norm,
-         "--is-mimo", "--threshold", cfg["threshold"], "--windows", 512, "--out", out_md])
+    stream([sys.executable, "-m", "finmamba3.eval.eval_backbone_metrics", "--config", cfg["config"],
+            "--dataset", ds, "--checkpoint", ckpt, "--data-val", cfg["data_val"], "--norm-path", norm,
+            "--is-mimo", "--threshold", cfg["threshold"], "--windows", 512, "--out", out_md])
     rows[ds] = Path(out_md).read_text()
-    print(rows[ds])''')
+    print(rows[ds], flush=True)''')
 
 code('''print("\\n" + "=" * 64)
 print("Mamba-3 MIMO ablation rows (recon NLL + direction macro-F1 + params)")
