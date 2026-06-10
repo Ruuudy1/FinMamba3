@@ -24,8 +24,10 @@ RTX 4080 cannot run (its warp-tiling-valid kernel configs exceed the ~100 KB SME
 
 **Setup (one time):**
 1. Runtime → Change runtime type → **A100 GPU**.
-2. Add your Hugging Face token as a Colab secret named `HF_TOKEN` (the 🔑 in the left sidebar), or `export HF_TOKEN=...`.
-3. Runtime → **Run all**.
+2. Runtime → **Run all**.
+
+(The `sj-hryi/FinMamba3` dataset repo is public — **no HF token is required**. If you have one set as a Colab
+secret named `HF_TOKEN` it will be used, but it is entirely optional.)
 
 MIMO on A100 (sm_80) uses `chunk_size=8` at the comparable `d_state=128` — an identical model (chunk_size is only a
 kernel tiling parameter), baked into `configs/{fi2010,kaggle}_mimo.yaml`. It is slow (~9 s/it), so this defaults to a
@@ -76,10 +78,11 @@ def get_hf_token():
 
 print("MIMO ablation:", DATASETS, "| steps", MAX_STEPS, "| seed", SEED)''')
 
-code('''HF_TOKEN = get_hf_token()
-if not HF_TOKEN:
-    raise RuntimeError("HF_TOKEN missing — add it as a Colab secret named HF_TOKEN, or export HF_TOKEN=...")
-os.environ["HF_TOKEN"] = HF_TOKEN
+code('''# The sj-hryi/FinMamba3 dataset repo is public (ungated), so the HF token is OPTIONAL -- it is used
+# only if you happen to have one set (e.g. for higher rate limits). No token is required to download.
+HF_TOKEN = get_hf_token()
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
 
 pip_install("huggingface_hub")
 from huggingface_hub import snapshot_download
