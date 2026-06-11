@@ -53,6 +53,17 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
             # Pytorch-triton omits triton.set_allocator; mamba3_siso_fwd.py calls it at module level.
             # The no-op stub is safe because pytorch-triton manages TMA descriptor memory internally.
             _triton.set_allocator = lambda fn: None
+        if module_name.endswith("mamba3"):
+            import triton.language as _tl
+            if not hasattr(_tl, "make_tensor_descriptor"):
+                raise RuntimeError(
+                    "Mamba3 requires a Triton build exposing "
+                    "triton.language.make_tensor_descriptor. The installed Triton "
+                    f"({getattr(_triton, '__version__', '<unknown>')} from "
+                    f"{getattr(_triton, '__file__', '<unknown>')}) does not. "
+                    "In Colab, restart the runtime and rerun the setup cell after "
+                    "installing `triton>=3.5.0` with `--force-reinstall --no-deps`."
+                )
     except ImportError:
         pass
     try:
