@@ -179,6 +179,21 @@ from mamba_ssm.modules.mamba3 import Mamba3
 from mamba_ssm.ops.tilelang.mamba3.mamba3_mimo import mamba3_mimo
 print('Mamba3 + MIMO TileLang import OK:', mamba3_mimo)''')
 
+code('''# A100/H100 GUARD -- run this BEFORE training. The MIMO bwd_bwd TileLang kernel needs ~123 KB of dynamic
+# shared memory per block. sm_80 (A100, 164 KB cap) and sm_90 (H100, 227 KB) fit it; sm_89 (L4 / RTX 4080,
+# ~99 KB cap) CANNOT and dies with "Failed to set the allowed dynamic shared memory size to 123216".
+# Fail fast here instead of after a ~3 min kernel compile.
+import torch
+cc = torch.cuda.get_device_capability(0)
+name = torch.cuda.get_device_name(0)
+print(f"GPU: {name}  sm_{cc[0]}{cc[1]}")
+if cc not in [(8, 0), (9, 0)]:
+    raise RuntimeError(
+        f"{name} (sm_{cc[0]}{cc[1]}) cannot run the Mamba-3 MIMO kernel: its ~123 KB/block shared-memory need "
+        f"exceeds the sm_89 cap (~99 KB). Switch the Colab runtime to an A100 (Runtime -> Change runtime type "
+        f"-> A100 GPU; requires Colab Pro+), then Run all again. An H100 also works.")
+print("GPU OK for Mamba-3 MIMO.")''')
+
 code('''# Stage the HF-downloaded data into the repo's data/ dir (FI-2010 split files + Kaggle CSV).
 project = Path(PROJECT_DIR)
 data_dir = project / "data"
