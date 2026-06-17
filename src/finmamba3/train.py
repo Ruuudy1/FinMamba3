@@ -270,7 +270,8 @@ def _gpu_monitor(interval: int = 30, sample_every: float = 2.0) -> None:
             logger.info(f"[GPU] util mean={mean_util}% peak={max(utils)}% mem={mem_used}/{mem_total} MiB")
 
 
-def _upload_checkpoints_async(folder: str, repo_id: str, token: str, lock: threading.Lock) -> None:
+def _upload_checkpoints_async(folder: str, repo_id: str, token: str, lock: threading.Lock,
+                              path_in_repo: str = "checkpoints/lob") -> None:
     # Fire-and-forget HF sync on a daemon thread so the upload never stalls the training
     # loop. The non-blocking lock drops the sync if a previous one is still in flight, so a
     # slow upload cannot pile up behind a faster save cadence.
@@ -281,7 +282,7 @@ def _upload_checkpoints_async(folder: str, repo_id: str, token: str, lock: threa
             from huggingface_hub import HfApi
             HfApi().upload_folder(
                 folder_path=folder,
-                path_in_repo="checkpoints/lob",
+                path_in_repo=path_in_repo,
                 repo_id=repo_id,
                 repo_type="model",
                 token=token,
@@ -336,6 +337,12 @@ def main() -> None:
         "--ckpt-upload-every", type=int, default=0,
         help="Write the latest checkpoint and upload saved_models/<n> to --ckpt-repo every "
              "N steps. 0 disables in-training upload (the run still saves locally).",
+    )
+    pre_parser.add_argument(
+        "--ckpt-path-in-repo", default="checkpoints/lob",
+        help="Destination folder inside --ckpt-repo for the checkpoint sync. Set this per-dataset "
+             "(e.g. mimo-ckpt/fi2010) so runs on different datasets do not collide in one folder, "
+             "which lets a fresh session find and resume the right checkpoint.",
     )
     pre_parser.add_argument("--hf-token", default=os.environ.get("HF_TOKEN"))
     pre_args, remaining = pre_parser.parse_known_args()
@@ -684,7 +691,8 @@ def main() -> None:
                  "optimizer": world_model.optimizer.state_dict()},
                 f"{logdir}/ckpt/world_model.pth",
             )
-            _upload_checkpoints_async(ckpt_root, pre_args.ckpt_repo, pre_args.hf_token, upload_lock)
+            _upload_checkpoints_async(ckpt_root, pre_args.ckpt_repo, pre_args.hf_token, upload_lock,
+                                      pre_args.ckpt_path_in_repo)
     # Save final checkpoint
     torch.save(
         {"step": step, "world_model": world_model.state_dict(),
@@ -699,7 +707,7 @@ def main() -> None:
         # Final synchronous flush so the very last weights land on HF before the process exits.
         from huggingface_hub import HfApi
         HfApi().upload_folder(
-            folder_path=ckpt_root, path_in_repo="checkpoints/lob",
+            folder_path=ckpt_root, path_in_repo=pre_args.ckpt_path_in_repo,
             repo_id=pre_args.ckpt_repo, repo_type="model", token=pre_args.hf_token,
             commit_message="Final checkpoint sync",
         )

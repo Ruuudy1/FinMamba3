@@ -26,8 +26,10 @@ RTX 4080 cannot run (its warp-tiling-valid kernel configs exceed the ~100 KB SME
 1. Runtime → Change runtime type → **A100 GPU**.
 2. Runtime → **Run all**.
 
-(The `sj-hryi/FinMamba3` dataset repo is public — **no HF token is required**. If you have one set as a Colab
-secret named `HF_TOKEN` it will be used, but it is entirely optional.)
+(The `sj-hryi/FinMamba3` dataset repo is public — **no HF token is required to download data**. Set an `HF_TOKEN`
+Colab secret to enable checkpoint sync + **resume**: the run uploads to `sj-hryi/FinMamba3-checkpoints` every 200
+steps, and if Colab disconnects, just **Run all** again — it pulls the latest checkpoint per dataset and warm-restarts
+from where it left off, training only the remaining steps to 3000. So a disconnect costs ≤200 steps, not the whole run.)
 
 MIMO on A100 (sm_80) uses `chunk_size=8` at the comparable `d_state=128` — an identical model (chunk_size is only a
 kernel tiling parameter), baked into `configs/{fi2010,kaggle}_mimo.yaml`. It is slow (~9 s/it), so this defaults to a
@@ -48,6 +50,10 @@ MAX_STEPS = 3000          # matches the 4080 non-MIMO ablation step budget
 SEED = 0
 SMOKE_TEST = True         # run a 5-step plumbing check first (verifies the MIMO kernel builds/runs in ~1 min)
 UPLOAD_EVERY = 200        # sync the checkpoint to HF every N steps (crash-safety); needs HF_TOKEN write access
+RESUME = True             # on a fresh session, pull the latest HF checkpoint for each dataset and warm-restart
+                          # from it, training only the remaining steps to MAX_STEPS. Survives Colab disconnects.
+                          # Needs HF_TOKEN read access. Note: --resume-checkpoint resets the LR schedule, so a
+                          # resumed run's LR re-warms over the remaining steps (a robustness tradeoff, not exact).
 
 HF_REPO = "sj-hryi/FinMamba3"
 CKPT_REPO = "sj-hryi/FinMamba3-checkpoints"   # where periodic + final checkpoints are uploaded
@@ -59,11 +65,16 @@ WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Per-dataset config + eval settings (the kaggle loader reads data/<ASSET>_<RES>.csv; the kaggle config
 # carries Asset/Resolution/Hours; eval threshold mirrors the 4080 ablation: FI-2010 0.0, Kaggle 0.01).
+# ckpt_path_in_repo: per-dataset HF folder for this run's checkpoint sync (keeps datasets from colliding).
+# resume_from: HF folders to scan when resuming, newest-step wins. fi2010 also lists the legacy "checkpoints/lob"
+# folder so the FIRST run of this notebook bootstraps off the cached pre-resume run that synced there.
 PER_DATASET = {
     "fi2010": dict(config="configs/fi2010_mimo.yaml", data_train="data/fi2010/train",
-                   data_val="data/fi2010/validation", threshold=0.0, ckpt_root="saved_models/lob/LOB"),
+                   data_val="data/fi2010/validation", threshold=0.0, ckpt_root="saved_models/lob/LOB",
+                   ckpt_path_in_repo="mimo-ckpt/fi2010", resume_from=["mimo-ckpt/fi2010", "checkpoints/lob"]),
     "kaggle": dict(config="configs/kaggle_mimo.yaml", data_train="data", data_val="data",
-                   threshold=0.01, ckpt_root="saved_models/kaggle/LOB"),
+                   threshold=0.01, ckpt_root="saved_models/kaggle/LOB",
+                   ckpt_path_in_repo="mimo-ckpt/kaggle", resume_from=["mimo-ckpt/kaggle"]),
 }
 
 
@@ -214,7 +225,11 @@ if "kaggle" in DATASETS:
         shutil.copy(src, dst)
     print("Kaggle ready:", dst.name)''')
 
-code('''def latest_ckpt(root):
+code('''import torch
+from huggingface_hub import snapshot_download
+
+
+def latest_ckpt(root):
     paths = glob.glob(f"{root}/*/ckpt/world_model_final.pth")
     return max(paths, key=os.path.getmtime) if paths else None
 
@@ -232,6 +247,33 @@ def stream(cmd):
         raise subprocess.CalledProcessError(rc, cmd)
 
 
+def find_resume(cfg):
+    # Scan this dataset's HF checkpoint folders and return (local_path, step) for the most-trained
+    # checkpoint, else (None, 0). Lets a fresh Colab session warm-restart from the last HF-synced
+    # checkpoint instead of starting over after a disconnect. Needs RESUME and an HF read token.
+    if not (RESUME and HF_TOKEN):
+        return None, 0
+    best_path, best_step = None, -1
+    dst = str(WORK_ROOT / "resume_ckpts")
+    for prefix in cfg["resume_from"]:
+        try:
+            local = snapshot_download(repo_id=CKPT_REPO, repo_type="model", token=HF_TOKEN,
+                                      allow_patterns=[f"{prefix}/**/world_model*.pth"], local_dir=dst)
+        except Exception as exc:
+            print(f"  resume: nothing under {prefix} ({exc})", flush=True)
+            continue
+        for path in glob.glob(f"{local}/{prefix}/**/world_model*.pth", recursive=True):
+            try:
+                step = int(torch.load(path, map_location="cpu").get("step", 0))
+            except Exception:
+                continue
+            if step > best_step:
+                best_path, best_step = path, step
+    if best_path:
+        print(f"  resume: warm-restart from {best_path} (trained to step {best_step})", flush=True)
+    return best_path, max(best_step, 0)
+
+
 rows = {}
 for ds in DATASETS:
     cfg = PER_DATASET[ds]
@@ -239,6 +281,8 @@ for ds in DATASETS:
     base = [sys.executable, "-u", "-m", "finmamba3.train", "--config", cfg["config"],
             "--data-train", cfg["data_train"], "--data-val", cfg["data_val"], "--dataset", ds,
             "--BasicSettings.Seed", SEED]
+    resume_path, done_step = find_resume(cfg)
+    remaining = MAX_STEPS - done_step
     # Plumbing check: build + run the MIMO TileLang kernel for 5 steps (~1 min once compiled). If THIS
     # produces no step output, the kernel build is the issue -- interrupt and report it (don't burn hours).
     if SMOKE_TEST:
@@ -246,15 +290,23 @@ for ds in DATASETS:
         stream(base + ["--JointTrainAgent.SampleMaxSteps", 5, "--JointTrainAgent.SaveModels", "False",
                        "--norm-path", f"saved_models/lob/{ds}_smoke_norm.json"])
         print(f"SMOKE TEST PASSED for {ds}\\n", flush=True)
-    print(f"\\n{'='*64}\\nTRAIN Mamba-3 MIMO on {ds} ({MAX_STEPS} steps)\\n{'='*64}", flush=True)
-    train_cmd = base + ["--JointTrainAgent.SampleMaxSteps", MAX_STEPS, "--norm-path", norm]
-    if HF_TOKEN:   # crash-safety: sync the checkpoint to HF every UPLOAD_EVERY steps (needs write access)
-        train_cmd += ["--ckpt-repo", CKPT_REPO, "--ckpt-upload-every", UPLOAD_EVERY]
-        print(f"checkpoints -> {CKPT_REPO} every {UPLOAD_EVERY} steps", flush=True)
+    if remaining > 0:
+        tag = f" (resuming from step {done_step})" if resume_path else ""
+        print(f"\\n{'='*64}\\nTRAIN Mamba-3 MIMO on {ds}: {remaining} of {MAX_STEPS} steps{tag}\\n{'='*64}", flush=True)
+        train_cmd = base + ["--JointTrainAgent.SampleMaxSteps", remaining, "--norm-path", norm]
+        if resume_path:   # warm-restart weights + optimizer; LR schedule re-warms over the remaining steps
+            train_cmd += ["--resume-checkpoint", resume_path]
+        if HF_TOKEN:      # crash-safety: sync to this dataset's own HF folder every UPLOAD_EVERY steps
+            train_cmd += ["--ckpt-repo", CKPT_REPO, "--ckpt-upload-every", UPLOAD_EVERY,
+                          "--ckpt-path-in-repo", cfg["ckpt_path_in_repo"]]
+            print(f"checkpoints -> {CKPT_REPO}/{cfg['ckpt_path_in_repo']} every {UPLOAD_EVERY} steps", flush=True)
+        else:
+            print("no HF_TOKEN set: checkpoints stay local + no resume (set the HF_TOKEN Colab secret)", flush=True)
+        stream(train_cmd)
+        ckpt = latest_ckpt(cfg["ckpt_root"])
     else:
-        print("no HF_TOKEN set: checkpoints stay local (set the HF_TOKEN Colab secret to sync them to HF)", flush=True)
-    stream(train_cmd)
-    ckpt = latest_ckpt(cfg["ckpt_root"])
+        print(f"\\n{ds}: already trained to step {done_step} >= {MAX_STEPS}; skipping to eval", flush=True)
+        ckpt = resume_path
     print("checkpoint:", ckpt, flush=True)
     print(f"\\n{'='*64}\\nEVAL Mamba-3 MIMO on {ds}\\n{'='*64}", flush=True)
     out_md = f"reports/mimo_{ds}.md"
