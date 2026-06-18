@@ -340,20 +340,6 @@ def build_fi2010_sequences(
     return seq_norm, seq.market_slug, stats
 
 
-def _slice_lob_sequence(seq: LOBSequence, start: int, end: int) -> LOBSequence:
-    # A row-aligned slice of every field is a valid shorter sequence; the Kaggle val split is the
-    # tail carved out of the same stream the train split is the head of, so no future tick leaks back.
-    return LOBSequence(
-        market_slug=seq.market_slug,
-        per_level=seq.per_level[start:end],
-        per_tick=seq.per_tick[start:end],
-        midprice=seq.midprice[start:end],
-        ts_sec=seq.ts_sec[start:end],
-        yes_outcome=None if seq.yes_outcome is None else seq.yes_outcome[start:end],
-        event_counts=None if seq.event_counts is None else seq.event_counts[start:end],
-    )
-
-
 def build_kaggle_sequences(
     data_dir: Path,
     asset: str,
@@ -389,7 +375,18 @@ def build_kaggle_sequences(
                 f"Kaggle CSV {csv_path} has {total_rows} rows but the train slice alone wants {rows_train}; "
                 f"lower HoursTrain or point at a longer file so the validation tail is non-empty."
             )
-        seq = _slice_lob_sequence(bundle.sequence, rows_train, total_rows)
+        # A row-aligned slice of every field is a valid shorter sequence; the Kaggle val split is the
+        # tail carved out of the same stream the train split heads, so no future tick leaks back.
+        full_seq = bundle.sequence
+        seq = LOBSequence(
+            market_slug=full_seq.market_slug,
+            per_level=full_seq.per_level[rows_train:total_rows],
+            per_tick=full_seq.per_tick[rows_train:total_rows],
+            midprice=full_seq.midprice[rows_train:total_rows],
+            ts_sec=full_seq.ts_sec[rows_train:total_rows],
+            yes_outcome=None if full_seq.yes_outcome is None else full_seq.yes_outcome[rows_train:total_rows],
+            event_counts=None if full_seq.event_counts is None else full_seq.event_counts[rows_train:total_rows],
+        )
     else:
         raise ValueError(f"split must be 'train' or 'validation', got {split!r}.")
     if fit_stats:

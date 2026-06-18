@@ -12,7 +12,6 @@ from __future__ import annotations
 import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint_utils
 from torch.nn.attention import sdpa_kernel, SDPBackend
 from einops import rearrange, reduce
@@ -75,16 +74,13 @@ class LOBEncoder(nn.Module):
         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.norm = RMSNorm(d_model, **factory)
         self.out_proj = nn.Linear(d_model, output_flatten_dim, **factory)
-    def _split_input(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         level_flat_dim = self.k_levels * self.f_level
         levels_flat = x[..., :level_flat_dim]
         tick = x[..., level_flat_dim:]
         levels = rearrange(
             levels_flat, "b l (k f) -> b l k f", k=self.k_levels, f=self.f_level
         )
-        return levels, tick
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        levels, tick = self._split_input(x)
         if self.aggregate_only:
             levels = torch.zeros_like(levels)
         B, L = levels.shape[:2]

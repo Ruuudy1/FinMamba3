@@ -793,7 +793,7 @@ def _cli(argv: list[str] | None = None) -> None:
     print(f"per_tick  shape: {seq.per_tick.shape}")
     print(f"midprice  range: [{seq.midprice.min():.4f}, {seq.midprice.max():.4f}], "
           f"mean={seq.midprice.mean():.4f}")
-    print(f"per_tick  stats (mean, std):")
+    print("per_tick  stats (mean, std):")
     for i in range(F_TICK):
         print(f"  f{i:02d}  mean={seq.per_tick[:, i].mean():+.4f}  "
               f"std={seq.per_tick[:, i].std():.4f}")

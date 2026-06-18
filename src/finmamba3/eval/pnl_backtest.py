@@ -418,7 +418,7 @@ def world_model_edge_ev_series(wm, seq, device: torch.device, window_len: int = 
     Mirrors world_model_yes_prob_series() exactly except the edge head replaces the settlement head.
     Returns an empty dict when the market is too short or the model has no edge head.
     """
-    if not getattr(wm, 'use_edge_head', False) or wm.edge_head is None:
+    if not wm.use_edge_head or wm.edge_head is None:
         return {}
     flat = seq.to_flat()
     total_ticks = flat.shape[0]
@@ -841,7 +841,7 @@ def main() -> int:
     include_cross = cfg.Models.WorldModel.Encoder.get("CrossIntervalContext", False)
     wm = load_world_model(cfg, args.checkpoint, device)
     if args.prob_source == "edge":
-        assert getattr(wm, 'use_edge_head', False), "checkpoint has no edge head; train with EdgeHead.Enabled=True or use --prob-source settlement."
+        assert wm.use_edge_head, "checkpoint has no edge head; train with EdgeHead.Enabled=True or use --prob-source settlement."
     else:
         assert wm.use_settlement_head, "checkpoint has no settlement head; the PnL strategy trades its YES probability."
     assets = [a.strip().upper() for a in args.assets.split(",")]

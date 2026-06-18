@@ -22,7 +22,6 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 from finmamba3.envs.lob_features import (
     FLAT_FEATURE_NAMES,
-    FEATURE_DIM_FLAT,
     LOBSequence,
     denormalize_flat,
     make_aggregate_only,

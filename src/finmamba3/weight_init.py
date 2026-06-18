@@ -17,15 +17,12 @@ def _zero_bias(module):
         module.bias.data.fill_(0.0)
 
 
-def _fan_in_out(module):
-    if module.__class__ is nn.Linear:
-        return module.in_features, module.out_features
-    space = module.kernel_size[0] * module.kernel_size[1]
-    return space * module.in_channels, space * module.out_channels
-
-
 def _init_trunc_normal(module):
-    fan_in, fan_out = _fan_in_out(module)
+    if module.__class__ is nn.Linear:
+        fan_in, fan_out = module.in_features, module.out_features
+    else:
+        space = module.kernel_size[0] * module.kernel_size[1]
+        fan_in, fan_out = space * module.in_channels, space * module.out_channels
     scale = 1.0 / ((fan_in + fan_out) / 2.0)
     std = np.sqrt(scale) / _TRUNC_NORMAL_FACTOR
     nn.init.trunc_normal_(module.weight.data, mean=0.0, std=std, a=-2.0 * std, b=2.0 * std)

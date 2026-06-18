@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import deque
 import numpy as np
 import torch
-from finmamba3.envs.lob_features import apply_normalization, extract_features, load_normalization
+from finmamba3.envs.lob_features import apply_normalization, extract_features
 from finmamba3.backtester.data_loader import TickData
 from finmamba3.backtester.strategy import BaseStrategy, MarketState, Order, Side, StoredBook, Token
 # endregion
@@ -22,8 +22,7 @@ class FinMamba3CompetitionStrategy(BaseStrategy):
     """Wraps a pretrained world model as a competition BaseStrategy.
 
     The world model is injected (already constructed and loaded) so the feature
-    path can be unit-tested without a GPU. Use build_competition_strategy to
-    construct one from a checkpoint.
+    path can be unit-tested without a GPU.
     """
 
     def __init__(
@@ -95,35 +94,3 @@ class FinMamba3CompetitionStrategy(BaseStrategy):
         if direction == 0:
             return [Order(market_slug=slug, token=Token.NO, side=Side.BUY, size=self.order_size, limit_price=None)]
         return []
-
-
-def build_competition_strategy(
-    checkpoint_path: str,
-    config_path: str,
-    norm_path: str,
-    device: str = "cuda",
-    threshold: float = 0.005,
-    order_size: float = 10.0,
-):
-    """Construct a strategy from a Phase-A checkpoint, config, and normalization stats."""
-    import yaml
-    from finmamba3.config import DotDict
-    from finmamba3.models.world_model import WorldModel
-    with open(config_path) as f:
-        config = DotDict(yaml.safe_load(f))
-    world_model = WorldModel(action_dim=1, config=config, device=torch.device(device)).to(device)
-    state = torch.load(checkpoint_path, map_location=device)
-    world_model.load_state_dict(state.get("world_model", state))
-    world_model.eval()
-    stats = load_normalization(norm_path)
-    encoder_cfg = config.Models.WorldModel.Encoder
-    mid_index = int(encoder_cfg.K) * int(encoder_cfg.FeatureDimLevel)
-    return FinMamba3CompetitionStrategy(
-        world_model=world_model,
-        stats=stats,
-        mid_index=mid_index,
-        threshold=threshold,
-        order_size=order_size,
-        device=device,
-        include_binary_features=bool(encoder_cfg.BinaryMarketFeatures),
-    )

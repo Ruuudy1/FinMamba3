@@ -19,7 +19,7 @@ aggregation choice.
 # region imports
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Callable, Iterable, Iterator
+from typing import Iterable, Iterator
 import numpy as np
 # endregion
 
@@ -77,19 +77,6 @@ class _BarAccumulator:
         self.bar_start_ts = None
 
 
-def _emit(acc: _BarAccumulator, sum_indices: tuple[int, ...]) -> np.ndarray:
-    """Materialize a bar feature vector from an accumulator.
-
-    Sum-mode features (sum_indices) are summed across the bar; everything
-    else is taken from the last tick to preserve close-of-bar semantics.
-    """
-    out = acc.last_buf.copy()
-    if acc.count > 0:
-        for i in sum_indices:
-            out[i] = float(acc.sum_buf[i])
-    return out
-
-
 def aggregate_to_bars(
     feature_stream: Iterable[np.ndarray],
     timestamps: Iterable[float],
@@ -145,28 +132,28 @@ def aggregate_to_bars(
             vol_term = float(x[volume_index])
             acc.cum_volume += vol_term
             acc.cum_dollar += vol_term * mid
-        triggered = _bar_triggered(acc, ts, config)
+        if config.kind == "time":
+            triggered = acc.bar_start_ts is not None and float(ts) - acc.bar_start_ts >= config.time_seconds
+        elif config.kind == "volume":
+            triggered = acc.cum_volume >= config.volume_threshold
+        elif config.kind == "dollar":
+            triggered = acc.cum_dollar >= config.dollar_threshold
+        elif config.kind == "tick_imbalance":
+            triggered = abs(acc.cum_signed_tick) >= config.tick_imbalance_threshold
+        elif config.kind == "cusum":
+            triggered = max(acc.cusum_pos, -acc.cusum_neg) >= config.cusum_threshold
+        else:
+            raise ValueError(f"Unknown BarConfig.kind: {config.kind!r}")
         if triggered:
-            yield _emit(acc, sum_indices), float(ts)
+            # Carry the last tick for close-of-bar semantics; sum-mode features
+            # are summed across the bar instead.
+            bar = acc.last_buf.copy()
+            if acc.count > 0:
+                for sum_index in sum_indices:
+                    bar[sum_index] = float(acc.sum_buf[sum_index])
+            yield bar, float(ts)
             acc.reset()
             acc.bar_start_ts = float(ts)
-
-
-def _bar_triggered(acc: _BarAccumulator, ts: float, config: BarConfig) -> bool:
-    """Decide whether the current bar should close at this tick."""
-    if config.kind == "time":
-        if acc.bar_start_ts is None:
-            return False
-        return float(ts) - acc.bar_start_ts >= config.time_seconds
-    if config.kind == "volume":
-        return acc.cum_volume >= config.volume_threshold
-    if config.kind == "dollar":
-        return acc.cum_dollar >= config.dollar_threshold
-    if config.kind == "tick_imbalance":
-        return abs(acc.cum_signed_tick) >= config.tick_imbalance_threshold
-    if config.kind == "cusum":
-        return max(acc.cusum_pos, -acc.cusum_neg) >= config.cusum_threshold
-    raise ValueError(f"Unknown BarConfig.kind: {config.kind!r}")
 
 
 def aggregate_array(

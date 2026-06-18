@@ -8,7 +8,7 @@ from finmamba3.models.laprop import LaProp
 from pytorch_warmup import LinearWarmup
 from finmamba3.models.losses import CategoricalKLDivLossWithFreeBits, SymLogTwoHotLoss
 from finmamba3.models.world_model_heads import DistHead, RewardHead, TerminationHead
-from finmamba3.models.attention import get_subsequent_mask_with_batch_length, get_subsequent_mask
+from finmamba3.models.attention import get_subsequent_mask_with_batch_length
 from finmamba3.models.transformer import StochasticTransformerKVCache
 from finmamba3.models.mamba_backbone import FinMambaSequenceModel
 from finmamba3.models.regime_modulation import (
@@ -39,7 +39,6 @@ from finmamba3.models.lob_encoder import (
 )
 from finmamba3.rl.actor_critic import ActorCriticAgent
 from finmamba3.weight_init import weight_init
-from finmamba3.models.activations import ACTIVATION_BY_NAME
 # endregion
 RMSNorm = nn.RMSNorm
 
@@ -509,40 +508,6 @@ class WorldModel(nn.Module):
             sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
-    def calc_last_dist_feat(self, latent, action, inference_params=None):
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            if self.model == 'Transformer':
-                temporal_mask = get_subsequent_mask(latent)
-                dist_feat = self.sequence_model(latent, action, temporal_mask)
-            else:
-                dist_feat = self.sequence_model(latent, action, inference_params)
-            last_dist_feat = dist_feat[:, -1:]
-            conditioned_last_dist_feat = self.condition_dist_feat(last_dist_feat)
-            prior_logits = self.dist_head.forward_prior(conditioned_last_dist_feat)
-            prior_sample = self.straight_through_gradient(prior_logits, sample_mode="random_sample")
-            prior_flattened_sample = self.flatten_sample(prior_sample)
-        return prior_flattened_sample, conditioned_last_dist_feat
-    def calc_last_post_feat(self, latent, action, current_obs, inference_params=None):
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            embedding = self.encoder(current_obs)
-            post_logits = self.dist_head.forward_post(embedding)
-            sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
-            flattened_sample = self.flatten_sample(sample)
-            if self.model == 'Transformer':
-                temporal_mask = get_subsequent_mask(latent)
-                dist_feat = self.sequence_model(latent, action, temporal_mask)
-            else:
-                dist_feat = self.sequence_model(latent, action, inference_params)
-            last_dist_feat = dist_feat[:, -1:]
-            last_dist_feat = self.condition_dist_feat(last_dist_feat)
-            shifted_feat = last_dist_feat
-            x = torch.cat((shifted_feat, flattened_sample), -1)
-            post_feat = self._obs_out_layers(x)
-            post_stat = self._obs_stat_layer(post_feat)
-            post_logits = post_stat.reshape(list(post_stat.shape[:-1]) + [self.categorical_dim, self.categorical_dim])
-            post_sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
-            post_flattened_sample = self.flatten_sample(post_sample)
-        return post_flattened_sample, post_feat
     # Called only when using the Transformer backbone (requires KV cache).
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -675,8 +640,6 @@ class WorldModel(nn.Module):
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
-
-
     def _direction_class_weight(self, flat_targets, dtype):
         """Per-batch inverse-frequency class weights for the direction cross-entropy, or None.
 
@@ -690,8 +653,6 @@ class WorldModel(nn.Module):
             return None
         counts = torch.bincount(flat_targets, minlength=self.direction_num_classes).to(dtype=dtype)
         return counts.clamp(min=1.0).reciprocal()
-
-
     def update(self, obs, action, reward, termination, global_step, epoch_step,
                logger=None, accum_steps: int = 1, is_last_accum: bool = True,
                event_counts: torch.Tensor | None = None,
@@ -848,8 +809,8 @@ class WorldModel(nn.Module):
             # ask prices and the realized settlement outcome. Rows with NaN asks or zero depth are
             # masked out so existing configs without edge data run unchanged.
             edge_zero = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
-            if (self.use_edge_head and outcome is not None
-                    and yes_ask is not None and no_ask is not None and book_depth is not None):
+            if (self.use_edge_head and outcome is not None and
+                    yes_ask is not None and no_ask is not None and book_depth is not None):
                 ev_hat = self.edge_head(conditioned_dist_feat).float()
                 outcome_f = outcome.to(ev_hat.dtype)
                 yes_ask_f = yes_ask.to(ev_hat.dtype)

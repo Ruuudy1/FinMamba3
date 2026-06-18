@@ -19,7 +19,6 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-import numpy as np
 import torch
 from finmamba3.envs.fi2010_loader import load_fi2010_split
 from finmamba3.envs.lob_features import apply_normalization, load_normalization

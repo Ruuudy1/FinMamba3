@@ -2,7 +2,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import repeat, rearrange
 from finmamba3.models.attention import get_vector_mask
 from finmamba3.models.attention import PositionalEncoding1D, AttentionBlock, AttentionBlockKVCache
 # endregion

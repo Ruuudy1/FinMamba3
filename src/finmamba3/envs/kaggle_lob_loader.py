@@ -28,9 +28,7 @@ from finmamba3.envs.lob_features import (
     F_LEVEL,
     F_TICK,
     K_LEVELS,
-    LEVEL_FEATURE_NAMES,
     LOBSequence,
-    TICK_FEATURE_NAMES,
 )
 # endregion
 logger = logging.getLogger(__name__)
@@ -61,27 +59,22 @@ class KaggleLOBSequence:
     resolution: str
 
 
-def _needed_columns() -> list[str]:
+def _read_kaggle_frame(csv_path: Path, max_rows: int | None) -> pandas.DataFrame:
     # Read only the columns the 8/14 schema consumes; usecols keeps the 1sec files from
     # materializing their order-flow-decomposition columns, which this spot schema does not use.
-    columns = ["midpoint", "spread", "buys", "sells"]
+    needed = ["midpoint", "spread", "buys", "sells"]
     for k in range(KAGGLE_LEVELS_PER_SIDE):
-        columns.append(f"bids_distance_{k}")
-        columns.append(f"asks_distance_{k}")
+        needed.append(f"bids_distance_{k}")
+        needed.append(f"asks_distance_{k}")
     for k in range(KAGGLE_BOOK_DEPTH):
-        columns.append(f"bids_notional_{k}")
-        columns.append(f"asks_notional_{k}")
-        columns.append(f"bids_limit_notional_{k}")
-        columns.append(f"asks_limit_notional_{k}")
-        columns.append(f"bids_market_notional_{k}")
-        columns.append(f"asks_market_notional_{k}")
-    return columns
-
-
-def _read_kaggle_frame(csv_path: Path, max_rows: int | None) -> pandas.DataFrame:
+        needed.append(f"bids_notional_{k}")
+        needed.append(f"asks_notional_{k}")
+        needed.append(f"bids_limit_notional_{k}")
+        needed.append(f"asks_limit_notional_{k}")
+        needed.append(f"bids_market_notional_{k}")
+        needed.append(f"asks_market_notional_{k}")
     # nrows caps the read for an --hours slice; dropna removes the occasional gap snapshot so the
     # downstream finiteness assertion guards genuine bugs rather than known missing rows.
-    needed = _needed_columns()
     frame = pandas.read_csv(csv_path, usecols=needed, nrows=max_rows)
     frame = frame[needed].dropna(axis=0, how="any").reset_index(drop=True)
     if frame.shape[0] < 2:

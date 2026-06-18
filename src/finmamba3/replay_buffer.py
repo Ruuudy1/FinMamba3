@@ -61,15 +61,11 @@ class ReplayBuffer():
         # Cache the boundary-aware start mask keyed by (length, batch_length). The
         # buffer is static after population, so each mask is built exactly once.
         self.valid_start_mask_by_key = {}
-        self.world_model_warmup_length = config.JointTrainAgent.WorldModelWarmUp
-        self.behaviour_warmup_length = config.JointTrainAgent.BehaviourWarmUp
         self.tau = config.JointTrainAgent.Tau
         self.imagination_tau = config.JointTrainAgent.ImaginationTau
         self.alpha = config.JointTrainAgent.Alpha
         self.beta = config.JointTrainAgent.Beta
         self.batch_scale_factor = config.JointTrainAgent.ImagineBatchSize / config.JointTrainAgent.BatchSize
-    def ready(self, model_name='world_model'):
-        return self.length  > self.world_model_warmup_length if model_name == 'world_model' else self.length  > self.behaviour_warmup_length
     def _valid_start_mask(self, batch_length):
         # A window [s, s + batch_length - 1] is valid iff no segment boundary falls
         # strictly inside it; a boundary at the final index is fine because the next

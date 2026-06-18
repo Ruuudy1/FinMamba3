@@ -2,17 +2,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from einops import rearrange, repeat
+from einops import repeat
 # endregion
-
-
-def get_subsequent_mask(seq):
-    """Return a lower-triangular causal mask that hides future positions."""
-    batch_size, batch_length = seq.shape[:2]
-    subsequent_mask = (1 - torch.triu(
-        torch.ones((1, batch_length, batch_length), device=seq.device), diagonal=1)).bool()
-    return subsequent_mask
 
 
 def get_subsequent_mask_with_batch_length(batch_length, device):

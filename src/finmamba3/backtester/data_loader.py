@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from .strategy import (
     MarketLifecycle,
-    MarketStatus,
     OrderBookLevel,
     OrderBookSnapshot,
     Settlement,

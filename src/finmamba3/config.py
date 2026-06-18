@@ -26,14 +26,6 @@ class DotDict(dict):
         return value
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
-    def update_or_create(self, key_path, value):
-        keys = key_path.split(".")
-        d = self
-        for key in keys[:-1]:
-            if key not in d or not isinstance(d[key], dict):
-                d[key] = DotDict()
-            d = d[key]
-        d[keys[-1]] = value
 
 
 def _dtype_mapper(dtype_value):
