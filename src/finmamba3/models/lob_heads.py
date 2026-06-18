@@ -193,10 +193,12 @@ class HawkesIntensityHead(nn.Module):
         log_intensity: torch.Tensor,
         counts: torch.Tensor,
     ) -> torch.Tensor:
-        """Per-step Poisson negative log-likelihood, mean-reduced."""
+        """Per-step Poisson negative log-likelihood, masked and mean-reduced."""
+        mask = torch.isfinite(counts).to(log_intensity.dtype)
+        safe_counts = torch.where(torch.isfinite(counts), counts, torch.zeros_like(counts))
         intensity = log_intensity.exp()
-        nll = intensity - counts * log_intensity
-        return nll.mean()
+        nll = intensity - safe_counts * log_intensity
+        return (nll * mask).sum() / mask.sum().clamp(min=1.0)
 
 
 class SettlementHead(nn.Module):
@@ -271,6 +273,118 @@ class SettlementHead(nn.Module):
         else:
             weight = time_to_expiry_frac.clamp(min=0.0, max=1.0).to(logits.dtype)
         return (per * weight * mask).sum() / mask.sum().clamp(min=1.0)
+
+
+class BookRelativeEdgeHead(nn.Module):
+    """Predicts expected value of buying YES and NO at the current ask prices.
+
+    Targets:
+      ev_yes = outcome_yes - yes_ask    (positive means BUY_YES is profitable)
+      ev_no  = (1 - outcome_yes) - no_ask  (positive means BUY_NO is profitable)
+
+    Rows where yes_ask, no_ask, or outcome is NaN, or where book_depth == 0, are masked
+    from all EV losses. The action CE derives three-class labels from ground-truth EVs:
+    BUY_YES (1) or BUY_NO (2) when the respective EV exceeds the threshold and dominates
+    the other side; SIT (0) otherwise.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int,
+        dtype: torch.dtype | None = None,
+        device: torch.device | str | None = None,
+    ) -> None:
+        super().__init__()
+        factory = {"dtype": dtype, "device": device}
+        self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
+        self.act = nn.SiLU()
+        self.head = nn.Linear(hidden_dim // 2, 2, **factory)
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        h = self.act(self.proj(hidden))
+        return self.head(h)
+
+    @staticmethod
+    def ev_targets(
+        outcome: torch.Tensor,
+        yes_ask: torch.Tensor,
+        no_ask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """EV targets from ground-truth outcome and ask prices. All (B, L)."""
+        ev_yes = outcome - yes_ask
+        ev_no = (1.0 - outcome) - no_ask
+        return ev_yes, ev_no
+
+    @staticmethod
+    def finite_mask(
+        outcome: torch.Tensor,
+        yes_ask: torch.Tensor,
+        no_ask: torch.Tensor,
+        book_depth: torch.Tensor,
+    ) -> torch.Tensor:
+        """Boolean (B, L) mask: True where all supervision inputs are finite and depth > 0."""
+        return (
+            torch.isfinite(outcome)
+            & torch.isfinite(yes_ask)
+            & torch.isfinite(no_ask)
+            & torch.isfinite(book_depth)
+            & (book_depth > 0.0)
+        )
+
+    @staticmethod
+    def action_labels(
+        ev_yes: torch.Tensor,
+        ev_no: torch.Tensor,
+        threshold: float = 0.03,
+    ) -> torch.Tensor:
+        """Action class labels: 0=SIT, 1=BUY_YES, 2=BUY_NO."""
+        buy_yes = (ev_yes >= threshold) & (ev_yes > ev_no)
+        buy_no = (ev_no >= threshold) & (ev_no > ev_yes)
+        labels = torch.zeros_like(ev_yes, dtype=torch.long)
+        labels = torch.where(buy_yes, torch.ones_like(labels), labels)
+        labels = torch.where(buy_no, torch.full_like(labels, 2), labels)
+        return labels
+
+    @staticmethod
+    def huber_ev_loss(
+        ev_hat: torch.Tensor,
+        ev_yes: torch.Tensor,
+        ev_no: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Huber loss on [ev_yes, ev_no] targets, masked. ev_hat shape (B, L, 2).
+
+        NaN targets at masked positions are replaced with 0 before the loss call so they
+        cannot produce NaN gradients via 0 * NaN, matching the SettlementHead.bce pattern.
+        """
+        safe_yes = torch.where(torch.isfinite(ev_yes), ev_yes, torch.zeros_like(ev_yes))
+        safe_no = torch.where(torch.isfinite(ev_no), ev_no, torch.zeros_like(ev_no))
+        targets = torch.stack([safe_yes, safe_no], dim=-1)
+        per = F.huber_loss(ev_hat, targets, reduction="none")
+        mask2 = mask.unsqueeze(-1).expand_as(per).to(per.dtype)
+        return (per * mask2).sum() / mask2.sum().clamp(min=1.0)
+
+    @staticmethod
+    def action_ce_loss(
+        ev_hat: torch.Tensor,
+        ev_yes: torch.Tensor,
+        ev_no: torch.Tensor,
+        mask: torch.Tensor,
+        threshold: float = 0.03,
+    ) -> torch.Tensor:
+        """CE on {SIT, BUY_YES, BUY_NO} from EV predictions and ground-truth labels.
+
+        SIT logit is fixed at `threshold` so the model prefers YES/NO exactly when
+        the predicted EV exceeds the threshold that defines the action boundary.
+        """
+        labels = BookRelativeEdgeHead.action_labels(ev_yes, ev_no, threshold)
+        sit_logit = torch.full_like(ev_hat[..., :1], threshold)
+        logits = torch.cat([sit_logit, ev_hat], dim=-1)
+        flat_logits = logits[mask].reshape(-1, 3)
+        flat_labels = labels[mask].reshape(-1)
+        if flat_labels.numel() == 0:
+            return torch.zeros((), device=ev_hat.device, dtype=ev_hat.dtype)
+        return F.cross_entropy(flat_logits, flat_labels)
 
 
 class EpisodicMemoryFuser(nn.Module):

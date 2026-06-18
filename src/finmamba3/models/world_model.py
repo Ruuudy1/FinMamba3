@@ -21,6 +21,7 @@ from finmamba3.models.regime_modulation import (
     regime_supervision_loss,
 )
 from finmamba3.models.lob_heads import (
+    BookRelativeEdgeHead,
     DirectionHead,
     EpisodicMemory,
     EpisodicMemoryFuser,
@@ -389,6 +390,24 @@ class WorldModel(nn.Module):
             self.settlement_tte_weighted = False
             self.use_settlement_spot_sign = False
             self.settlement_spot_sign_weight = 0.0
+        edge_cfg = config.Models.WorldModel.get('EdgeHead', None)
+        self.use_edge_head = bool(edge_cfg is not None and edge_cfg.get('Enabled', False))
+        if self.use_edge_head:
+            self.edge_head = BookRelativeEdgeHead(
+                hidden_dim=self.hidden_state_dim,
+                dtype=config.Models.WorldModel.dtype,
+                device=device,
+            )
+            self.edge_huber_weight = float(edge_cfg.get('HuberWeight', 1.0))
+            self.use_edge_action_ce = bool(edge_cfg.get('ActionCE', False))
+            self.edge_action_ce_weight = float(edge_cfg.get('ActionCEWeight', 0.5))
+            self.edge_threshold = float(edge_cfg.get('Threshold', 0.03))
+        else:
+            self.edge_head = None
+            self.edge_huber_weight = 0.0
+            self.use_edge_action_ce = False
+            self.edge_action_ce_weight = 0.0
+            self.edge_threshold = 0.03
         # When DirectionThresholds is a list, the direction loss is computed at each threshold and averaged.
         # This replaces the single-threshold (1%) target with a curve over thresholds.
         self.direction_thresholds = config.Models.WorldModel.get('DirectionThresholds', None)
@@ -678,7 +697,11 @@ class WorldModel(nn.Module):
                event_counts: torch.Tensor | None = None,
                outcome: torch.Tensor | None = None,
                time_to_expiry_frac: torch.Tensor | None = None,
-               spot_signed_distance: torch.Tensor | None = None):
+               spot_signed_distance: torch.Tensor | None = None,
+               yes_ask: torch.Tensor | None = None,
+               no_ask: torch.Tensor | None = None,
+               yes_mid: torch.Tensor | None = None,
+               book_depth: torch.Tensor | None = None):
         self.train()
         batch_size, batch_length = obs.shape[:2]
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -821,6 +844,29 @@ class WorldModel(nn.Module):
                     settlement_loss = settlement_loss + self.settlement_spot_sign_weight * spot_sign_loss
             else:
                 settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            # Book-relative edge head: supervise ev_yes_hat and ev_no_hat directly from the book
+            # ask prices and the realized settlement outcome. Rows with NaN asks or zero depth are
+            # masked out so existing configs without edge data run unchanged.
+            edge_zero = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
+            if (self.use_edge_head and outcome is not None
+                    and yes_ask is not None and no_ask is not None and book_depth is not None):
+                ev_hat = self.edge_head(conditioned_dist_feat).float()
+                outcome_f = outcome.to(ev_hat.dtype)
+                yes_ask_f = yes_ask.to(ev_hat.dtype)
+                no_ask_f = no_ask.to(ev_hat.dtype)
+                book_depth_f = book_depth.to(ev_hat.dtype)
+                mask = BookRelativeEdgeHead.finite_mask(outcome_f, yes_ask_f, no_ask_f, book_depth_f)
+                ev_yes_t, ev_no_t = BookRelativeEdgeHead.ev_targets(outcome_f, yes_ask_f, no_ask_f)
+                edge_huber_loss = BookRelativeEdgeHead.huber_ev_loss(ev_hat, ev_yes_t, ev_no_t, mask)
+                if self.use_edge_action_ce:
+                    edge_action_loss = BookRelativeEdgeHead.action_ce_loss(
+                        ev_hat, ev_yes_t, ev_no_t, mask, self.edge_threshold
+                    )
+                else:
+                    edge_action_loss = edge_zero
+            else:
+                edge_huber_loss = edge_zero
+                edge_action_loss = edge_zero
             # Regime-FiLM load-balance regularizer keeps the inferred regime distribution from collapsing.
             # The entropy, gamma deviation and beta magnitude reported beside it are diagnostics only: they
             # reveal whether the router collapsed and whether FiLM ever left its identity init, never the loss.
@@ -860,6 +906,8 @@ class WorldModel(nn.Module):
                 + self.direction_loss_weight * direction_loss
                 + self.hawkes_loss_weight * hawkes_loss
                 + self.settlement_loss_weight * settlement_loss
+                + self.edge_huber_weight * edge_huber_loss
+                + self.edge_action_ce_weight * edge_action_loss
                 + regime_loss
             )
         # Catch bf16 selective_scan blowups during early training.
@@ -874,7 +922,7 @@ class WorldModel(nn.Module):
                 )
             self.optimizer.zero_grad(set_to_none=True)
             zero = torch.zeros((), device=total_loss.device, dtype=total_loss.dtype)
-            return (zero,) * 15
+            return (zero,) * 17
         self._nan_skip_count = 0
         # Apply gradient update.
         self.scaler.scale(total_loss / accum_steps).backward()
@@ -910,5 +958,6 @@ class WorldModel(nn.Module):
             dynamics_loss.detach(), dynamics_real_kl_div.detach(), representation_loss.detach(),
             representation_real_kl_div.detach(), direction_loss.detach(),
             hawkes_loss.detach(), settlement_loss.detach(), regime_loss.detach(),
-            film_gamma_dev.detach(), film_beta_mag.detach(), regime_entropy.detach(), total_loss.detach(),
+            film_gamma_dev.detach(), film_beta_mag.detach(), regime_entropy.detach(),
+            edge_huber_loss.detach(), edge_action_loss.detach(), total_loss.detach(),
         )

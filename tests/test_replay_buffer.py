@@ -76,22 +76,31 @@ def test_supervision_channels_roundtrip_and_legacy_arity():
     buf = ReplayBuffer(cfg, device="cpu")
     assert np.isnan(buf.tte_frac_buffer).all()
     assert np.isnan(buf.spot_dist_buffer).all()
+    assert np.isnan(buf.event_count_buffer).all()
     obs = np.zeros(2, dtype=np.float32)
     for i in range(20):
         buf.append(
             obs=obs, action=0, reward=0.0, termination=0.0, outcome=1.0,
+            event_counts=np.array([float(i % 3), float((i + 1) % 4)], dtype=np.float32),
             tte_frac=1.0 - i / 19.0, spot_signed_distance=0.001 * (i - 10),
         )
     # Default sample stays the legacy five-tuple so imagination and the existing callers are untouched.
     assert len(buf.sample(batch_size=4, batch_length=8, imagine=False)) == 5
     sampled = buf.sample(batch_size=4, batch_length=8, imagine=False, with_supervision=True)
-    assert len(sampled) == 7
-    _, _, _, _, _, tte_frac, spot_dist = sampled
+    assert len(sampled) == 12
+    _, _, _, _, _, tte_frac, spot_dist, event_counts, yes_ask, no_ask, yes_mid, book_depth = sampled
     assert tte_frac.shape == (4, 8)
     assert spot_dist.shape == (4, 8)
+    assert event_counts.shape == (4, 8, 2)
     assert torch.isfinite(tte_frac).all()
     assert torch.isfinite(spot_dist).all()
+    assert torch.isfinite(event_counts).all()
     assert torch.all((tte_frac >= 0.0) & (tte_frac <= 1.0))
+    # yes_ask/no_ask/yes_mid/book_depth were not provided in append(), so NaN-initialized.
+    assert torch.isnan(yes_ask).all()
+    assert torch.isnan(no_ask).all()
+    assert torch.isnan(yes_mid).all()
+    assert torch.isnan(book_depth).all()
 
 
 def test_supervision_channels_default_nan_when_unpopulated():
@@ -100,9 +109,22 @@ def test_supervision_channels_default_nan_when_unpopulated():
     obs = np.zeros(2, dtype=np.float32)
     for _ in range(12):
         buf.append(obs=obs, action=0, reward=0.0, termination=0.0)
-    _, _, _, _, _, tte_frac, spot_dist = buf.sample(batch_size=4, batch_length=4, with_supervision=True)
+    _, _, _, _, _, tte_frac, spot_dist, event_counts, yes_ask, no_ask, yes_mid, book_depth = buf.sample(batch_size=4, batch_length=4, with_supervision=True)
     assert torch.isnan(tte_frac).all()
     assert torch.isnan(spot_dist).all()
+    assert torch.isnan(event_counts).all()
+    assert torch.isnan(yes_ask).all()
+    assert torch.isnan(no_ask).all()
+    assert torch.isnan(yes_mid).all()
+    assert torch.isnan(book_depth).all()
+
+
+def test_append_rejects_bad_event_count_shape():
+    cfg = _make_config(buffer_max_length=16, feature_dim=2)
+    buf = ReplayBuffer(cfg, device="cpu")
+    obs = np.zeros(2, dtype=np.float32)
+    with pytest.raises(ValueError, match="event_counts"):
+        buf.append(obs=obs, action=0, reward=0.0, termination=0.0, event_counts=np.ones(3, dtype=np.float32))
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for store_on_gpu=True path")

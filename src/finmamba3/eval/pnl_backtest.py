@@ -174,8 +174,12 @@ class WorldModelStrategy(BaseStrategy):
         gate_er_by_slug_ts: dict | None = None,
         min_book_depth: float = 0.0,
         max_book_depth: float = 0.0,
+        ev_by_slug_ts: dict | None = None,
     ) -> None:
         self.prob_by_slug_ts = prob_by_slug_ts
+        # When ev_by_slug_ts is provided, the strategy trades from predicted book-relative EV directly
+        # rather than from probability divergence. All other gates are unchanged so the comparison is fair.
+        self.ev_by_slug_ts = ev_by_slug_ts
         # Optional book-depth band: trade only when two-sided depth is within [min, max]. The min floor
         # tests asset-identity vs depth; the max ceiling (0 = none) excludes the most-liquid/efficient
         # books where the within-BTC probe found the oracle-lag edge reverses, so the pair trades the
@@ -232,9 +236,6 @@ class WorldModelStrategy(BaseStrategy):
             return []
         orders = []
         for slug, view in state.markets.items():
-            model_prob = self.prob_by_slug_ts.get((slug, state.timestamp))
-            if model_prob is None:
-                continue
             if self.use_predictability_gate and self.gate_er_by_slug_ts is not None and self.gate_er_by_slug_ts.get((slug, state.timestamp), 0.0) < self.predictability_threshold:
                 continue
             if self.min_book_depth > 0.0 or self.max_book_depth > 0.0:
@@ -243,31 +244,50 @@ class WorldModelStrategy(BaseStrategy):
                     continue
                 if self.max_book_depth > 0.0 and book_depth > self.max_book_depth:
                     continue
-            if self.calibration_temperature != 1.0:
-                clipped = min(max(model_prob, 1e-6), 1.0 - 1e-6)
-                logit = float(np.log(clipped / (1.0 - clipped)))
-                model_prob = float(1.0 / (1.0 + np.exp(-logit / self.calibration_temperature)))
             if view.time_remaining_frac > self.max_tte_frac or view.time_remaining_frac < self.min_tte_frac:
-                continue
-            book_prob = view.yes_book.mid
-            if book_prob <= 0.0 or book_prob >= 1.0:
-                continue
-            edge = model_prob - book_prob
-            if abs(edge) < self.edge_threshold:
                 continue
             position = state.positions.get(slug)
             held_yes = position.yes_shares if position is not None else 0.0
             held_no = position.no_shares if position is not None else 0.0
-            if edge > 0.0 and view.yes_book.best_ask > 0.0:
-                # Clip the (possibly Kelly-sized) order to the remaining 500-share capacity rather than
-                # dropping it, so a conviction size larger than the cap still trades up to the limit.
-                size = min(self._size(model_prob, book_prob, Token.YES, view.yes_book.best_ask), MAX_SHARES_PER_TOKEN - held_yes)
-                if size > 0.0:
-                    orders.append(Order(market_slug=slug, token=Token.YES, side=Side.BUY, size=size))
-            elif edge < 0.0 and view.no_book.best_ask > 0.0:
-                size = min(self._size(model_prob, book_prob, Token.NO, view.no_book.best_ask), MAX_SHARES_PER_TOKEN - held_no)
-                if size > 0.0:
-                    orders.append(Order(market_slug=slug, token=Token.NO, side=Side.BUY, size=size))
+            if self.ev_by_slug_ts is not None:
+                # Edge mode: trade directly from predicted book-relative EV.
+                ev_pair = self.ev_by_slug_ts.get((slug, state.timestamp))
+                if ev_pair is None:
+                    continue
+                ev_yes_hat, ev_no_hat = ev_pair
+                if ev_yes_hat >= self.edge_threshold and ev_yes_hat > ev_no_hat and view.yes_book.best_ask > 0.0:
+                    size = min(self.order_size, MAX_SHARES_PER_TOKEN - held_yes)
+                    if size > 0.0:
+                        orders.append(Order(market_slug=slug, token=Token.YES, side=Side.BUY, size=size))
+                elif ev_no_hat >= self.edge_threshold and ev_no_hat > ev_yes_hat and view.no_book.best_ask > 0.0:
+                    size = min(self.order_size, MAX_SHARES_PER_TOKEN - held_no)
+                    if size > 0.0:
+                        orders.append(Order(market_slug=slug, token=Token.NO, side=Side.BUY, size=size))
+            else:
+                # Settlement mode: trade from probability divergence (existing path).
+                model_prob = self.prob_by_slug_ts.get((slug, state.timestamp))
+                if model_prob is None:
+                    continue
+                if self.calibration_temperature != 1.0:
+                    clipped = min(max(model_prob, 1e-6), 1.0 - 1e-6)
+                    logit = float(np.log(clipped / (1.0 - clipped)))
+                    model_prob = float(1.0 / (1.0 + np.exp(-logit / self.calibration_temperature)))
+                book_prob = view.yes_book.mid
+                if book_prob <= 0.0 or book_prob >= 1.0:
+                    continue
+                edge = model_prob - book_prob
+                if abs(edge) < self.edge_threshold:
+                    continue
+                if edge > 0.0 and view.yes_book.best_ask > 0.0:
+                    # Clip the (possibly Kelly-sized) order to the remaining 500-share capacity rather than
+                    # dropping it, so a conviction size larger than the cap still trades up to the limit.
+                    size = min(self._size(model_prob, book_prob, Token.YES, view.yes_book.best_ask), MAX_SHARES_PER_TOKEN - held_yes)
+                    if size > 0.0:
+                        orders.append(Order(market_slug=slug, token=Token.YES, side=Side.BUY, size=size))
+                elif edge < 0.0 and view.no_book.best_ask > 0.0:
+                    size = min(self._size(model_prob, book_prob, Token.NO, view.no_book.best_ask), MAX_SHARES_PER_TOKEN - held_no)
+                    if size > 0.0:
+                        orders.append(Order(market_slug=slug, token=Token.NO, side=Side.BUY, size=size))
         return orders
 
 
@@ -389,6 +409,46 @@ def world_model_yes_prob_series(wm, seq, device: torch.device, window_len: int =
         for i, start in enumerate(batch_starts):
             prob_by_ts[int(seq.ts_sec[start + window_len - 1])] = float(last_prob[i])
     return prob_by_ts
+
+
+def world_model_edge_ev_series(wm, seq, device: torch.device, window_len: int = 64, chunk: int = 512,
+                               sample_mode: str = "random_sample") -> dict:
+    """Per-tick (ev_yes_hat, ev_no_hat) for one market, keyed by tick second.
+
+    Mirrors world_model_yes_prob_series() exactly except the edge head replaces the settlement head.
+    Returns an empty dict when the market is too short or the model has no edge head.
+    """
+    if not getattr(wm, 'use_edge_head', False) or wm.edge_head is None:
+        return {}
+    flat = seq.to_flat()
+    total_ticks = flat.shape[0]
+    ev_by_ts = {}
+    if total_ticks < window_len:
+        return ev_by_ts
+    starts = np.arange(0, total_ticks - window_len + 1)
+    for chunk_start in range(0, len(starts), chunk):
+        batch_starts = starts[chunk_start : chunk_start + chunk]
+        windows = np.stack([flat[s : s + window_len] for s in batch_starts], axis=0)
+        obs = torch.from_numpy(windows).float().to(device)
+        action = torch.zeros((obs.shape[0], window_len), dtype=torch.float32, device=device)
+        with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
+            embedding = wm.encoder(obs)
+            post_logits = wm.dist_head.forward_post(embedding)
+            sample = wm.straight_through_gradient(post_logits, sample_mode=sample_mode)
+            flattened_sample = wm.flatten_sample(sample)
+            if wm.model == "Transformer":
+                from finmamba3.models.attention import get_subsequent_mask_with_batch_length
+                mask_t = get_subsequent_mask_with_batch_length(window_len, flattened_sample.device)
+                dist_feat = wm.sequence_model(flattened_sample, action, mask_t)
+            else:
+                dist_feat = wm.sequence_model(flattened_sample, action)
+            dist_feat = wm.condition_dist_feat(dist_feat)
+            ev_hat = wm.edge_head(dist_feat).float()
+        last_ev = ev_hat[:, -1].cpu().numpy()
+        for i, start in enumerate(batch_starts):
+            ts = int(seq.ts_sec[start + window_len - 1])
+            ev_by_ts[ts] = (float(last_ev[i, 0]), float(last_ev[i, 1]))
+    return ev_by_ts
 
 
 def _causal_er_series(spot: np.ndarray, window: int) -> np.ndarray:
@@ -553,21 +613,35 @@ def _load_config(config_path: Path, overrides: list[str]) -> DotDict:
 def run_pnl_backtest(
     wm, bt, stats, slugs: list[str], engine_ticks, device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
-    strategy_kwargs: dict, cash: float,
+    strategy_kwargs: dict, cash: float, prob_source: str = "settlement",
+    slippage_per_share: float = 0.0,
 ) -> dict:
     """Backtest one regime's slugs with the world-model strategy and the naive-lag baseline.
 
     Returns each arm's PnL/Sharpe/trades, the world model's per-trade bootstrap survivability, and
     the model-minus-naive PnL so the report can apply the anti-artifact gate (the model must beat
     the mechanical oracle-lag baseline). The engine data is built once and replayed for both arms.
+    prob_source='edge' routes through the BookRelativeEdgeHead instead of the settlement head.
+    slippage_per_share subtracts a per-share execution cost from each fill in the bootstrap only.
     """
     prob_by_slug_ts = {}
+    ev_by_slug_ts = {}
     for slug in slugs:
         seq = _eval_sequence(bt, slug, stats, include_binary, include_spot, include_cross)
-        for ts, prob in world_model_yes_prob_series(wm, seq, device).items():
-            prob_by_slug_ts[(slug, ts)] = prob
+        if prob_source == "edge":
+            for ts, ev_pair in world_model_edge_ev_series(wm, seq, device).items():
+                ev_by_slug_ts[(slug, ts)] = ev_pair
+                # prob_by_slug_ts is not used in edge mode but must be non-empty for strategy init
+                prob_by_slug_ts[(slug, ts)] = 0.5
+        else:
+            for ts, prob in world_model_yes_prob_series(wm, seq, device).items():
+                prob_by_slug_ts[(slug, ts)] = prob
     engine_data = _engine_data_for_slugs(engine_ticks, bt, slugs)
-    model_strategy = WorldModelStrategy(prob_by_slug_ts, bankroll=cash, **strategy_kwargs)
+    model_strategy = WorldModelStrategy(
+        prob_by_slug_ts, bankroll=cash,
+        ev_by_slug_ts=ev_by_slug_ts if prob_source == "edge" else None,
+        **strategy_kwargs,
+    )
     model_result = BacktestEngine(engine_data, model_strategy, starting_cash=cash, snapshot_interval=60).run()
     naive_strategy = NaiveLagStrategy(
         cusum_threshold=strategy_kwargs["cusum_threshold"],
@@ -575,7 +649,7 @@ def run_pnl_backtest(
         max_tte_frac=strategy_kwargs["max_tte_frac"],
     )
     naive_result = BacktestEngine(engine_data, naive_strategy, starting_cash=cash, snapshot_interval=60).run()
-    bootstrap = bootstrap_survivability(per_trade_pnls(model_result), bankroll=cash)
+    bootstrap = bootstrap_survivability(per_trade_pnls(model_result, slippage_per_share), bankroll=cash)
     return {
         "model": {
             "pnl": float(model_result.total_pnl),
@@ -747,6 +821,8 @@ def parse_args() -> argparse.Namespace:
                    help="Book-depth gate: trade only when two-sided depth clears this floor (tests asset-identity vs depth).")
     p.add_argument("--max-book-depth", type=float, default=0.0,
                    help="Book-depth ceiling (0 = none): skip the most-liquid/efficient books, trading the liquidity band.")
+    p.add_argument("--prob-source", choices=("settlement", "edge"), default="settlement",
+                   help="settlement: trade from settlement probability (existing path); edge: trade from predicted EV (BookRelativeEdgeHead).")
     p.add_argument("--deterministic-latent", action="store_true",
                    help="Use the deterministic latent ('probs') in the prob precompute so the sweep PnL is reproducible.")
     p.add_argument("--cash", type=float, default=10_000.0)
@@ -764,7 +840,10 @@ def main() -> int:
     include_spot = cfg.Models.WorldModel.Encoder.get("SpotFeatures", False)
     include_cross = cfg.Models.WorldModel.Encoder.get("CrossIntervalContext", False)
     wm = load_world_model(cfg, args.checkpoint, device)
-    assert wm.use_settlement_head, "checkpoint has no settlement head; the PnL strategy trades its YES probability."
+    if args.prob_source == "edge":
+        assert getattr(wm, 'use_edge_head', False), "checkpoint has no edge head; train with EdgeHead.Enabled=True or use --prob-source settlement."
+    else:
+        assert wm.use_settlement_head, "checkpoint has no settlement head; the PnL strategy trades its YES probability."
     assets = [a.strip().upper() for a in args.assets.split(",")]
     intervals = [s.strip() for s in args.intervals.split(",")] if args.intervals else None
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val, assets=assets, intervals=intervals)
@@ -836,11 +915,14 @@ def main() -> int:
         "checkpoint": str(args.checkpoint), "regime_film": bool(args.regime_film),
         "regime_axis": args.regime_axis, "split": split.description,
         "reference_label": reference_label, "shifted_label": shifted_label,
+        "slippage_per_share": float(args.slippage_per_share),
     }
     for label, slugs in ((reference_label, reference_slugs), (shifted_label, shifted_slugs)):
         report[label] = run_pnl_backtest(
             wm, bt, stats, slugs, engine_ticks, device,
             include_binary, include_spot, include_cross, strategy_kwargs, args.cash,
+            prob_source=args.prob_source,
+            slippage_per_share=args.slippage_per_share,
         )
         cell = report[label]
         boot = cell["model"]["bootstrap"]

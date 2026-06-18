@@ -161,11 +161,19 @@ class LOBSequence:
     midprice: np.ndarray   # Shape (T,) float32, raw unnormalized mid.
     ts_sec: np.ndarray     # Shape (T,) int64.
     yes_outcome: np.ndarray | None = None  # Shape (T,) float32 in {0, 1}, or nan if unknown.
+    event_counts: np.ndarray | None = None  # Shape (T, 2) float32 buy/sell arrivals for Hawkes loss.
     # Raw (unnormalized) supervision channels for the settlement loss (Phase 0.3): tte_frac in
     # [0, 1] weights the outcome BCE toward expiry, and the signed spot distance supplies the
     # observable running spot-sign target. None unless include_spot_features built them.
     tte_frac: np.ndarray | None = None
     spot_signed_distance: np.ndarray | None = None
+    # Raw (unnormalized) book-relative edge supervision channels (Phase 2): best ask for YES/NO
+    # tokens, YES book mid, and total YES book depth. Populated by extract_features() for every
+    # usable tick; NaN when the NO book has no ask side. Used by BookRelativeEdgeHead.
+    yes_ask: np.ndarray | None = None
+    no_ask: np.ndarray | None = None
+    yes_mid: np.ndarray | None = None
+    book_depth: np.ndarray | None = None
 
     def to_flat(self) -> np.ndarray:
         # Use the array's own shape so FI-2010 (K, 4) works alongside Polymarket (K, 8).
@@ -338,7 +346,12 @@ def extract_features(
     spot_rows: list[np.ndarray] = []
     tte_raw_list: list[float] = []
     spot_dist_raw_list: list[float] = []
+    event_count_rows: list[np.ndarray] = []
     spot_logret_window: list[float] = []
+    yes_ask_raw_list: list[float] = []
+    no_ask_raw_list: list[float] = []
+    yes_mid_raw_list: list[float] = []
+    book_depth_raw_list: list[float] = []
     prev_spot: float | None = None
     tte_span = max(int(end_ts) - int(start_ts), 1) if include_spot_features else 1
     asset_onehot = _asset_onehot(asset) if include_spot_features else (0.0, 0.0, 0.0)
@@ -382,8 +395,12 @@ def extract_features(
         # Signed top-of-book order-flow imbalance (Cont-Kukanov style).
         if prev_top_bid_size is not None and prev_top_ask_size is not None:
             ofi_top = (top_bid_size - prev_top_bid_size) - (top_ask_size - prev_top_ask_size)
+            buy_events = 1.0 if top_bid_size > prev_top_bid_size else 0.0
+            sell_events = 1.0 if top_ask_size > prev_top_ask_size else 0.0
         else:
             ofi_top = 0.0
+            buy_events = 0.0
+            sell_events = 0.0
         top5 = np.zeros(10, dtype=np.float32)
         for k in range(min(5, len(book.bids))):
             top5[k] = float(book.bids[k].size)
@@ -409,8 +426,16 @@ def extract_features(
         assert tick_vec.shape[0] == F_TICK
         per_level_rows.append(lvl_tokens)
         per_tick_rows.append(tick_vec)
+        event_count_rows.append(np.array([buy_events, sell_events], dtype=np.float32))
         mids.append(mid)
         ts_list.append(int(tick.ts_sec))
+        # Book-relative edge supervision channels: YES ask/mid/depth always available (YES book is
+        # two-sided by the loop guard above); NO ask is NaN when the NO book has no ask levels.
+        no_book = sb.no_book
+        yes_ask_raw_list.append(float(book.best_ask))
+        yes_mid_raw_list.append(float(book.mid))
+        no_ask_raw_list.append(float(no_book.best_ask) if no_book.asks else float('nan'))
+        book_depth_raw_list.append(float(book.total_bid_size + book.total_ask_size))
         if include_spot_features:
             spot_now = _asset_chainlink(tick, asset)
             if spot_now <= 0.0:
@@ -464,8 +489,13 @@ def extract_features(
             if yes_outcome is not None
             else None
         ),
+        event_counts=np.stack(event_count_rows, axis=0).astype(np.float32),
         tte_frac=tte_frac_array,
         spot_signed_distance=spot_signed_distance_array,
+        yes_ask=np.asarray(yes_ask_raw_list, dtype=np.float32),
+        no_ask=np.asarray(no_ask_raw_list, dtype=np.float32),
+        yes_mid=np.asarray(yes_mid_raw_list, dtype=np.float32),
+        book_depth=np.asarray(book_depth_raw_list, dtype=np.float32),
     )
 BASIC_TICK_FEATURE_NAMES = (
     "mid",
@@ -652,8 +682,13 @@ def apply_normalization(seq: LOBSequence, stats: NormalizationStats) -> LOBSeque
         midprice=seq.midprice,
         ts_sec=seq.ts_sec,
         yes_outcome=seq.yes_outcome,
+        event_counts=seq.event_counts,
         tte_frac=seq.tte_frac,
         spot_signed_distance=seq.spot_signed_distance,
+        yes_ask=seq.yes_ask,
+        no_ask=seq.no_ask,
+        yes_mid=seq.yes_mid,
+        book_depth=seq.book_depth,
     )
 
 
@@ -666,8 +701,13 @@ def make_aggregate_only(seq: LOBSequence) -> LOBSequence:
         midprice=seq.midprice,
         ts_sec=seq.ts_sec,
         yes_outcome=seq.yes_outcome,
+        event_counts=seq.event_counts,
         tte_frac=seq.tte_frac,
         spot_signed_distance=seq.spot_signed_distance,
+        yes_ask=seq.yes_ask,
+        no_ask=seq.no_ask,
+        yes_mid=seq.yes_mid,
+        book_depth=seq.book_depth,
     )
 
 

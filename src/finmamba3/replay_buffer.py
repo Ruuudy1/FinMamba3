@@ -22,11 +22,18 @@ class ReplayBuffer():
             self.termination_buffer = torch.empty((max_length), dtype=torch.float32, device=device, requires_grad=False)
             # NaN sentinel: unresolved-market ticks must be visible to the loss path so BCE can mask them out instead of treating uninitialized memory as outcome=0.
             self.outcome_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            self.event_count_buffer = torch.full((max_length, 2), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             # Raw per-tick settlement-supervision channels (Phase 0.3): tte_frac in [0, 1] weights the
             # outcome BCE toward expiry; the signed spot distance gives the observable running spot-sign
             # target. NaN until populated so a buffer with no spot features contributes neither term.
             self.tte_frac_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.spot_dist_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            # Book-relative edge supervision channels (Phase 2): YES/NO ask prices, YES mid, YES depth.
+            # NaN until populated; BookRelativeEdgeHead masks rows where any of these is NaN or depth==0.
+            self.yes_ask_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            self.no_ask_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            self.yes_mid_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
+            self.book_depth_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             # Marks the final tick of each market. A dedicated buffer keeps the
@@ -38,8 +45,13 @@ class ReplayBuffer():
             self.reward_buffer = np.empty((max_length), dtype=np.float32)
             self.termination_buffer = np.empty((max_length), dtype=np.float32)
             self.outcome_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.event_count_buffer = np.full((max_length, 2), np.nan, dtype=np.float32)
             self.tte_frac_buffer = np.full((max_length,), np.nan, dtype=np.float32)
             self.spot_dist_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.yes_ask_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.no_ask_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.yes_mid_buffer = np.full((max_length,), np.nan, dtype=np.float32)
+            self.book_depth_buffer = np.full((max_length,), np.nan, dtype=np.float32)
             self.sampled_counter = np.zeros((max_length), dtype=np.int32)
             self.imagined_counter = np.zeros((max_length), dtype=np.int32)
             self.segment_end_buffer = np.zeros((max_length), dtype=np.float32)
@@ -81,11 +93,16 @@ class ReplayBuffer():
         return mask
     @torch.no_grad()
     def sample(self, batch_size, batch_length, imagine=False, with_supervision=False):
-        # with_supervision additionally returns the raw per-tick tte_frac and signed spot distance
-        # gathered at the same start indices, so the settlement loss can weight by expiry and read
-        # the observable spot sign. Legacy callers keep the five-tuple return untouched.
+        # with_supervision additionally returns per-tick supervision channels: tte_frac, spot_dist,
+        # event_counts (settlement/Hawkes), plus the four book-relative edge channels (yes_ask,
+        # no_ask, yes_mid, book_depth). Legacy five-tuple callers pass with_supervision=False.
         tte_frac = None
         spot_dist = None
+        event_counts = None
+        yes_ask = None
+        no_ask = None
+        yes_mid = None
+        book_depth = None
         if self.store_on_gpu:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             counts = self.sampled_counter[:self.length + 1 - batch_length]
@@ -126,13 +143,23 @@ class ReplayBuffer():
             reward = torch.cat(reward_list, dim=0)
             termination = torch.cat(termination_list, dim=0)
             outcome = torch.cat(outcome_list, dim=0)
+            event_counts = self.event_count_buffer[indexes]
             tte_frac = self.tte_frac_buffer[indexes]
             spot_dist = self.spot_dist_buffer[indexes]
+            yes_ask = self.yes_ask_buffer[indexes]
+            no_ask = self.no_ask_buffer[indexes]
+            yes_mid = self.yes_mid_buffer[indexes]
+            book_depth = self.book_depth_buffer[indexes]
         else:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             outcome_list_cpu: list[torch.Tensor] = []
+            event_count_list_cpu: list[torch.Tensor] = []
             tte_list_cpu: list[torch.Tensor] = []
             spot_list_cpu: list[torch.Tensor] = []
+            yes_ask_list_cpu: list[torch.Tensor] = []
+            no_ask_list_cpu: list[torch.Tensor] = []
+            yes_mid_list_cpu: list[torch.Tensor] = []
+            book_depth_list_cpu: list[torch.Tensor] = []
             if batch_size > 0:
                 counts = self.sampled_counter[:self.length + 1 - batch_length]
                 imagine_counts = self.imagined_counter[:self.length + 1 - batch_length] / self.batch_scale_factor
@@ -164,41 +191,70 @@ class ReplayBuffer():
                 reward_seq = self.reward_buffer[indexes]
                 termination_seq = self.termination_buffer[indexes]
                 outcome_seq = self.outcome_buffer[indexes]
+                event_count_seq = self.event_count_buffer[indexes]
                 obs_seq = torch.from_numpy(obs_seq).float().to(self.device)
                 action_seq = torch.from_numpy(action_seq).to(self.device)
                 reward_seq = torch.from_numpy(reward_seq).to(self.device)
                 termination_seq = torch.from_numpy(termination_seq).to(self.device)
                 outcome_seq = torch.from_numpy(outcome_seq).to(self.device)
+                event_count_seq = torch.from_numpy(event_count_seq).to(self.device)
                 tte_seq = torch.from_numpy(self.tte_frac_buffer[indexes]).to(self.device)
                 spot_seq = torch.from_numpy(self.spot_dist_buffer[indexes]).to(self.device)
+                yes_ask_seq = torch.from_numpy(self.yes_ask_buffer[indexes]).to(self.device)
+                no_ask_seq = torch.from_numpy(self.no_ask_buffer[indexes]).to(self.device)
+                yes_mid_seq = torch.from_numpy(self.yes_mid_buffer[indexes]).to(self.device)
+                book_depth_seq = torch.from_numpy(self.book_depth_buffer[indexes]).to(self.device)
                 obs_list.append(obs_seq)
                 action_list.append(action_seq)
                 reward_list.append(reward_seq)
                 termination_list.append(termination_seq)
                 outcome_list_cpu.append(outcome_seq)
+                event_count_list_cpu.append(event_count_seq)
                 tte_list_cpu.append(tte_seq)
                 spot_list_cpu.append(spot_seq)
+                yes_ask_list_cpu.append(yes_ask_seq)
+                no_ask_list_cpu.append(no_ask_seq)
+                yes_mid_list_cpu.append(yes_mid_seq)
+                book_depth_list_cpu.append(book_depth_seq)
             obs = torch.cat(obs_list, dim=0) if obs_list else torch.empty(0, device=self.device)
             action = torch.cat(action_list, dim=0) if action_list else torch.empty(0, device=self.device)
             reward = torch.cat(reward_list, dim=0) if reward_list else torch.empty(0, device=self.device)
             termination = torch.cat(termination_list, dim=0) if termination_list else torch.empty(0, device=self.device)
             outcome = torch.cat(outcome_list_cpu, dim=0) if outcome_list_cpu else torch.empty(0, device=self.device)
+            event_counts = torch.cat(event_count_list_cpu, dim=0) if event_count_list_cpu else torch.empty(0, device=self.device)
             tte_frac = torch.cat(tte_list_cpu, dim=0) if tte_list_cpu else torch.empty(0, device=self.device)
             spot_dist = torch.cat(spot_list_cpu, dim=0) if spot_list_cpu else torch.empty(0, device=self.device)
+            yes_ask = torch.cat(yes_ask_list_cpu, dim=0) if yes_ask_list_cpu else torch.empty(0, device=self.device)
+            no_ask = torch.cat(no_ask_list_cpu, dim=0) if no_ask_list_cpu else torch.empty(0, device=self.device)
+            yes_mid = torch.cat(yes_mid_list_cpu, dim=0) if yes_mid_list_cpu else torch.empty(0, device=self.device)
+            book_depth = torch.cat(book_depth_list_cpu, dim=0) if book_depth_list_cpu else torch.empty(0, device=self.device)
         if with_supervision:
-            return obs, action, reward, termination, outcome, tte_frac, spot_dist
+            return obs, action, reward, termination, outcome, tte_frac, spot_dist, event_counts, yes_ask, no_ask, yes_mid, book_depth
         return obs, action, reward, termination, outcome
     def append(self, obs, action, reward, termination, outcome=float('nan'),
-               tte_frac=float('nan'), spot_signed_distance=float('nan'), segment_end=False):
+               event_counts=None, tte_frac=float('nan'), spot_signed_distance=float('nan'),
+               yes_ask=float('nan'), no_ask=float('nan'), yes_mid=float('nan'), book_depth=float('nan'),
+               segment_end=False):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length)
+        if event_counts is None:
+            event_count_array = np.full((2,), np.nan, dtype=np.float32)
+        else:
+            event_count_array = np.asarray(event_counts, dtype=np.float32)
+            if event_count_array.shape != (2,):
+                raise ValueError(f"event_counts must have shape (2,), got {event_count_array.shape}.")
         if self.store_on_gpu:
             self.obs_buffer[self.last_pointer] = torch.from_numpy(obs)
             self.action_buffer[self.last_pointer] = torch.tensor(action, device=self.device)
             self.reward_buffer[self.last_pointer] = torch.tensor(reward, device=self.device)
             self.termination_buffer[self.last_pointer] = torch.tensor(termination, device=self.device)
             self.outcome_buffer[self.last_pointer] = torch.tensor(float(outcome), device=self.device)
+            self.event_count_buffer[self.last_pointer] = torch.from_numpy(event_count_array).to(self.device)
             self.tte_frac_buffer[self.last_pointer] = torch.tensor(float(tte_frac), device=self.device)
             self.spot_dist_buffer[self.last_pointer] = torch.tensor(float(spot_signed_distance), device=self.device)
+            self.yes_ask_buffer[self.last_pointer] = torch.tensor(float(yes_ask), device=self.device)
+            self.no_ask_buffer[self.last_pointer] = torch.tensor(float(no_ask), device=self.device)
+            self.yes_mid_buffer[self.last_pointer] = torch.tensor(float(yes_mid), device=self.device)
+            self.book_depth_buffer[self.last_pointer] = torch.tensor(float(book_depth), device=self.device)
             self.segment_end_buffer[self.last_pointer] = float(segment_end)
         else:
             self.obs_buffer[self.last_pointer] = obs
@@ -206,8 +262,13 @@ class ReplayBuffer():
             self.reward_buffer[self.last_pointer] = reward
             self.termination_buffer[self.last_pointer] = termination
             self.outcome_buffer[self.last_pointer] = float(outcome)
+            self.event_count_buffer[self.last_pointer] = event_count_array
             self.tte_frac_buffer[self.last_pointer] = float(tte_frac)
             self.spot_dist_buffer[self.last_pointer] = float(spot_signed_distance)
+            self.yes_ask_buffer[self.last_pointer] = float(yes_ask)
+            self.no_ask_buffer[self.last_pointer] = float(no_ask)
+            self.yes_mid_buffer[self.last_pointer] = float(yes_mid)
+            self.book_depth_buffer[self.last_pointer] = float(book_depth)
             self.segment_end_buffer[self.last_pointer] = float(segment_end)
         if len(self) < self.max_length:
             self.length += 1

@@ -23,6 +23,8 @@ _LOSS_NAMES = (
     "film_gamma_dev",
     "film_beta_mag",
     "regime_entropy",
+    "edge_huber_loss",
+    "edge_action_loss",
     "total_loss",
 )
 
@@ -45,7 +47,8 @@ def train_world_model_step(
     for e in range(epoch):
         accum_stacks: list[list[torch.Tensor]] = [[] for _ in _LOSS_NAMES]
         for a in range(accum_steps):
-            obs, action, reward, termination, outcome, tte_frac, spot_dist = replay_buffer.sample(
+            obs, action, reward, termination, outcome, tte_frac, spot_dist, event_counts, \
+                yes_ask, no_ask, yes_mid, book_depth = replay_buffer.sample(
                 batch_size, batch_length, imagine=False, with_supervision=True
             )
             losses = world_model.update(
@@ -58,9 +61,14 @@ def train_world_model_step(
                 logger=logger,
                 accum_steps=accum_steps,
                 is_last_accum=(a == accum_steps - 1),
+                event_counts=event_counts,
                 outcome=outcome,
                 time_to_expiry_frac=tte_frac,
                 spot_signed_distance=spot_dist,
+                yes_ask=yes_ask,
+                no_ask=no_ask,
+                yes_mid=yes_mid,
+                book_depth=book_depth,
             )
             if should_log:
                 for i, v in enumerate(losses):
@@ -83,7 +91,10 @@ def train_world_model_step(
             f"dyn_kl={mean_by_loss['dynamics_loss']:.3f} "
             f"rep={mean_by_loss['representation_loss']:.3f} "
             f"dir={mean_by_loss['direction_loss']:.3f} "
+            f"hawkes={mean_by_loss['hawkes_loss']:.3f} "
             f"settle={mean_by_loss['settlement_loss']:.3f} "
+            f"ev_hub={mean_by_loss['edge_huber_loss']:.3f} "
+            f"ev_ce={mean_by_loss['edge_action_loss']:.3f} "
             f"film_g={mean_by_loss['film_gamma_dev']:.4f} "
             f"film_b={mean_by_loss['film_beta_mag']:.4f} "
             f"reg_H={mean_by_loss['regime_entropy']:.3f}",

@@ -253,6 +253,57 @@ def test_calibration_temperature_softens_overconfident_probability():
     assert calibrated.on_tick(_state(0.40)) == []
 
 
+# ---- Edge mode (--prob-source edge) tests ----
+
+def test_edge_mode_buys_yes_when_ev_yes_clears_threshold_and_dominates():
+    # ev_yes_hat=0.10 > threshold=0.05 AND ev_yes > ev_no → BUY_YES.
+    ev = {(_SLUG, 100): (0.10, -0.05)}
+    strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
+    orders = strat.on_tick(_state(0.40))
+    assert len(orders) == 1
+    assert orders[0].token == Token.YES
+    assert orders[0].side == Side.BUY
+    assert orders[0].size == 50.0
+
+
+def test_edge_mode_buys_no_when_ev_no_clears_threshold_and_dominates():
+    # ev_no_hat=0.10 > threshold=0.05 AND ev_no > ev_yes → BUY_NO.
+    ev = {(_SLUG, 100): (-0.05, 0.10)}
+    strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
+    orders = strat.on_tick(_state(0.40))
+    assert len(orders) == 1
+    assert orders[0].token == Token.NO
+
+
+def test_edge_mode_sits_when_neither_ev_clears_threshold():
+    # Both EVs below 0.05 threshold → SIT.
+    ev = {(_SLUG, 100): (0.02, 0.01)}
+    strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
+    assert strat.on_tick(_state(0.40)) == []
+
+
+def test_edge_mode_sits_on_tied_ev():
+    # Equal EVs both above threshold: neither dominates → SIT.
+    ev = {(_SLUG, 100): (0.10, 0.10)}
+    strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
+    assert strat.on_tick(_state(0.40)) == []
+
+
+def test_edge_mode_no_trade_without_ev_entry():
+    # Missing (slug, ts) pair → no order.
+    strat = WorldModelStrategy({}, edge_threshold=0.05, ev_by_slug_ts={})
+    assert strat.on_tick(_state(0.40)) == []
+
+
+def test_settlement_path_unchanged_when_ev_by_slug_ts_is_none():
+    # With ev_by_slug_ts=None the existing settlement path runs unmodified.
+    probs = {(_SLUG, 100): 0.80}
+    strat = WorldModelStrategy(probs, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=None)
+    orders = strat.on_tick(_state(0.40))
+    assert len(orders) == 1
+    assert orders[0].token == Token.YES
+
+
 def test_world_model_kelly_sizing_scales_with_edge():
     strat = WorldModelStrategy({(_SLUG, 100): 0.90}, edge_threshold=0.05, sizing="kelly", bankroll=10_000.0)
     orders = strat.on_tick(_state(0.40))

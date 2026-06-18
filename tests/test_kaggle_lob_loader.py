@@ -44,6 +44,14 @@ def _synthetic_kaggle_frame(mid: np.ndarray, seed: int = 0) -> pandas.DataFrame:
     for k in range(KAGGLE_BOOK_DEPTH):
         column_by_name[f"bids_notional_{k}"] = rng.uniform(100.0, 1000.0, num_ticks)
         column_by_name[f"asks_notional_{k}"] = rng.uniform(100.0, 1000.0, num_ticks)
+        column_by_name[f"bids_limit_notional_{k}"] = np.zeros(num_ticks)
+        column_by_name[f"asks_limit_notional_{k}"] = np.zeros(num_ticks)
+        column_by_name[f"bids_market_notional_{k}"] = np.zeros(num_ticks)
+        column_by_name[f"asks_market_notional_{k}"] = np.zeros(num_ticks)
+    column_by_name["bids_limit_notional_0"][1::2] = 10.0
+    column_by_name["asks_market_notional_0"][2::2] = 5.0
+    column_by_name["asks_limit_notional_1"][3::2] = 7.0
+    column_by_name["bids_market_notional_1"][4::2] = 3.0
     return pandas.DataFrame(column_by_name)
 
 
@@ -105,6 +113,18 @@ def test_load_flat_dim_is_94(kaggle_csv):
 def test_load_flat_all_finite(kaggle_csv):
     bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min")
     assert np.isfinite(bundle.sequence.to_flat()).all()
+
+
+def test_load_event_counts_shape_and_values(kaggle_csv):
+    bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min")
+    counts = bundle.sequence.event_counts
+    assert counts.shape == (_MID_PATH.shape[0], 2)
+    assert counts.dtype == np.float32
+    assert counts[0, 0] == 0.0
+    assert counts[1, 0] == 1.0
+    assert counts[2, 0] == 1.0
+    assert counts[3, 1] == 1.0
+    assert counts[4, 1] == 1.0
 
 
 def test_load_per_level_dtype_float32(kaggle_csv):

@@ -666,7 +666,7 @@ def test_world_model_fi2010_stoch_flattened_dim():
     assert wm.stoch_flattened_dim == 16
 
 
-def test_world_model_fi2010_update_returns_fifteen_losses():
+def test_world_model_fi2010_update_returns_seventeen_losses():
     from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
     wm = WorldModel(action_dim=1, config=cfg, device=torch.device("cpu"))
@@ -676,8 +676,8 @@ def test_world_model_fi2010_update_returns_fifteen_losses():
     reward = torch.zeros(B, L)
     termination = torch.zeros(B, L)
     losses = wm.update(obs, action, reward, termination, global_step=1, epoch_step=0)
-    # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics = 15 total.
-    assert len(losses) == 15
+    # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics + 2 edge = 17 total.
+    assert len(losses) == 17
     for t in losses:
         assert torch.is_tensor(t) and torch.isfinite(t).all()
 
@@ -704,7 +704,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
     action = torch.zeros(B, L, dtype=torch.long)
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
-    assert len(losses) == 15
+    assert len(losses) == 17
     direction_loss = losses[7]
     assert torch.isfinite(direction_loss)
 
@@ -753,7 +753,7 @@ def test_world_model_fi2010_regime_film_knobs_train_and_log_diagnostics():
     action = torch.zeros(B, L, dtype=torch.long)
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
-    assert len(losses) == 15
+    assert len(losses) == 17
     assert all(torch.isfinite(t).all() for t in losses)
     film_gamma_dev, film_beta_mag, regime_entropy = losses[11], losses[12], losses[13]
     # A non-zero init means FiLM has already left identity, so gamma deviation is strictly positive,
@@ -784,7 +784,7 @@ def test_world_model_fi2010_regime_supervision_trains_finite_loss():
     action = torch.zeros(B, L, dtype=torch.long)
     losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
                        global_step=1, epoch_step=0)
-    assert len(losses) == 15
+    assert len(losses) == 17
     assert all(torch.isfinite(t).all() for t in losses)
     regime_loss = losses[10]
     assert float(regime_loss) > 0.0, "regime supervision CE must make the regime loss strictly positive."

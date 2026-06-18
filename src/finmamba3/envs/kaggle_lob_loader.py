@@ -71,6 +71,10 @@ def _needed_columns() -> list[str]:
     for k in range(KAGGLE_BOOK_DEPTH):
         columns.append(f"bids_notional_{k}")
         columns.append(f"asks_notional_{k}")
+        columns.append(f"bids_limit_notional_{k}")
+        columns.append(f"asks_limit_notional_{k}")
+        columns.append(f"bids_market_notional_{k}")
+        columns.append(f"asks_market_notional_{k}")
     return columns
 
 
@@ -242,6 +246,10 @@ def load_kaggle_lob(
     ask_notional_top = np.stack([frame[f"asks_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_LEVELS_PER_SIDE)], axis=1)
     bid_notional_all = np.stack([frame[f"bids_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
     ask_notional_all = np.stack([frame[f"asks_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
+    bid_limit_all = np.stack([frame[f"bids_limit_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
+    ask_limit_all = np.stack([frame[f"asks_limit_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
+    bid_market_all = np.stack([frame[f"bids_market_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
+    ask_market_all = np.stack([frame[f"asks_market_notional_{k}"].to_numpy(dtype=np.float64) for k in range(KAGGLE_BOOK_DEPTH)], axis=1)
     bid_tokens = _encode_side(bid_distance, bid_notional_top, +1.0)
     ask_tokens = _encode_side(ask_distance, ask_notional_top, -1.0)
     per_level = np.concatenate([bid_tokens, ask_tokens], axis=1).astype(np.float32)
@@ -253,6 +261,9 @@ def load_kaggle_lob(
         raise ValueError(f"Non-finite features built from {csv_path}; check the source columns.")
     direction_labels = _direction_labels(mid, flat_threshold)
     num_ticks = mid.shape[0]
+    buy_event_count = (bid_limit_all > 0.0).sum(axis=1) + (ask_market_all > 0.0).sum(axis=1)
+    sell_event_count = (ask_limit_all > 0.0).sum(axis=1) + (bid_market_all > 0.0).sum(axis=1)
+    event_counts = np.stack([buy_event_count, sell_event_count], axis=1).astype(np.float32)
     sequence = LOBSequence(
         market_slug=f"kaggle_{asset.lower()}_{resolution}",
         per_level=per_level,
@@ -260,6 +271,7 @@ def load_kaggle_lob(
         midprice=mid.astype(np.float32),
         ts_sec=np.arange(num_ticks, dtype=np.int64),
         yes_outcome=None,
+        event_counts=event_counts,
     )
     logger.info(
         f"kaggle {asset} {resolution}: {num_ticks} ticks, per_level={per_level.shape}, "

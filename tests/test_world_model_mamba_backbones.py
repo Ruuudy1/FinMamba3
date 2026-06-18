@@ -154,8 +154,8 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics = 15 total.
-        self.assertEqual(len(losses), 15)
+        # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics + 2 edge = 17 total.
+        self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_direction_class_balanced_weights_and_update_finite(self):
         from finmamba3.models.world_model import WorldModel
@@ -183,7 +183,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        self.assertEqual(len(losses), 15)
+        self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
     def test_regime_film_identity_at_init_and_update_finite(self):
         from finmamba3.models.world_model import WorldModel
@@ -214,7 +214,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        self.assertEqual(len(losses), 15)
+        self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 if __name__ == "__main__":
     unittest.main()

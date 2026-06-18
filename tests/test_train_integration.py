@@ -3,7 +3,7 @@
 Drives a tiny synthetic batch through WorldModel.update with the new
 auxiliary inputs (event_counts, outcome, time_to_expiry_frac) and asserts:
 - Total loss is finite.
-- All 12 returned loss tensors are scalar and finite.
+- All 17 returned loss tensors are scalar and finite.
 - Direction-thresholds sweep changes the direction loss compared to the
   single-threshold baseline.
 """
@@ -17,9 +17,14 @@ from types import SimpleNamespace
 # endregion
 
 
+class _NS(SimpleNamespace):
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 def _make_namespace(d):
     if isinstance(d, dict):
-        return SimpleNamespace(**{k: _make_namespace(v) for k, v in d.items()})
+        return _NS(**{k: _make_namespace(v) for k, v in d.items()})
     return d
 
 
@@ -121,7 +126,7 @@ def _build_config(**overrides):
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="WorldModel requires CUDA-built mamba_ssm")
-def test_world_model_update_returns_twelve_finite_losses():
+def test_world_model_update_returns_seventeen_finite_losses():
     from finmamba3.models.world_model import WorldModel
     cfg = _build_config()
     device = torch.device("cuda")
@@ -132,6 +137,6 @@ def test_world_model_update_returns_twelve_finite_losses():
     reward = torch.zeros(B, L, device=device)
     termination = torch.zeros(B, L, device=device)
     losses = wm.update(obs, action, reward, termination, global_step=1, epoch_step=0)
-    assert len(losses) == 12
+    assert len(losses) == 17
     for t in losses:
         assert torch.is_tensor(t) and torch.isfinite(t).all()

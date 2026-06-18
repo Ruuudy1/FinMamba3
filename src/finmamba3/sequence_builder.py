@@ -131,6 +131,11 @@ def populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
     yes_outcome = seq.yes_outcome
     tte = seq.tte_frac
     spot_dist = seq.spot_signed_distance
+    event_counts = seq.event_counts
+    yes_ask = seq.yes_ask
+    no_ask = seq.no_ask
+    yes_mid = seq.yes_mid
+    book_depth = seq.book_depth
     for t in range(T):
         outcome_t = float(yes_outcome[t]) if yes_outcome is not None else float('nan')
         buffer.append(
@@ -139,8 +144,13 @@ def populate_buffer(buffer: ReplayBuffer, seq: LOBSequence) -> None:
             reward=0.0,
             termination=0.0,
             outcome=outcome_t,
+            event_counts=event_counts[t] if event_counts is not None else None,
             tte_frac=float(tte[t]) if tte is not None else float('nan'),
             spot_signed_distance=float(spot_dist[t]) if spot_dist is not None else float('nan'),
+            yes_ask=float(yes_ask[t]) if yes_ask is not None else float('nan'),
+            no_ask=float(no_ask[t]) if no_ask is not None else float('nan'),
+            yes_mid=float(yes_mid[t]) if yes_mid is not None else float('nan'),
+            book_depth=float(book_depth[t]) if book_depth is not None else float('nan'),
         )
     logger.info(f"replay buffer: loaded {T} ticks for market {seq.market_slug}")
 
@@ -158,6 +168,11 @@ def populate_buffer_multi(buffer: ReplayBuffer, seqs: list[LOBSequence]) -> None
         yes_outcome = seq.yes_outcome
         tte = seq.tte_frac
         spot_dist = seq.spot_signed_distance
+        event_counts = seq.event_counts
+        yes_ask = seq.yes_ask
+        no_ask = seq.no_ask
+        yes_mid = seq.yes_mid
+        book_depth = seq.book_depth
         for t in range(T):
             outcome_t = float(yes_outcome[t]) if yes_outcome is not None else float('nan')
             buffer.append(
@@ -166,8 +181,13 @@ def populate_buffer_multi(buffer: ReplayBuffer, seqs: list[LOBSequence]) -> None
                 reward=0.0,
                 termination=0.0,
                 outcome=outcome_t,
+                event_counts=event_counts[t] if event_counts is not None else None,
                 tte_frac=float(tte[t]) if tte is not None else float('nan'),
                 spot_signed_distance=float(spot_dist[t]) if spot_dist is not None else float('nan'),
+                yes_ask=float(yes_ask[t]) if yes_ask is not None else float('nan'),
+                no_ask=float(no_ask[t]) if no_ask is not None else float('nan'),
+                yes_mid=float(yes_mid[t]) if yes_mid is not None else float('nan'),
+                book_depth=float(book_depth[t]) if book_depth is not None else float('nan'),
                 segment_end=(t == T - 1),
             )
         total += T
@@ -330,6 +350,7 @@ def _slice_lob_sequence(seq: LOBSequence, start: int, end: int) -> LOBSequence:
         midprice=seq.midprice[start:end],
         ts_sec=seq.ts_sec[start:end],
         yes_outcome=None if seq.yes_outcome is None else seq.yes_outcome[start:end],
+        event_counts=None if seq.event_counts is None else seq.event_counts[start:end],
     )
 
 
