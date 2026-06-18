@@ -18,7 +18,7 @@ Evaluate:
   EverySteps: 1000
 
 JointTrainAgent:
-  SampleMaxSteps: 20000
+  SampleMaxSteps: 15000   # Drives both the loop length and the cosine LR horizon (world_model.py t_max); 15k aligns annealing to the ~13k convergence point, early-stop still guards.
   EarlyStoppingPatience: 5
   SaveBestOnly: true
   BufferMaxLength: 50000
@@ -123,9 +123,13 @@ Models:
       mimo_rank: 4
       d_state: 128            # Mamba-3 paper (arXiv:2603.15569) shows d_state=64 matches
                               # Mamba-2 d_state=128 at the same perplexity; 128 is over-
-                              # provisioned but kept until empirical validation.
+                              # provisioned but kept until empirical validation. Full
+                              # d_state=128 MIMO should run on H100/H200/B200 for the
+                              # headline comparison; A100 fits only the chunk_size=8
+                              # compatibility path and was ~39.5h/15k steps in practice.
       headdim: 64
-      chunk_size: 16
+      chunk_size: 16          # MIMO default; the notebook floors this at 8 (the kernel
+                              # minimum) on non-H100 GPUs to fit their shared memory.
       is_outproj_norm: false
       rope_fraction: 0.5
     Direction:

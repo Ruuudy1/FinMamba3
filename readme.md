@@ -73,9 +73,17 @@ Use exactly one notebook:
 
 `notebooks/colab_lob_pretrain.ipynb`
 
-The notebook works on any CUDA GPU (H100, A100, L4, T4). H100 is recommended
-for the Mamba-3 MIMO TileLang kernel; other GPUs fall back to the Python
-reference path automatically with a log warning.
+The notebook works on any CUDA GPU for SISO. Mamba-3 MIMO requires the
+TileLang kernel and has no Python fallback, so use H100/H200 (sm_90) or B200
+(sm_100) for the full `d_state=128` MIMO experiment. A100 can fit the
+compatibility `chunk_size=8` path, but the observed Polymarket MIMO run was
+~9.49 s/it (~39.5 hours for 15k steps), so it is not practical for the final
+MIMO-vs-SISO comparison. L4/T4 and workstation Blackwell cards generally need
+`USE_MIMO = False` or a non-comparable `MIMO_D_STATE = 64` run.
+
+Colab Pro+ improves access but does not guarantee H100; Google notes that
+runtime GPU resources vary and are subject to availability:
+https://research.google.com/colaboratory/intl/en-GB/faq.html
 
 Open in Colab in one click:
 
@@ -83,8 +91,9 @@ https://colab.research.google.com/github/Ruuudy1/FinMamba3/blob/main/notebooks/c
 
 Then:
 
-1. Set the runtime to a GPU instance (Runtime, Change runtime type). Pick the
-   highest-tier GPU your plan exposes; H100 if available.
+1. Set the runtime to a GPU instance (Runtime, Change runtime type). For a
+   final MIMO run, use a runtime or rental provider where H100/H200/B200 is
+   explicitly reserved.
 2. Add your `HF_TOKEN` to Colab Secrets (key icon, left sidebar). The token
    needs write access for compiled wheels, checkpoints, and run logs.
 3. Hit Run all.
@@ -92,25 +101,26 @@ Then:
 By default the first cell sets:
 
 ```python
-DATASET = "fi2010"   # pulls the FI-2010 NoAuction DecPre CF files from HF Hub
-RUN_PROBES = False   # full 20,000-step Mamba-3 MIMO pretrain
+DATASET = "polymarket"  # reproduces the original Polymarket workflow
+MAX_STEPS = 15000       # full Mamba-3 MIMO pretrain budget
+RUN_PROBES = False
 SMOKE_TEST = False
 ```
 
-To reproduce the original Polymarket workflow, switch `DATASET = "polymarket"`.
+To run the public FI-2010 benchmark instead, switch `DATASET = "fi2010"`.
 To run the three collapse-diagnosis probes instead of a full pretrain, set
 `RUN_PROBES = True`. To verify plumbing in roughly 20 seconds before a real
 run, set `SMOKE_TEST = True` and re-run all cells.
 
-The notebook installs PyTorch 2.6 CUDA 12.4, builds `causal-conv1d` and
-`mamba-ssm` from source (or pulls from the HF wheel cache when keys match),
-downloads the chosen dataset, and runs:
+The notebook installs a CUDA PyTorch build for the detected GPU, builds
+`causal-conv1d` and `mamba-ssm` from source (or pulls from the HF wheel cache
+when keys match), downloads the chosen dataset, and runs:
 
 ```bash
 python -m finmamba3.train \
-    --config configs/fi2010.yaml \
-    --dataset fi2010 \
-    --JointTrainAgent.SampleMaxSteps 20000
+    --config configs/lob.yaml \
+    --dataset polymarket \
+    --JointTrainAgent.SampleMaxSteps 15000
 ```
 
 Checkpoints land under:

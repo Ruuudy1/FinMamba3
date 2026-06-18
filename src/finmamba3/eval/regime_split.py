@@ -16,9 +16,12 @@ backtester, so no data-format change is required downstream.
 # region imports
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 import numpy as np
 from finmamba3.backtester.strategy import MarketLifecycle
 # endregion
+if TYPE_CHECKING:
+    from finmamba3.backtester.data_loader import TickData
 
 
 @dataclass
@@ -26,6 +29,33 @@ class RegimeSplitResult:
     train_markets: list[MarketLifecycle]
     test_markets: list[MarketLifecycle]
     description: str
+
+
+def realized_vol_from_timeline(timeline: list[TickData]) -> dict[str, float]:
+    """Realized YES-mid return volatility per market over the loaded timeline.
+
+    Samples each market's YES-book mid once per distinct book snapshot, skipping
+    forward-filled repeats so idle ticks do not deflate the estimate, then takes
+    the std of one-step fractional mid-returns. Markets with fewer than two
+    usable mids are omitted; volatility_split reads a missing slug as undefined.
+    """
+    mids_by_slug: dict[str, list[float]] = {}
+    last_book_ts: dict[str, int] = {}
+    for tick in timeline:
+        for slug, book in tick.order_books.items():
+            if last_book_ts.get(slug) == book.book_ts:
+                continue
+            last_book_ts[slug] = book.book_ts
+            mid = book.yes_book.mid
+            if mid > 0:
+                mids_by_slug.setdefault(slug, []).append(mid)
+    vol_by_slug: dict[str, float] = {}
+    for slug, mids in mids_by_slug.items():
+        if len(mids) < 2:
+            continue
+        arr = np.asarray(mids, dtype=np.float64)
+        vol_by_slug[slug] = float(np.std(np.diff(arr) / arr[:-1]))
+    return vol_by_slug
 
 
 def time_split(

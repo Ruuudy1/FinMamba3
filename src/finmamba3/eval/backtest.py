@@ -124,13 +124,17 @@ class GreedyDirectionPolicy:
         if flat.size < self.mid_index + 1:
             return 0
         x = torch.from_numpy(flat).to(self.device).reshape(1, 1, -1)
-        latent = self.world_model.encode_obs(x)
-        last = latent[:, -1:]
-        seq = self.world_model.sequence_model(
-            last,
-            torch.zeros((1, 1), dtype=torch.long, device=self.device),
-        )
-        logits = self.world_model.direction_head(seq)
+        # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+        with torch.autocast(
+            device_type="cuda", dtype=torch.bfloat16, enabled=self.world_model.use_amp
+        ):
+            latent = self.world_model.encode_obs(x)
+            last = latent[:, -1:]
+            seq = self.world_model.sequence_model(
+                last,
+                torch.zeros((1, 1), dtype=torch.long, device=self.device),
+            )
+            logits = self.world_model.direction_head(seq)
         cls = int(logits.argmax(dim=-1).item())
         if cls == 2:
             return 1

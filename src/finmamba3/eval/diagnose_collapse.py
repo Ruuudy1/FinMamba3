@@ -110,7 +110,10 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
     obs = torch.from_numpy(ctx).float().to(device).unsqueeze(0)
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
     decoded = []
-    with torch.no_grad():
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
         ctx_latent = wm.encode_obs(obs)
         prefix_latent = ctx_latent
         prefix_action = action
@@ -125,7 +128,7 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
             prior_logits = wm.dist_head.forward_prior(feat)
             prior_sample = wm.straight_through_gradient(prior_logits)
             prior_flat = wm.flatten_sample(prior_sample)
-            decoded.append(wm.obs_decoder(prior_flat).cpu().numpy()[0, 0])
+            decoded.append(wm.obs_decoder(prior_flat).float().cpu().numpy()[0, 0])
             if step != horizon - 1:
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
                 prefix_action = torch.cat(
@@ -147,7 +150,10 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
     windows = np.stack([flat[s : s + L] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
-    with torch.no_grad():
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -191,7 +197,10 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
     windows = np.stack([flat[s : s + batch_length] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((batch_size, batch_length), dtype=torch.float32, device=device)
-    with torch.no_grad():
+    # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
+    ):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
