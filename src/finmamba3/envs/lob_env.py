@@ -45,6 +45,19 @@ class PositionState:
     cost_basis: float = 0.0
 
 
+@dataclass(frozen=True)
+class SettledPosition:
+    """Realized economics of one of this env's positions when its market settled.
+
+    payoff is the redemption cash ($1 per winning share, $0 per losing share);
+    cost_basis is the cash originally paid to build the position, so
+    payoff - cost_basis is the position's realized profit.
+    """
+    settlement: Settlement
+    payoff: float
+    cost_basis: float
+
+
 def _asset_from_slug(slug: str) -> str:
     s = slug.lower()
     if s.startswith("eth") or s.startswith("ethereum"):
@@ -111,7 +124,7 @@ class PolymarketLOBEnv(gym.Env):
         self.vol_scale = float(vol_scale)
         self.max_position_shares = float(max_position_shares)
         self.reset_to_active = bool(reset_to_active)
-        valid_kinds = {"default", "settlement_calibrated", "risk_budgeted"}
+        valid_kinds = ("default", "settlement_calibrated", "risk_budgeted")
         if reward_kind not in valid_kinds:
             raise ValueError(
                 f"reward_kind must be one of {sorted(valid_kinds)}; got {reward_kind!r}"
@@ -178,7 +191,7 @@ class PolymarketLOBEnv(gym.Env):
         submit_ts = self.tick.ts_sec
         self._i = min(self._i + self.latency_ticks, len(self.data.timeline) - 1)
         tick = self.tick
-        settlements = self._settle_expired(tick.ts_sec)
+        settled_positions = self._settle_expired(tick.ts_sec)
         fill, invalid_action = self._execute_action(action, tick)
         value_after = self._portfolio_value(tick)
         turnover = (fill.cost / max(value_before, 1e-6)) if fill is not None else 0.0
@@ -193,13 +206,14 @@ class PolymarketLOBEnv(gym.Env):
             turnover=turnover,
             inventory_frac=inventory_frac,
             drawdown_increment=drawdown_increment,
-            settlements=settlements,
+            settled_positions=settled_positions,
         )
         self._done = self._i >= len(self.data.timeline) - 1
+        settlement_facts = [settled.settlement for settled in settled_positions]
         info = self._info(
             fill=fill,
             invalid_action=invalid_action,
-            settlements=settlements,
+            settlements=settlement_facts,
             submit_ts=submit_ts,
         )
         info.update(
@@ -218,14 +232,14 @@ class PolymarketLOBEnv(gym.Env):
         turnover: float,
         inventory_frac: float,
         drawdown_increment: float,
-        settlements: list,
+        settled_positions: list,
     ) -> float:
         """Dispatch over reward_kind variants.
 
         - default: Atari-style PnL-tanh minus turnover, inventory, drawdown costs.
-        - settlement_calibrated: PnL-tanh plus a binary-outcome reward on every
-          settlement event, scaled by reward_settlement_weight. Captures the
-          contract structure absent from default.
+        - settlement_calibrated: PnL-tanh plus a realized-profit reward (payoff minus
+          cost basis) on every settled position, scaled by reward_settlement_weight.
+          Captures the contract structure absent from default.
         - risk_budgeted: PnL-tanh divided by realized rolling volatility,
           implementing a Sharpe-like reward (Cartea/Jaimungal style).
         """
@@ -239,10 +253,9 @@ class PolymarketLOBEnv(gym.Env):
             return base_pnl - cost
         if self.reward_kind == "settlement_calibrated":
             settle_reward = 0.0
-            for s in settlements:
-                payoff = float(getattr(s, "payoff", 0.0))
-                pos = float(getattr(s, "position_value", 0.0))
-                settle_reward += math.tanh((payoff - pos) / max(self.vol_scale, 1e-8))
+            for settled in settled_positions:
+                realized_profit = settled.payoff - settled.cost_basis
+                settle_reward += math.tanh(realized_profit / max(self.vol_scale, 1e-8))
             return base_pnl + self.reward_settlement_weight * settle_reward - cost
         if self.reward_kind == "risk_budgeted":
             self._return_buffer.append(float(delta_log))
@@ -343,8 +356,8 @@ class PolymarketLOBEnv(gym.Env):
             if remaining <= 1e-9:
                 break
         return filled, notional
-    def _settle_expired(self, ts_sec: int) -> list[Settlement]:
-        settled_now: list[Settlement] = []
+    def _settle_expired(self, ts_sec: int) -> list[SettledPosition]:
+        settled_now: list[SettledPosition] = []
         for slug in list(self.positions):
             if slug in self._settled:
                 continue
@@ -352,12 +365,10 @@ class PolymarketLOBEnv(gym.Env):
             if settlement is None or ts_sec < settlement.end_ts:
                 continue
             pos = self.positions.pop(slug)
-            if settlement.outcome == Token.YES:
-                self.cash += pos.yes_shares
-            else:
-                self.cash += pos.no_shares
+            payoff = pos.yes_shares if settlement.outcome == Token.YES else pos.no_shares
+            self.cash += payoff
             self._settled.append(slug)
-            settled_now.append(settlement)
+            settled_now.append(SettledPosition(settlement=settlement, payoff=payoff, cost_basis=pos.cost_basis))
         return settled_now
     def _portfolio_value(self, tick: TickData) -> float:
         value = self.cash

@@ -79,5 +79,27 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         self.assertTrue(info["invalid_action"])
         self.assertIsNone(info["fill"])
         self.assertAlmostEqual(env.cash, 100.0)
+    def test_settlement_calibrated_reward_adds_realized_profit_term(self):
+        # Same trajectory under "default" and "settlement_calibrated"; the only reward
+        # difference on the settling step is the realized-profit shaping term, which the
+        # old getattr-on-Settlement path silently zeroed out (Settlement has no payoff field).
+        default_env = PolymarketLOBEnv(
+            _data(), initial_cash=100.0, max_markets=1, reward_kind="default"
+        )
+        calibrated_env = PolymarketLOBEnv(
+            _data(), initial_cash=100.0, max_markets=1,
+            reward_kind="settlement_calibrated", reward_settlement_weight=1.0,
+        )
+        default_env.reset()
+        calibrated_env.reset()
+        default_env.step(1)
+        calibrated_env.step(1)
+        _, default_reward, _, _, _ = default_env.step(0)
+        _, calibrated_reward, _, _, calibrated_info = calibrated_env.step(0)
+        self.assertEqual(len(calibrated_info["settlements"]), 1)
+        # 10 YES shares bought at 0.62 redeem at $1.00 each: realized profit 10.0 - 6.2.
+        expected_term = math.tanh((10.0 - 6.2) / calibrated_env.vol_scale)
+        self.assertGreater(expected_term, 0.0)
+        self.assertAlmostEqual(calibrated_reward - default_reward, expected_term, places=5)
 if __name__ == "__main__":
     unittest.main()
