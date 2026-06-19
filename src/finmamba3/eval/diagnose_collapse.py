@@ -128,7 +128,10 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
             prior_logits = wm.dist_head.forward_prior(feat)
             prior_sample = wm.straight_through_gradient(prior_logits)
             prior_flat = wm.flatten_sample(prior_sample)
-            decoded.append(wm.obs_decoder(prior_flat).float().cpu().numpy()[0, 0])
+            dec_out = wm.obs_decoder(prior_flat)
+            if wm.decoder_kind == 'studentt':
+                dec_out = dec_out[0]
+            decoded.append(dec_out.float().cpu().numpy()[0, 0])
             if step != horizon - 1:
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
                 prefix_action = torch.cat(
