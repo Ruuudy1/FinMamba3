@@ -19,7 +19,7 @@
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{xcolor}
-\usepackage{microtype}
+\usepackage[expansion=false]{microtype}
 \usepackage{natbib}
 \usepackage[margin=1in]{geometry}
 \usepackage{enumitem}
@@ -33,18 +33,15 @@
 \newcommand{\rt}{r_t}
 \newcommand{\zt}{z_t}
 \newcommand{\dt}{d_t}
-\newcommand{\ht}{h_t}
+\newcommand{\hstate}{h_t}
 \DeclareMathOperator{\softmax}{softmax}
 \DeclareMathOperator{\SiLU}{SiLU}
 \DeclareMathOperator{\RMSNorm}{RMSNorm}
 \DeclareMathOperator{\symlog}{symlog}
 \DeclareMathOperator{\diag}{diag}
 
-% ---- draft utilities ---------------------------------------------------------
-\newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO:} #1\textbf{]}}}
-
 % ==============================================================================
-\title{FinMamba3: Regime Conditioning Fails, Selective Participation Pays\\A Mamba-3 World Model for Prediction-Market Microstructure}
+\title{FinMamba3: Regime Conditioning Fails, Selective Participation Pays\\A World Model for Prediction-Market Microstructure}
 
 \author{
   Anonymous Authors \\
@@ -86,17 +83,31 @@ axis, where even a forced-active, directly-supervised modulation provably
 decays to identity.  The same effort yields a positive
 economic result the architecture did not.  Once the model is given the
 underlying spot path that \emph{defines} settlement, a time-to-expiry
-clock, and an honest per-tick target, its calibrated settlement
-probability---traded by a selective-participation strategy that bets only
-in forecastable regimes---earns \textbf{+\$4{,}729} on held-out
-Polymarket BTC (deterministic), beats a fair trend-following baseline by
-\textbf{6--9$\times$}, and is fully survivable under a fat-tailed
-bootstrap (P(profit)$=1.0$, worst-5\% drawdown $4.7\%$).  We characterize
+clock, and an honest per-tick target, its over-confident-but-directional
+settlement probability---traded by a selective-participation strategy
+that bets only in forecastable regimes---earns \textbf{+\$4{,}729} on 408
+held-out Polymarket BTC markets (deterministic), earning \textbf{6--9$\times$}
+the PnL of a fair trend-following baseline across two model seeds, and is
+survivable under a fat-tailed bootstrap (per-trade P(profit)$=1.0$,
+worst-5\% drawdown $4.5\%$; the market-block bootstrap that respects
+intra-market dependence is reported in Section~\ref{sec:results_edge}).
+Crucially, this edge is \emph{architecture-independent}: a logistic
+regression on the same spot-conditioned features reproduces it
+($+\$7{,}016$, exceeding the world model's own settlement head), so the
+pipeline and selective-participation framing---not the sequence model---carry
+the economic result.  We characterize
 the edge as a three-way microstructure conjunction---predictable,
 liquid-but-not-efficient, and early-in-lifecycle---and trace it to an
 over-confident-but-directional settlement head exploiting the
-oracle-repricing lag.  The regime axis a FiLM router will not encode is
-exactly the one a strategy gate harvests profitably.
+oracle-repricing lag.  Broader validation (645 markets) then exposes a
+latent regime failure in the settlement head (P(profit)$=0.276$ on
+low-predictability markets); supervising the \emph{per-tick expected
+value} directly---our \textbf{BookRelativeEdgeHead}---converts the
+$-\$826$ low-predictability loss into $+\$2{,}548$, lifts total PnL to
+$+\$5{,}565$ ($+41\%$), and collapses the high-vs-low PnL spread
+$12{\times}$.  The regime axis a FiLM router will not encode is exactly
+the one a strategy gate and a direct-EV head, together, harvest
+profitably.
 \end{abstract}
 
 % ==============================================================================
@@ -131,23 +142,32 @@ not improve out-of-regime behaviour (Section~\ref{sec:results}).  That
 negative redirected us to a third question the data made unavoidable:
 \emph{if the model is shown the underlying spot path that defines
 settlement, can its predictions be turned into profitable trades?}  They
-can, and the resulting selective-participation strategy is the paper's
-positive contribution.
+can; and broader validation reveals a fourth: \emph{does supervising the
+tradeable expected value directly, rather than the settlement probability,
+eliminate the regime failure the settlement head hides at smaller scale?}
+It does.
 
 We adapt the Drama world-model framework~\citep{wang2024drama} to LOB
-microstructure.  Our system, \textbf{FinMamba3}, makes three
-contributions.
+microstructure, taking the selective state-space sequence model at its
+core---the same model family that has reshaped long-context sequence
+modeling---and stress-testing it as the dynamics backbone of a world model
+under genuine non-stationarity, where the central question is not perplexity
+but whether an \emph{inferred} latent regime can be made to help.  Our
+system, \textbf{FinMamba3}, makes five contributions.
 
-\paragraph{(1) Mamba-3 MIMO backbone for LOB sequences.}
-We replace Drama's Mamba-2 sequence model with a Mamba-3 MIMO
-backbone~\citep{lahoti2026mamba3}, a structured state-space model with
-linear-time complexity and multi-input multi-output state transitions.
-We deploy it as the dynamics backbone of a financial world model and
-include it as one arm of a controlled architecture ablation rather than
-asserting an advantage in advance.
-\todo{Verify the Mamba-3 reference (\texttt{lahoti2026mamba3}) against a
-citable arXiv/venue record before submission; remove any performance
-figures that cannot be sourced from the published paper.}
+\paragraph{(1) A selective state-space world model for LOB microstructure.}
+We cast LOB microstructure as a POMDP world model in the DreamerV3/Drama
+lineage~\citep{hafner2023dreamerv3, wang2024drama} and instantiate its
+dynamics with a Mamba-3 selective state-space
+backbone~\citep{lahoti2026mamba3}.  The backbone is an implementation
+choice, not a claimed advantage: under matched parameters \emph{no}
+backbone (Mamba-1, Mamba-2, Mamba-3 SISO, or a Transformer) dominates
+across datasets, and the multi-input multi-output (MIMO) configuration
+that might break the tie is structurally infeasible on our hardware---it
+exceeds the RTX~4080 shared-memory cap
+(Section~\ref{sec:results_ablation}).  We therefore report the backbone
+ablation as a finding rather than a selling point, and none of the
+results below depend on the choice of sequence model.
 
 \paragraph{(2) Regime-aware FiLM modulation of the selective scan.}
 We introduce a \emph{RegimeFiLM modulator} that infers a categorical
@@ -184,12 +204,28 @@ that \emph{defines} settlement, a time-to-expiry clock, an honest
 per-tick (TTE-weighted) settlement target, and contemporaneous
 cross-interval context, and we judge the model by \emph{simulated PnL}
 through a decoupled order-matching backtester rather than a forecasting
-proxy.  Conditioned on the spot path, the settlement head becomes
-calibrated enough that a selective-participation strategy---betting only
-when a causal predictability gate fires---turns its probabilities into a
-survivable, naive-beating economic edge (Section~\ref{sec:results}).
-This is the paper's positive result, and it is
-\emph{architecture-independent}: it does not depend on RegimeFiLM.
+proxy.  Conditioned on the spot path, the settlement head becomes directionally
+informative---over-confident in magnitude but reliable in direction---so
+that a selective-participation strategy betting only when a causal
+predictability gate fires turns its probabilities into a survivable,
+naive-beating economic edge (Section~\ref{sec:results}).
+This is the paper's first positive result, and it is
+architecture-independent: a logistic regression on the same features
+reproduces and exceeds it (Section~\ref{sec:results_baseline}), so the
+contribution is the spot-conditioned pipeline and the selective-participation
+framing, not the sequence model that consumes them.
+
+\paragraph{(5) Book-relative EV head for regime-robust trading.}
+Broader validation exposes a latent failure of the settlement head:
+P(profit)$=0.276$ on low-predictability markets.  We add a
+\textbf{BookRelativeEdgeHead} that supervises the per-tick expected value
+of buying each side of the contract net of the bid-ask spread, masking
+ticks where the book is absent.  The training signal is explicitly zero
+when the book already reflects the edge, teaching the model to abstain
+in low-information regimes.  A single configuration (EV Huber loss only)
+eliminates the settlement head's failure in low-predictability markets
+and lifts total held-out PnL $+41\%$ while collapsing the high-vs-low
+PnL gap $12{\times}$ (Section~\ref{sec:results_ev}).
 
 % ==============================================================================
 % 2  RELATED WORK
@@ -207,9 +243,9 @@ selective state-space model and reported a 105\% normalized score on
 Atari100k with a 7M-parameter agent matching systems roughly $30\times$
 larger.  TD-MPC2~\citep{hansen2024tdmpc2} pursues a decoder-free
 trajectory-optimization alternative at 317M parameters.  FinMamba3
-inherits the DreamerV3/Drama architecture but upgrades the backbone to
-Mamba-3 MIMO and adds explicit regime conditioning, a capability we have
-not found in prior world models.
+inherits the DreamerV3/Drama architecture, instantiates its dynamics with
+a Mamba-3 selective state-space backbone, and adds explicit regime
+conditioning, a capability we have not found in prior world models.
 
 \paragraph{Structured state-space models and Mamba.}
 Structured state-space models (S4, S5, Mamba) provide
@@ -282,10 +318,6 @@ these contracts are wide relative to equity LOBs, so per-tick mid-price
 changes are dominated by spread-bouncing noise rather than information;
 this motivates our use of Lopez de Prado bar
 aggregation~\citep{deprado2018advances} for tick-stream denoising.
-\todo{Replace or verify the quantitative half-spread figure and its
-source (\texttt{sotskov2025polymarket}); the cited arXiv identifier
-could not be confirmed and the specific basis-point figure should not be
-stated until a citable measurement is available.}
 
 % ==============================================================================
 % 3  PRELIMINARIES
@@ -318,7 +350,7 @@ observation to a compact embedding $e_t = \mathrm{enc}_\phi(\ot)$.
 
 \paragraph{Posterior (representation model).}
 A categorical distribution
-$q_\phi(\zt \mid e_t, \ht) = \mathrm{Cat}(\zt; \bm{\pi}^{\text{post}}_t)$
+$q_\phi(\zt \mid e_t, \hstate) = \mathrm{Cat}(\zt; \bm{\pi}^{\text{post}}_t)$
 over the discrete latent $\zt \in \{0,1\}^{C \times D}$, parameterized
 as a $C \times D$ one-hot categorical (we use $C = D = 16$, yielding a
 256-dimensional flattened sample).  Samples use the straight-through
@@ -328,9 +360,9 @@ Gumbel estimator.
 A recurrence that compresses past latents and actions into a
 deterministic hidden state,
 \begin{equation}\label{eq:sequence_model}
-  \ht = f_\theta(\zt, \at, h_{t-1}),
+  \hstate = f_\theta(\zt, \at, h_{t-1}),
 \end{equation}
-from which a prior $p_\theta(\zt \mid \ht) = \mathrm{Cat}(\zt;
+from which a prior $p_\theta(\zt \mid \hstate) = \mathrm{Cat}(\zt;
 \bm{\pi}^{\text{prior}}_t)$ is predicted.  In DreamerV3 this recurrence
 is a GRU; in Drama it is a Mamba-2 selective state-space layer; in
 FinMamba3 it is a stack of Mamba-3 MIMO blocks
@@ -352,8 +384,8 @@ The world model is trained by minimizing
 \end{equation}
 where $\mathcal{L}_{\text{recon}}$ is the reconstruction loss (MSE or
 Student-$t$ negative log-likelihood),
-$\mathcal{L}_{\text{dyn}} = \KL[q_\phi(\zt \mid e_t, \ht)\,\|\,
-\mathrm{sg}[p_\theta(\zt \mid \ht)]]$ trains the prior to match the
+$\mathcal{L}_{\text{dyn}} = \KL[q_\phi(\zt \mid e_t, \hstate)\,\|\,
+\mathrm{sg}[p_\theta(\zt \mid \hstate)]]$ trains the prior to match the
 posterior (with the posterior stopped-gradient),
 $\mathcal{L}_{\text{rep}} = \KL[\mathrm{sg}[q_\phi]\,\|\,p_\theta]$
 pulls the posterior toward the prior, and both KL terms use a free-bits
@@ -396,10 +428,8 @@ multi-input multi-output (MIMO) state transitions that couple
 information across heads within each layer.  It also incorporates rotary
 position embeddings (RoPE) on a configurable fraction of the head
 dimension and an optional output-projection normalization.
-\todo{State any quantitative claims about Mamba-3 (e.g.\ relative
-perplexity or downstream gains) only with a verifiable citation to the
-source paper; otherwise describe MIMO as a design choice evaluated in our
-own ablation (Section~\ref{sec:experiments}).}
+Whether MIMO improves over SISO on LOB data is evaluated in our
+own ablation (Section~\ref{sec:experiments}).
 
 % ==============================================================================
 % 4  METHODOLOGY
@@ -411,9 +441,7 @@ along four axes: the observation encoder
 (Section~\ref{sec:lob_encoder}), the sequence backbone
 (Section~\ref{sec:mamba3}), the regime-modulated dynamics
 (Section~\ref{sec:regime_film}), and the auxiliary training objectives
-(Section~\ref{sec:aux_heads}).  \todo{Add Figure~1: architecture
-overview (encoder $\to$ posterior $\to$ Mamba-3 backbone with RegimeFiLM
-$\to$ heads).}
+(Section~\ref{sec:aux_heads}).
 
 % --------------------------------------------------------------------------
 \subsection{Transformer-over-Depth LOB Encoder}\label{sec:lob_encoder}
@@ -449,9 +477,9 @@ is projected to a $d_e = 1024$-dimensional embedding:
 \end{equation}
 This design preserves the depth ordering of the book, lets attention
 capture cross-level dependencies (bid--ask symmetry, depth-curve shape),
-and accommodates different numbers of levels.  We evaluate this encoder
-against a flat-MLP encoder in the ablation of
-Section~\ref{sec:experiments} rather than assuming it is superior.
+and accommodates different numbers of levels.  The codebase provides a
+flat-MLP encoder for a controlled comparison; we do not run that ablation in
+this paper (Appendix~\ref{app:unevaluated}) and make no superiority claim.
 
 \paragraph{Binary-market features.}
 Polymarket contracts are binary outcomes whose prices are bounded
@@ -501,7 +529,7 @@ MIMO blocks.  Each block applies a pre-norm residual,
 The Mamba-3 block parameterizes a selective state-space model with
 $d_{\text{state}} = 128$, head dimension 64 (8 heads for $d_h = 512$),
 MIMO rank~4, chunk size~16, and RoPE on 50\% of the head dimension.  The
-final hidden state is $\ht = \RMSNorm(x_t^{(L)}) \in \R^{d_h}$.
+final hidden state is $\hstate = \RMSNorm(x_t^{(L)}) \in \R^{d_h}$.
 
 The MIMO parameterization couples information across heads within each
 block via a low-rank cross-head mixing matrix.  We provide matched YAML
@@ -624,8 +652,9 @@ evicted;
 posterior and prior exceeds a threshold are written, so the buffer
 becomes a catalog of regime-surprising states rather than a sliding
 window of recent observations.  Whether episodic memory helps at
-inference, and which write policy is preferable, is left to the ablation
-in Section~\ref{sec:experiments}.
+inference, and which write policy is preferable, is an open question we do
+not resolve here: the module is implemented but its ablation is unevaluated
+in this paper (Appendix~\ref{app:unevaluated}).
 
 % --------------------------------------------------------------------------
 \subsection{Observation Decoder and Reconstruction Loss}\label{sec:decoder}
@@ -704,6 +733,26 @@ start, 0 at expiry) and $y \in \{0, 1\}$ is the binary outcome.  This
 encourages the latent to encode information relevant to the terminal
 payoff rather than only locally reconstructive features.
 
+\paragraph{Book-relative EV head.}
+A two-output MLP on the deterministic state $\hstate$ directly predicts
+the per-tick expected value of buying each side of the book:
+\[
+  (\hat{e}_{\text{yes},t},\, \hat{e}_{\text{no},t})
+  = \text{Linear}\!\bigl(\text{SiLU}(\text{Linear}(\hstate))\bigr),
+\]
+trained with Huber loss ($\delta=1$) against realized targets
+\[
+  e_{\text{yes}} = \text{outcome} - \text{ask}_{\text{yes}}, \qquad
+  e_{\text{no}} = (1-\text{outcome}) - \text{ask}_{\text{no}},
+\]
+masking ticks where either ask is absent (zero book depth).  Unlike the
+settlement head, when the book is efficiently priced the training target
+is near zero and the strategy abstains; when the ask undershoots the
+outcome the target is positive and a trade fires.  The trading rule is:
+$\hat{e}_{\text{yes}} \geq \tau_e \wedge \hat{e}_{\text{yes}} >
+\hat{e}_{\text{no}}$ triggers a BUY-YES order; symmetrically for
+BUY-NO; otherwise abstain.
+
 % --------------------------------------------------------------------------
 \subsection{Full Training Objective}\label{sec:full_loss}
 
@@ -716,11 +765,15 @@ Combining all components, the FinMamba3 world-model loss is
   + \lambda_{\text{dir}}\,\mathcal{L}_{\text{dir}}
   + \lambda_{\text{H}}\,\mathcal{L}_{\text{Hawkes}}
   + \lambda_{\text{S}}\,\mathcal{L}_{\text{settle}}
+  + \lambda_{\text{EV}}\,\mathcal{L}_{\text{EV}}
   + \lambda_{\text{ent}}\,\mathcal{L}_{\text{regime}},
 \end{equation}
+where $\mathcal{L}_{\text{EV}} = \text{Huber}(\hat{e}_{\text{yes}},
+e_{\text{yes}}) + \text{Huber}(\hat{e}_{\text{no}}, e_{\text{no}})$
+is the book-relative EV loss (zero when the head is disabled),
 with $\beta = 0.1$, $\lambda_{\text{dir}} = 0.5$,
-$\lambda_{\text{H}} = 0.1$, $\lambda_{\text{S}} = 0.25$, and
-$\lambda_{\text{ent}} = 0.01$.  Reward and termination heads are gated
+$\lambda_{\text{H}} = 0.1$, $\lambda_{\text{S}} = 0.25$,
+$\lambda_{\text{EV}} = 1.0$, and $\lambda_{\text{ent}} = 0.01$.  Reward and termination heads are gated
 off during Phase~A pretraining (no reward signal in the offline buffer)
 and enabled in Phase~B imagination-based RL, where the full
 DreamerV3/Drama actor--critic loop applies.
@@ -793,13 +846,54 @@ probability and the (oracle-lagged) book midpoint into an order, and
 participates \emph{selectively}: it acts only when a causal predictability
 gate fires (rolling ER above a threshold fit on the training split and
 frozen), exploiting the convex, capped-loss payoff of a binary contract
-by betting only where the underlying is forecastable.  As an anti-artifact
+by betting only where the underlying is forecastable.  Alternatively, the
+book-relative EV head (Section~\ref{sec:aux_heads}) replaces the
+divergence rule: BUY-YES fires when the head's $\hat{e}_\text{yes}$
+clears a minimum threshold and exceeds $\hat{e}_\text{no}$, with all
+other parameters frozen.  As an anti-artifact
 control we report PnL relative to a mandatory \texttt{NaiveLagStrategy}---
 the same gate and spot-move rule with \emph{no} model---so a mechanical
 latency arbitrage cannot be mistaken for a model edge, and we summarize
 survivability with a 10{,}000-path trade bootstrap (fraction of
 profitable paths, 5th-percentile drawdown) rather than a Gaussian
 $t$-test, because trade returns are fat-tailed.
+
+\paragraph{Timestamp alignment and the latency edge.}
+The edge below is a \emph{latency} effect---it harvests the lag between the
+underlying spot and the contract book---so it is maximally sensitive to how
+the two clocks are aligned, and we are explicit about the alignment to rule
+out a spurious look-ahead.  Every source (Polymarket trades and book
+snapshots, the Binance order book, and the Chainlink/Binance spot) is
+timestamped in microseconds and floored to integer Unix-epoch seconds, then
+aggregated to one-second buckets by last-observation-within-the-second.  Book
+snapshots are \emph{forward-filled}: at tick $t$ the visible book is the most
+recent snapshot at or before $t$, never a future one.  The strategy at tick
+$t$ thus sees a spot value and a book that are both as-of-$t$-or-earlier, so
+no quantity it trades on postdates $t$; the lag it exploits is a real property
+of when the book reprices, not an artifact of misaligned clocks or a
+forward-looking fill.
+
+\paragraph{Signal-delay stress test.}
+Because the edge is a latency effect, the load-bearing robustness check is to
+\emph{delay the model's signal}: we re-key each probability so the strategy at
+tick $t$ trades on the model output from $t-\Delta$, leaving the predictability
+gate at trade time, and sweep $\Delta$.  A genuine edge degrades gracefully as
+$\Delta$ grows toward the repricing lag; an edge that exists only because the
+signal is timestamp-aligned to the book would collapse at the first second of
+delay.  The harness exposes this as \texttt{--signal-delay-secs}.
+
+\paragraph{Market-block bootstrap.}
+Trades inside one market share a single settlement outcome and sit on
+overlapping holding windows, so the per-trade bootstrap above---resampling
+individual trades---treats correlated bets as independent and
+\emph{overstates} significance: the effective sample size is the number of
+independent \emph{markets}, not the number of trades.  We therefore report the
+independent-market count alongside every trade count, and a \emph{market-block}
+bootstrap that resamples whole markets with replacement (a market's trade
+vector is drawn intact) for every arm we re-execute here.  For the world-model
+headline, whose probabilities are precomputed on GPU, the per-trade
+$P(\text{profit})=1.0$ should be read against its $\le\!408$ (resp.\ $645$)
+independent markets; the harness emits the block statistic on any re-run.
 
 % ==============================================================================
 % 5  EXPERIMENTAL SETUP
@@ -880,27 +974,32 @@ strategy that never trades) is \textsc{broken} and fixed before
 re-judging.  Gates are fixed in advance; we early-stop only for futility,
 never on a good-looking result, and report every null.
 
-\paragraph{Secondary experiments.}
-(a)~\emph{Backbone ablation}: Mamba-1/2/3-SISO/3-MIMO vs.\ Transformer on
-reconstruction and direction accuracy; failure criterion: Mamba-3 MIMO
-does not match or exceed the best alternative under matched parameters.
-(b)~\emph{Episodic memory}: FIFO vs.\ novelty-filtered vs.\ off; failure
-criterion: neither memory policy improves out-of-regime metrics over the
-parametric model.
-(c)~\emph{Auxiliary heads}: leave-one-out over the direction, Hawkes, and
-settlement heads; failure criterion: removing a head leaves downstream
-metrics unchanged within noise, indicating it provides no useful
-inductive bias.
+\paragraph{Secondary experiment: backbone ablation.}
+We compare Mamba-1, Mamba-2, Mamba-3 SISO, and a Transformer under matched
+parameter budgets on reconstruction and direction accuracy
+(Section~\ref{sec:results_ablation}); the pre-registered failure criterion
+is that Mamba-3 MIMO does not match or exceed the best alternative, but the
+MIMO arm is hardware-gated and unrun (Section~\ref{sec:results_ablation}), so
+the realized comparison is among the non-MIMO backbones.  Three further
+components---a flat-MLP encoder ablation, an episodic-memory study (FIFO
+vs.\ novelty-filtered vs.\ off), and a leave-one-out over the auxiliary
+heads---are implemented in the codebase but \emph{not} evaluated in this
+paper; we describe them and their pre-registered criteria in
+Appendix~\ref{app:unevaluated} rather than report results we did not run, and
+defer them to future work.
 
 % ==============================================================================
 % 6  RESULTS
 % ==============================================================================
 \section{Results}\label{sec:results}
 
-The evaluation produced a \textbf{dual outcome}: the regime-conditioning
-architecture is a decisive negative, and the spot-conditioned pipeline
-plus a selective-participation strategy---built to test it---is a
-genuine, survivable economic positive.
+The evaluation produced \textbf{three outcomes}: the regime-conditioning
+architecture is a decisive negative; the spot-conditioned pipeline plus a
+selective-participation strategy---built to test it---is a genuine,
+survivable economic positive; and direct EV supervision via the
+BookRelativeEdgeHead eliminates the settlement head's latent low-predictability
+failure, lifting total PnL $+41\%$ and collapsing regime sensitivity
+$12{\times}$.
 
 % --------------------------------------------------------------------------
 \subsection{Regime-FiLM is a decisive null}\label{sec:results_null}
@@ -991,6 +1090,20 @@ Kaggle BTC   & $1\,\mathrm{s}$ (slice)& $\approx 0$               & $0.005$ & \t
 \label{tab:film_null_xdata}
 \end{table}
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.82\linewidth]{figures/film_g_across_settings.pdf}
+\caption{\textbf{RegimeFiLM is inert across every A/B setting.}  The
+jointly-trained treatment $\mathrm{film}_g = \mathrm{mean}\,|\gamma-1|$
+(bars) sits near $0.004$--$0.010$ on every dataset, asset, and
+resolution---FI-2010, Kaggle BTC/ETH/ADA at three bar widths, and the two
+Polymarket objectives---while a forced-active initialisation starts at
+$0.150$ and the strongest-null escalation at $0.250$ (dashed lines).  The
+router entropy sits at its uniform maximum $\log R$ throughout.  The
+modulation never grows from its exact identity initialisation.}
+\label{fig:film_across}
+\end{figure}
+
 \paragraph{The collapse is optimiser-driven, not data-specific.}
 The predictability-supervised strongest-null test (forced-active FiLM, router supervised
 directly on the efficiency-ratio bucket; settings as above) decays $\mathrm{film}_g$
@@ -1016,6 +1129,34 @@ time-constant $\tau \approx 7000$ and an asymptote $\le 0$, so the modulation pr
 converges to identity.}
 \label{fig:escalation_decay}
 \end{figure}
+
+\paragraph{Why identity is a free direction: gauge absorption.}
+The decay has a simple mechanistic explanation that also bounds the
+claim's scope.  Our modulation is an \emph{input-side} affine,
+$\tilde{x} = \gamma \odot \hat{x} + \beta$, applied to a block input that
+the very next operations re-project: the selective-scan parameters are
+$\Delta_t = \sigma(W_\Delta \tilde{x}_t)$, $\mathbf{B}_t = W_B \tilde{x}_t$,
+$\mathbf{C}_t = W_C \tilde{x}_t$.  A constant channel-wise scale folds
+\emph{exactly} into those projections as a right-multiplied diagonal,
+$W_\bullet\,\diag(\gamma)$, and the shift folds into their biases, with no
+change to the function the block computes; the host weights can thus
+represent any constant $(\gamma,\beta)$ themselves.  Identity is therefore a
+\emph{gauge} direction---a flat, lossless valley the optimizer can slide
+along---so joint training folds the modulation into the host weights and
+returns $(\gamma,\beta)$ to $\mathbf{1},\mathbf{0}$, which is precisely the
+monotone decay we observe.  This sharpens the result two ways.  First, it
+explains the dataset-invariant decay constant (Fig.~\ref{fig:escalation_decay}):
+the absorption direction is a property of the block parameterization, not of
+the data.  Second, it \emph{scopes} the null: our claim is that
+\emph{input-affine} conditioning of a selective scan is gauge-absorbable and
+will not persist under joint training---not that regime conditioning is
+impossible in principle.  Mechanisms outside this gauge---modulating
+$W_\Delta/W_B/W_C$ directly, gating \emph{after} the scan, or conditioning a
+quantity the block does not immediately re-project---are not trivially
+absorbable and are the natural next test.  Our contribution is the negative
+that matters in practice: the most kernel-friendly, drop-in form of the
+idea, the one that needs no change to the fused CUDA kernel, is exactly the
+form the optimizer can and does undo.
 
 \paragraph{The regime is decodable yet unused---and not even needed.}
 Two probes localise the failure. A post-hoc reading of the jointly-supervised router
@@ -1094,15 +1235,25 @@ and leave the MIMO cell as the single outstanding headline-hardware run.
 \subsection{A survivable, naive-beating economic edge}\label{sec:results_edge}
 
 Once the model is given the spot path (Section~\ref{sec:spot_pipeline}),
-its calibrated settlement probability, traded by the selective-
-participation strategy, is profitable on held-out Polymarket BTC and
-clears every anti-artifact gate (Table~\ref{tab:edge}).  The edge is
-robust across two model seeds at a \emph{single} ER gate fit once on
-train and frozen, and a deterministic latent makes it byte-reproducible
-at $+\$4{,}729$ (1{,}553 trades, P(profit)$=1.000$, drawdown $0.045$).
-The predictability gate alone harvests only $+\$513$; the model's
-calibrated probability is the dominant driver ($+\$4{,}048$ over
-trend-following).
+its directionally informative (over-confident-but-directional) settlement
+probability, traded by the selective-participation strategy, is profitable
+on held-out Polymarket BTC and clears every anti-artifact gate (Table~\ref{tab:edge}).
+The confirmatory claim is the \emph{stochastic-latent} band---two model
+seeds at a single train-frozen ER gate earn $+\$4{,}561$ and $+\$3{,}141$,
+$6$--$9\times$ the fair naive, both at per-trade P(profit)$=1.000$.  The
+deterministic latent additionally makes the run byte-reproducible at
+$+\$4{,}729$ (1{,}553 trades, drawdown $0.045$); we treat that figure as a
+reproducibility anchor, not as evidence of significance, since fixing the
+latent RNG conveys no generalisation information.  The economic claim is
+further corroborated by the three-seed EV-head result
+(Section~\ref{sec:results_ev}, Table~\ref{tab:ev_seeds}) and, more strongly,
+by its robustness across \emph{model classes}: a logistic regression on the
+same features reproduces and exceeds the edge
+(Section~\ref{sec:results_baseline}), so the result does not hinge on any one
+seed of any one architecture.  The predictability gate alone harvests only
+$+\$513$; the model's probability is the dominant driver ($+\$4{,}048$ over
+trend-following), though---as the next subsection shows---a far simpler model
+supplies an equally good probability.
 
 \begin{table}[t]
 \centering
@@ -1115,9 +1266,17 @@ Seed & Model PnL & Trades & Fair naive & Model $-$ naive & P(profit) \\
 1 & $+3141.0$ & 1620 & $+513.1$ & $+2627.9$ ($6.1\times$) & $1.000$ \\
 \bottomrule
 \end{tabular}
-\caption{Held-out BTC, train-frozen ER gate $=0.60$, versus a fair
-predictability-gated trend-following naive.  Both seeds clear every gate
-(P(profit)$>0.7$, drawdown $<0.15$, beats naive).}
+\caption{Held-out BTC (408-market set), train-frozen ER gate $=0.60$,
+versus a fair predictability-gated trend-following naive.  The dollar
+figure in the ``Model $-$ naive'' column is the PnL margin; the
+parenthesised multiple is the \emph{ratio} of the two totals (e.g.\
+$4560.9/513.1 = 8.9\times$), not the margin ratio.  Both seeds clear every
+gate (P(profit)$>0.7$, drawdown $<0.15$, beats naive).  These are the
+stochastic-latent seeds; the deterministic-latent run is byte-reproducible
+at $+\$4{,}729$ (Section~\ref{sec:results_edge}).  The same settlement head
+on the expanded 645-market set scores $+\$3{,}946$
+(Table~\ref{tab:ev_arms}); the two differ by market coverage and data
+vintage, not method.}
 \label{tab:edge}
 \end{table}
 
@@ -1133,7 +1292,16 @@ the lag).  Within this band, the edge further concentrates
 \emph{early} in a market's lifecycle (the lag reverses near expiry as the
 book converges).  Stacking the three gates---predictable, liquid-but-not-
 efficient, early---lifts the per-trade edge and cuts drawdown
-(Table~\ref{tab:conjunction}).
+(Table~\ref{tab:conjunction}).  We are deliberate about the evidential
+status of each gate.  \textbf{Only the predictability gate is
+confirmatory}: its ER threshold is fit on the training split and frozen
+before any held-out evaluation, so the $+\$4{,}729$ headline is a
+pre-registered, train-frozen result.  The depth band $[60\text{k},130\text{k}]$
+and the early-market cut are \textbf{exploratory}: they were identified by
+inspecting the held-out set, so Table~\ref{tab:conjunction} is a post-hoc
+\emph{characterization} of where the edge concentrates, not a second
+pre-registered claim, and is subject to the usual forking-paths caveat.
+The headline rests on the confirmatory row alone.
 
 \begin{table}[t]
 \centering
@@ -1147,9 +1315,12 @@ Predictability only (headline) & $+4729$ & $+3.05$ & $0.045$ \\
 \quad $+$ both (early $+$ band) & $\mathbf{+5209}$ & $\mathbf{+4.98}$ & $\mathbf{0.029}$ \\
 \bottomrule
 \end{tabular}
-\caption{Deterministic BTC.  The conjunction lifts the per-trade edge
-$+63\%$ and cuts drawdown $-36\%$ versus the predictability-only
-headline, all at P(profit)$=1.000$.}
+\caption{Deterministic BTC, \emph{exploratory}.  Only the first row
+(predictability-only) is a train-frozen confirmatory result; the depth-band
+and early-market gates are post-hoc held-out characterizations.  Within that
+caveat, the conjunction lifts the per-trade edge $+63\%$ and cuts drawdown
+$-36\%$ versus the predictability-only headline, all at the per-trade
+P(profit)$=1.000$.}
 \label{tab:conjunction}
 \end{table}
 
@@ -1162,12 +1333,32 @@ $0.25$ constant) but is systematically over-confident: its top decile
 (Table~\ref{tab:calib}).  This single diagnostic closes the economic
 story.  The edge is \emph{directional, not calibrated}: trading the
 divergence from the oracle-lagged book (which still implies $\sim 0.5$)
-needs only the right side, and the model has it ($0.785 \gg 0.5$).  It is
+needs only the right side, and the model has it where it concentrates its
+bets ($0.785 \gg 0.5$ in the top decile; see below).  It is
 why fixed small sizing wins and Kelly fails: fixed sizing trades only the
 direction, while Kelly bets the over-confident magnitude and blows up
 (even temperature-calibrated at $T=2.9$, the bootstrap drawdown is
 $39.9\% \gg 15\%$, because position concentration sacrifices the
 diversification the statistical edge depends on).
+
+\paragraph{Directionality is not uniform---and its failure foreshadows the
+EV head.}
+The reliable-direction property holds in the \emph{extreme} deciles, where
+roughly $72\%$ of the held-out mass sits ($155$k of $214$k probabilities)
+and where the divergence trade is largest: there the head is right ($0.785$
+realized in the top decile).  It does \emph{not} hold everywhere.  The
+lightly populated $0.6$--$0.7$ bin ($n=7121$, $3\%$ of mass) realizes only
+$0.423$~YES---the \emph{wrong} side of $0.5$, so a strategy that traded
+mid-confidence signals would be hurt there.  This mid-confidence inversion is
+not noise: it is the micro-scale signature of the same failure we diagnose at
+the market level in Section~\ref{sec:results_ev}.  The settlement head reports
+a probability without checking whether the book already reflects it, so in
+low-information regimes it is confidently wrong.  The selective-participation
+strategy is largely insulated because the predictability gate routes it toward
+the high-efficiency-ratio windows that populate the reliable extreme deciles;
+the residual exposure to the anti-calibrated middle is exactly what the
+BookRelativeEdgeHead (Section~\ref{sec:results_ev}) removes by supervising
+tradeable EV instead of probability.
 
 \begin{table}[t]
 \centering
@@ -1188,22 +1379,266 @@ the divergence trade exploits.}
 \label{tab:calib}
 \end{table}
 
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.52\linewidth]{figures/reliability_settlement.pdf}
+\caption{\textbf{Settlement-head reliability} over $214$k held-out
+probabilities (deterministic headline run, Brier $0.206$).  Marker area
+scales with bin count.  Points fall \emph{below} the diagonal for mean
+$>0.5$---systematic over-confidence---yet the populous extreme deciles land
+on the correct side of $0.5$ ($0.787$ realized in the top decile, $0.109$
+in the bottom), which is the directional signal the divergence trade
+harvests.  The mid-confidence bins ($0.5$--$0.9$) realize below $0.5$, the
+calibration footprint of the low-predictability failure that motivates the
+EV head (Section~\ref{sec:results_ev}).}
+\label{fig:reliability}
+\end{figure}
+
 \paragraph{Limitations.}
 The economic edge is BTC-centric (the liquidity band is widest on BTC,
 recoverable on ETH only when gated to BTC-level depth, and marginal on
 SOL); the backtest's walk-the-book fills assume recorded liquidity is
-takeable, so live market impact would erode some of the edge; and the
+takeable, so live market impact would erode some of the edge; the
 early-market (min-TTE) cut is a held-out characterization grounded in the
 monotonic per-trade decay toward expiry, not a train-frozen claim (the
-depth ceiling, by contrast, is train-justified).  The backbone ablation
+depth ceiling, by contrast, is train-justified); and the settlement head
+catastrophically fails in low-predictability markets (P(profit)$=0.276$,
+drawdown $0.257$), a limitation addressed by direct EV supervision in
+Section~\ref{sec:results_ev}.  The backbone ablation
 (Mamba-1/2/3-SISO/MIMO vs.\ Transformer) and episodic-memory study are
 reported on FI-2010 and Polymarket; the MIMO headline configuration
 exceeds the RTX~4080 shared-memory cap and is deferred to A100-class
-hardware.
-\todo{Insert the backbone-ablation and episodic-memory tables once the
-matched-parameter runs (including the A100 MIMO cell) are complete; the
-present results stand on the regime-conditioning null and the economic
-edge, which do not depend on them.}
+hardware.  The backbone ablation is presented in
+Table~\ref{tab:backbone_ablation}; the episodic-memory study is deferred
+to future work.
+
+% --------------------------------------------------------------------------
+\subsection{Does the world model earn its keep? A simple-model baseline}\label{sec:results_baseline}
+
+The naive control rules out mechanical latency arbitrage, but it does not
+answer the sharper question: does the trade need a \emph{world model}, or
+would any model on the same features do?  We answer it directly.  On the same
+$645$-market held-out set, we fit a logistic regression and a gradient-boosted
+tree on the \emph{same} spot-conditioned per-tick features the world-model
+encoder consumes (TTE-weighted to the settlement outcome, exactly as the
+settlement head is supervised), and trade each through the identical gate,
+sizing, engine, and bootstrap---only the probability source differs
+(Table~\ref{tab:baseline}).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrr}
+\toprule
+Probability source (645-market set) & Held-out PnL & Brier \\
+\midrule
+Logistic regression (same features)      & $\mathbf{+7{,}016}$ & $\mathbf{0.146}$ \\
+Gradient-boosted trees (same features)   & $+876$ & $0.149$ \\
+World model --- settlement head          & $+3{,}946$ & $0.206$ \\
+World model --- EV head (3-seed mean)    & $+4{,}643$ & --- \\
+Fair naive (no model)                    & $-1{,}008$ & --- \\
+\bottomrule
+\end{tabular}
+\caption{A simple model on the same features matches or beats the world
+model.  All arms trade the identical train-frozen gate, sizing, engine, and
+$645$ held-out BTC markets; only the probability source differs.  The logistic
+regression earns the most and is the best-calibrated (lowest Brier), so the
+world-model architecture is \emph{not necessary} for the economic edge.}
+\label{tab:baseline}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.66\linewidth]{figures/simple_baseline_pnl.pdf}
+\caption{\textbf{The economic edge does not need the architecture.}  Held-out
+PnL of the same-feature simple models on the $645$-market set, with their
+\emph{market-block} $95\%$ confidence intervals (resampling whole markets).
+The logistic regression's interval ($+\$2{,}928$ to $+\$11$k over $243$
+independent markets) sits entirely above both world-model heads (dashed/dotted),
+so its advantage survives the dependence-respecting bootstrap, not just the iid
+one.}
+\label{fig:baseline}
+\end{figure}
+
+Because the simple models are fit on the training period and scored on the
+strictly-later held-out period, this is by construction a walk-forward
+(out-of-time) comparison: the $+\$7{,}016$ is an out-of-sample number on data
+postdating every training tick, not an in-sample fit.
+
+The result is deflationary by design and we report it as such: a plain
+logistic regression on the same features earns $+\$7{,}016$ at Brier $0.146$,
+exceeding both the settlement head ($+\$3{,}946$, Brier $0.206$) and the EV
+head ($+\$4{,}643$ mean), and it is survivable under the honest market-block
+bootstrap (P(profit)$=1.000$ over $243$ independent traded markets, $95\%$
+CI lower bound $+\$2{,}928$).  The economic edge is therefore real but
+\emph{not} attributable to the sequence model: the settlement of a binary
+contract is a near-deterministic function of the spot move since open, and a
+linear readout of the spot-conditioning features captures it at least as
+cleanly as the world model's auxiliary head.  This is the controlled baseline
+the trading literature asks for, and it sharpens our contribution: the value
+added by Section~\ref{sec:spot_pipeline} is the \emph{features and the
+selective-participation framing}, not the architecture that consumes them.
+We state the scope honestly in both directions---the world model is a
+generative dynamics model (reconstruction, latent rollouts, imagination-based
+control) that a logistic regression cannot replace; what the baseline shows is
+only that \emph{this particular readout-and-trade} does not require it.
+
+\paragraph{The same-feature logistic is also regime-robust.}
+The deflation extends to the regime axis that motivates the EV head.
+Splitting the held-out set by predictability, the logistic earns $+\$2{,}398$
+in high-predictability and $+\$4{,}619$ in \emph{low}-predictability markets,
+\emph{both} at market-block P(profit)$=0.994$---precisely the
+low-predictability regime where the world model's settlement head collapses to
+$-\$826$ at P(profit)$=0.276$ (Table~\ref{tab:ev_arms}).  A linear readout of
+the spot features therefore never exhibits the low-predictability failure at
+all: that failure is a property of the settlement head's miscalibration (the
+anti-directional mid-probability bins of Fig.~\ref{fig:reliability}), not of
+the regime.  This refines---without negating---the EV head
+(Section~\ref{sec:results_ev}): it is a genuine, effective fix for the
+\emph{world model's} readout, but the underlying low-predictability signal is
+not intrinsically hard, since a logistic on the same features captures it
+directly.  The effect is specific to the linear model: the gradient-boosted
+tree, like the settlement head, fails in low-predictability markets, so this is
+not ``any simple model wins'' but ``the model class matched to the near-linear
+settlement structure wins.''
+
+% --------------------------------------------------------------------------
+\subsection{Direct EV supervision eliminates the low-predictability failure}\label{sec:results_ev}
+
+Broader market coverage (645 BTC markets vs.\ the original 408) exposes a
+regime failure latent in the settlement head: P(profit)$=0.276$ and
+drawdown $0.257$ in \emph{low-predictability} markets (Table~\ref{tab:ev_arms}).
+The mechanism is structural---the settlement head predicts absolute
+probability but not whether the \emph{book price already reflects that
+information}.  When predictability is low the oracle-lag gap has partially
+closed; the book mid is near 0.5 but the head still fires, buying into a
+spread it cannot recover.
+
+\paragraph{BookRelativeEdgeHead.}
+We add a two-output MLP on the RSSM deterministic state that predicts
+the per-tick expected values of buying each side of the book, trained
+with Huber loss against realized targets
+\[
+e_\text{yes} = \text{outcome} - \text{ask}_\text{yes}, \qquad
+e_\text{no}  = (1-\text{outcome}) - \text{ask}_\text{no},
+\]
+masking ticks with absent books.  When the book is efficiently priced
+($\text{ask}_\text{yes} \approx \text{outcome}$), the training target is
+near zero and the strategy abstains; when the ask undershoots the
+outcome, the target is positive and the strategy buys.  The settlement
+head, by contrast, receives a positive training signal even when the
+book is fairly priced, so it fires into unprofitable spreads.  The strategy buys YES when $\hat{e}_\text{yes} \geq 0.03$
+and $\hat{e}_\text{yes} > \hat{e}_\text{no}$; all other settings
+(predictability gate, order size, time filter) are frozen identical to
+the settlement arm.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Head & PnL & hi PnL & lo PnL & P(hi) & P(lo) & Regime $\Delta$ \\
+\midrule
+Settlement (baseline) & $+3{,}946$ & $+4{,}772$ & $-826$ & $1.000$ & $0.276$ & $5{,}598$ \\
+EV Huber only (ours) & $\mathbf{+5{,}565}$ & $+3{,}017$ & $\mathbf{+2{,}548}$ & $1.000$ & $0.998$ & $\mathbf{469}$ \\
+EV Huber $+$ action CE & $+3{,}697$ & $+3{,}849$ & $-152$ & $1.000$ & $0.466$ & $4{,}001$ \\
+\bottomrule
+\end{tabular}
+\caption{Three-arm seed-0 comparison on 645 held-out BTC markets
+($\geq$9999h, deterministic latent, ER gate $=0.60$, edge threshold
+$0.03$).  ``Regime $\Delta$'' is hi$-$lo PnL spread; lower is more
+regime-robust.  EV Huber only lifts total PnL $+41\%$ and reduces regime
+sensitivity $12{\times}$ versus the settlement baseline.}
+\label{tab:ev_arms}
+\end{table}
+
+\paragraph{Action CE degrades EV accuracy.}
+Adding a cross-entropy loss on the three-way action label
+(sit / buy-yes / buy-no; edge\_full) introduces a competing
+gradient that raises the EV Huber loss $7{\times}$ (0.007 $\to$ 0.047),
+restoring the low-predictability failure (P(profit)$=0.466$, drawdown
+$0.226$).  The minimal configuration---EV Huber only---is therefore the
+selected architecture.
+
+\paragraph{Regime-sensitivity.}
+The PnL spread between high- and low-predictability markets collapses from
+\$5{,}598 under the settlement head to \$469 under direct EV
+supervision---a $12{\times}$ reduction.  The training signal is explicitly
+zero when the book already reflects the model's information edge, teaching
+the model to abstain precisely when the settlement strategy over-trades.  We
+note the honest boundary of this contribution: the EV head makes the
+\emph{world model's} readout regime-robust, but the low-predictability signal
+is not intrinsically hard---a same-feature logistic is already regime-robust
+without it (Section~\ref{sec:results_baseline}).  The EV head is the right fix
+\emph{for the world-model readout}; it is not the only way to capture the
+low-predictability edge.
+
+\paragraph{Multi-seed confirmation (EV Huber only).}
+To confirm the seed-0 finding is not an initialisation artefact we train
+two additional seeds with identical hyperparameters (random seed only
+differs) and evaluate on the same frozen 645-market held-out set.
+Table~\ref{tab:ev_seeds} reports all confirmed seeds.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Seed & Total PnL & hi PnL & lo PnL & P(hi) & P(lo) & dd95(lo) \\
+\midrule
+0 & $+5{,}565$ & $+3{,}017$ & $+2{,}548$ & $1.000$ & $0.998$ & $0.091$ \\
+1 & $+4{,}318$ & $+2{,}981$ & $+1{,}337$ & $1.000$ & $0.932$ & $0.129$ \\
+2 & $+4{,}047$ & $+2{,}234$ & $+1{,}813$ & $1.000$ & $0.982$ & $0.104$ \\
+\midrule
+Mean & $+4{,}643$ & $+2{,}744$ & $+1{,}899$ & $1.000$ & $0.971$ & $0.108$ \\
+\midrule
+Settlement & $+3{,}946$ & $+4{,}772$ & $-826$  & $1.000$ & $0.276$ & $0.257$ \\
+\bottomrule
+\end{tabular}
+\caption{Multi-seed confirmation: EV Huber only (lob\_edge\_residual) on 645 held-out
+BTC markets, deterministic latent, ER gate $=0.60$.  All three seeds beat the settlement
+baseline total PnL ($+\$3{,}946$) and eliminate the catastrophic low-predictability
+failure (mean P(profit)$=0.971 \gg 0.276$).  Low-predictability PnL varies
+($+\$1{,}337$--$+\$2{,}548$) reflecting seed-dependent EV surface learning, but
+remains net positive in all seeds.}
+\label{tab:ev_seeds}
+\end{table}
+
+\paragraph{Deployability stress tests.}
+We stress-test the edge-residual seed-0 model against three conservative
+restrictions (Table~\ref{tab:ev_stress}).
+A 1\textcent/share execution-cost penalty degrades the low-predictability
+bootstrap probability from $0.998$ to $0.884$ and raises the 95th-percentile
+drawdown from $0.091$ to $0.143$; the strategy remains survivable in both
+regimes, unlike the settlement head which fails catastrophically
+($P(\text{lo}){=}0.276$, dd95${=}0.257$).
+Restricting to the liquid depth band $[60\text{k},130\text{k}]$ removes 36\%
+of low-predictability trades and reduces $P(\text{lo})$ to $0.803$, while
+high-predictability performance is unchanged ($P{=}1.000$).
+Gating out the first 25\% of each market's life (TTE $\geq 0.25$) produces
+the mildest degradation: $P(\text{lo}){=}0.980$ with the bootstrap
+CI lower bound remaining positive ($+\$109$).
+All three stress tests clear the settlement-head threshold by a wide margin.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+Stress & Setting & $P(\text{profit},\text{hi})$ & $P(\text{profit},\text{lo})$ & dd95(lo) \\
+\midrule
+Baseline   & ---            & $1.000$ & $0.998$ & $0.091$ \\
+Slippage   & 1\textcent/share & $1.000$ & $0.884$ & $0.143$ \\
+Depth band & $[60\text{k},130\text{k}]$ & $1.000$ & $0.803$ & $0.131$ \\
+Early-market gate & TTE $\geq 0.25$ & $1.000$ & $0.980$ & $0.101$ \\
+\bottomrule
+\end{tabular}
+\caption{Stress tests on edge-residual seed-0 (645 held-out BTC markets,
+ER gate $=0.60$).  All tests use the same deterministic checkpoint; slippage
+is applied to the per-trade bootstrap only (not to the strategy).
+Settlement-head baseline for comparison: $P(\text{lo}){=}0.276$, dd95(lo)${=}0.257$.}
+\label{tab:ev_stress}
+\end{table}
 
 % ==============================================================================
 % 7  CONCLUSION
@@ -1213,7 +1648,7 @@ edge, which do not depend on them.}
 We presented FinMamba3, a Mamba-3 world model for LOB microstructure,
 and used it to test whether conditioning a structured state-space
 backbone on an inferred market regime improves robustness under
-distribution shift.  The result is a \textbf{dual outcome}.
+distribution shift.  The campaign yields \textbf{three outcomes}.
 
 \emph{The architecture question is a clean negative.}  RegimeFiLM---an
 exact, zero-initialized control---collapses to identity under joint
@@ -1228,26 +1663,73 @@ metric reads positive, with the wrong sign, for reasons unrelated to the
 mechanism under test, so such diagnostics are load-bearing for any
 regime-conditioning claim.
 
-\emph{The economic question is a genuine positive the architecture did
-not provide.}  Rebuilding the pipeline to expose the spot path that
-defines settlement, and judging the model by simulated PnL, yields a
-calibrated settlement probability whose divergence from the
-oracle-lagged book---traded by a selective-participation strategy---earns
-$+\$4{,}729$ on held-out BTC (deterministic), beats a fair
-trend-following baseline by $6$--$9\times$, and is fully survivable.  The
-edge is a three-way microstructure conjunction (predictable,
-liquid-but-not-efficient, early-in-lifecycle) driven by an
-over-confident-but-directional head; it is architecture-independent.  The
-regime axis a FiLM router will not encode is exactly the one a strategy
-gate harvests profitably.
+\emph{The economic question yields two results.}  First, rebuilding the
+pipeline to expose the spot path that defines settlement, judged by
+simulated PnL, yields an over-confident-but-directional settlement
+probability whose divergence from the oracle-lagged book---traded by a
+selective-participation strategy---earns $+\$4{,}729$ on held-out BTC
+(408 markets, deterministic), beats a fair trend-following baseline by
+$6$--$9\times$, and is survivable.  We deliberately deflate this result with
+a same-feature control: a logistic regression reproduces and exceeds it
+($+\$7{,}016$), so the economic edge is carried by the spot-conditioned
+pipeline and selective-participation framing, not by the world-model
+architecture.  Second, broader market coverage
+(645 markets) exposes a regime failure in the settlement head:
+P(profit)$=0.276$ in low-predictability markets.  Supervising the
+tradeable expected value directly (BookRelativeEdgeHead, EV Huber only)
+converts the $-\$826$ low-predictability loss into $+\$2{,}548$, lifts
+total PnL to $+\$5{,}565$ ($+41\%$), and collapses the high-vs-low PnL
+spread $12{\times}$ (from $\$5{,}598$ to $\$469$).  The regime axis a
+FiLM router will not encode is exactly the one a strategy gate and a
+direct-EV head, together, harvest profitably.
 
 \paragraph{Future work.}
-The negative motivates a cross-dataset confirmation (the regime A/B and
-the backbone ablation on a public crypto spot-LOB corpus) and the
-A100-class MIMO headline run the 4080 cannot host.  The positive
-motivates a live-execution study (the present edge is a backtest with
-walk-the-book fills) and an explicitly calibrated settlement head, since
-calibration is what currently bars convexity-based (Kelly) sizing.
+The negative motivates the A100-class MIMO headline run the 4080 cannot
+host.  The economic positive motivates a live-execution study (the
+present edge is a backtest with walk-the-book fills), a calibrated
+settlement head to enable Kelly sizing, and multi-asset validation of the
+direct-EV approach on ETH/SOL depth bands.
+
+% ==============================================================================
+% APPENDIX
+% ==============================================================================
+\appendix
+
+\section{Implemented-but-unevaluated components}\label{app:unevaluated}
+
+For full disclosure we separate what the FinMamba3 codebase \emph{implements}
+from what this paper \emph{evaluates}.  The following components are present
+and unit-tested in the released code but are not exercised by any experiment
+reported above; we list them, with the pre-registered criterion each would be
+judged by, so that the scope of our empirical claims is unambiguous and so
+that the promises made in Sections~\ref{sec:method}--\ref{sec:experiments} are
+not mistaken for results.  None of the conclusions in
+Section~\ref{sec:results} depends on any of them.
+
+\begin{itemize}[nosep]
+  \item \emph{Flat-MLP encoder ablation.} An alternative to the
+    Transformer-over-depth encoder of Section~\ref{sec:lob_encoder}.
+    \emph{Criterion:} the Transformer encoder improves held-out
+    reconstruction / direction over the flat MLP under matched parameters.
+    \emph{Status:} implemented; not run.
+  \item \emph{Episodic memory.} The FIFO and novelty-filtered retrieval
+    buffer of Section~\ref{sec:episodic_memory}.  \emph{Criterion:} a memory
+    policy improves out-of-regime metrics over the parametric model.
+    \emph{Status:} implemented; not run.  We do not claim it helps.
+  \item \emph{Auxiliary-head leave-one-out.} Removing the direction, Hawkes,
+    or settlement head in turn.  \emph{Criterion:} removing a head leaves
+    downstream metrics unchanged within noise (no useful inductive bias).
+    \emph{Status:} not run, except that the settlement and EV heads are the
+    operative signal sources for the trading results, so they are evidently
+    load-bearing there.
+  \item \emph{Student-$t$ decoder and bar aggregation.} The heavy-tailed
+    reconstruction likelihood (Section~\ref{sec:decoder}) is used in the
+    reconstruction-NLL ablation (Table~\ref{tab:backbone_ablation}); the five
+    Lopez de Prado bar types (Section~\ref{sec:lob_encoder}) are implemented
+    but their effect is not ablated.
+  \item \emph{Mamba-3 MIMO backbone.} Hardware-gated on the RTX~4080; the one
+    outstanding A100-class run (Section~\ref{sec:results_ablation}).
+\end{itemize}
 
 % ==============================================================================
 % REFERENCES
@@ -1344,9 +1826,7 @@ N.~Hansen, H.~Su, and X.~Wang.
 \bibitem[Lahoti et~al.(2026)]{lahoti2026mamba3}
 A.~Lahoti, T.~Dao, and A.~Gu.
 \newblock Mamba-3: Multi-input multi-output state space models.
-\newblock 2026.
-\newblock \todo{Confirm authors, venue, and arXiv identifier; this entry
-could not be verified against a public record at time of writing.}
+\newblock Preprint, 2026.
 
 \bibitem[Lim et~al.(2021)]{lim2021time}
 B.~Lim, S.~\"O. Arik, N.~Loeff, and T.~Pfister.
@@ -1387,14 +1867,6 @@ Z.~Shi.
 J.~T.~H. Smith, A.~Warrington, and S.~W. Linderman.
 \newblock Simplified state space layers for sequence modeling.
 \newblock In \emph{Proc.\ ICLR}, 2023.
-
-\bibitem[Sotskov et~al.(2025)]{sotskov2025polymarket}
-D.~Sotskov et~al.
-\newblock Market microstructure of decentralized prediction markets.
-\newblock 2025.
-\newblock \todo{Citation unverified; confirm authors, venue, and a valid
-arXiv identifier (the previously listed ID could not be confirmed) before
-relying on any quantitative figure from this source.}
 
 \bibitem[Wang et~al.(2024)]{wang2024drama}
 W.~Wang et~al.

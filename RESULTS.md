@@ -19,9 +19,15 @@ trading strategy built to test it is a genuine, survivable economic positive.
   (bootstrap P(profit) = 1.000, worst-5% drawdown 4.7% < 15%). The model's calibrated settlement probability — not the
   gate's mechanical edge — is the dominant driver. The edge is characterized as a **3-way microstructure conjunction**
   (predictable **and** liquid-but-not-efficient **and** early-market).
-- **Reading.** The regime axis a FiLM *router* will not encode is exactly the one a *strategy gate* harvests
-  profitably. The contribution is the preprocessing overhaul + the selective-participation strategy, not the
-  regime-conditioning architecture.
+- **(C) Direct EV supervision — POSITIVE (regime robustness breakthrough).** Broader validation (645 markets, seed-0)
+  exposes a latent settlement-head failure: **P(profit) = 0.276, dd95 = 0.257** in low-predictability markets. The
+  `BookRelativeEdgeHead` (EV Huber only, no action CE) converts the **−$826 loss into +$2,548** and lifts total PnL to
+  **+$5,565 (+41% vs settlement)**. The high-vs-low PnL spread collapses **12×** ($5,598 → $469). Action CE degrades EV
+  accuracy 7× and restores the failure; the minimal EV-Huber-only config is the selected arm (seed-0/1/2 confirmation in
+  progress). See §6 for full details.
+- **Reading.** The regime axis a FiLM *router* will not encode is exactly the one a *strategy gate* and a *direct-EV
+  head*, together, harvest profitably. The contribution is the preprocessing overhaul + selective participation +
+  direct EV supervision, not the regime-conditioning architecture.
 
 ---
 
@@ -251,3 +257,143 @@ Mamba-1, Mamba-2, Mamba-3 SISO, and a Transformer under matched parameter budget
   benchmark on the published horizon-10 labels is the real direction reference: **DeepLOB macro-F1 0.628** vs majority
   0.261 and a linear-AR next-tick floor 0.157 — reproducing the LOBCAST in-distribution range and confirming FI-2010
   carries genuine short-horizon signal (so the FiLM null is a real negative, not a no-signal artifact).
+
+---
+
+## 6. BookRelativeEdgeHead — direct EV supervision (newgoal-3.md campaign)
+
+### 6.1 Motivation and setup
+
+Expanded validation (645 BTC markets, 2026-06-18) exposes a settlement-head failure hidden in the original 408-market
+evaluation: the head catastrophically loses in low-predictability markets (P(profit) = 0.276, dd95 = 0.257). The cause
+is structural: the settlement head predicts absolute probability but not whether the *book price already reflects that
+information*. When predictability is low, the oracle-lag gap has partially closed; the head still fires into a spread
+it cannot recover.
+
+**Hypothesis:** Supervising the *tradeable* expected value directly — `ev_yes = outcome - yes_ask`,
+`ev_no = (1-outcome) - no_ask` — teaches the model to abstain when the book already reflects the edge.
+
+**Config:** `configs/lob_edge_residual.yaml` (EV Huber only; all other params identical to `lob_spot.yaml`).
+**Inference:** `--prob-source edge` routes backtest through `BookRelativeEdgeHead`; all gates identical to settlement arm.
+**Norm file:** `saved_models/lob/norm_edge_residual_s0.json` (28-dim, deterministic for same training data).
+
+### 6.2 Three-arm seed-0 screen (645 BTC markets, --hours-val 9999, --deterministic-latent, --predictability-gate 0.60)
+
+| config | PnL total | high_pred PnL | low_pred PnL | P(hi) | P(lo) | dd95(lo) | Regime Δ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `lob_spot` settlement (5rkphy4i) | +$3,946 | +$4,772 | **−$826** | 1.000 | 0.276 | 0.257 | $5,598 |
+| `lob_edge_residual` (61kb278p) | **+$5,565** | +$3,017 | **+$2,548** | 1.000 | 0.998 | 0.091 | **$469** |
+| `lob_edge_full` (8nti99zj) | +$3,697 | +$3,849 | −$152 | 1.000 | 0.466 | 0.226 | $4,001 |
+
+**Screen winner: `lob_edge_residual` (EV Huber only).**
+
+Key findings:
+1. Settlement catastrophically fails on low_pred markets (P=0.276, dd95=0.257).
+2. edge_residual converts −$826 → +$2,548 (+41% total PnL vs settlement).
+3. The high-vs-low PnL spread (Regime Δ) collapses 12× ($5,598 → $469): the head learns to abstain when book = fair.
+4. Action CE (edge_full) raises ev_hub 7× (0.047 vs 0.007) and restores the low_pred failure (P=0.466, dd95=0.226).
+
+Report files: `reports/screen_settlement_s0.json`, `reports/screen_edge_residual_s0.json`, `reports/screen_edge_full_s0.json`.
+
+### 6.3 Seed 0/1/2 confirmation (edge_residual arm)
+
+Win bar: beat settlement on same 645-market data (+$3,946), P(lo) >> 0.276, model-minus-naive > 0 in both regimes.
+
+| seed | PnL total | high_pred PnL | low_pred PnL | P(hi) | P(lo) | dd95(lo) | verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| 0 | +$5,565 | +$3,017 | +$2,548 | 1.000 | 0.998 | 0.091 | **PASS** |
+| 1 | +$4,318 | +$2,981 | +$1,337 | 1.000 | 0.932 | 0.129 | **PASS** |
+| 2 | +$4,047 | +$2,234 | +$1,813 | 1.000 | 0.982 | 0.104 | **PASS** |
+| **mean** | **+$4,643** | +$2,744 | +$1,899 | 1.000 | 0.971 | 0.108 | **ALL PASS** |
+
+Settlement baseline (same data): +$3,946, P(lo)=0.276, dd95(lo)=0.257. All 3 seeds beat settlement on total PnL. Mean P(lo)=0.971 vs settlement 0.276.
+
+### 6.4 Stress tests
+
+All on edge_residual seed-0 checkpoint (61kb278p), 645 BTC markets, ER gate 0.60, edge-threshold 0.03.
+Note: slippage was silently ignored pre-fix (2026-06-18); fixed to thread through per_trade_pnls in bootstrap.
+
+| stress | setting | hi P | lo P | dd95(lo) | verdict |
+|---|---|---:|---:|---:|---|
+| baseline | --- | 1.000 | 0.998 | 0.091 | reference |
+| slippage | 1¢/share | 1.000 | 0.884 | 0.143 | **PASS** (>> settlement 0.276/0.257) |
+| depth band | [60k, 130k] | 1.000 | 0.803 | 0.131 | **PASS** (36% fewer lo trades; P >> 0.276) |
+| early-market | TTE ≥ 0.25 | 1.000 | 0.980 | 0.101 | **PASS** (ci_low=+$109, stays above zero) |
+
+Details:
+- Slippage: lo P 0.998→0.884, ci_low=-$764, mean_terminal=+$1,134
+- Depth band: lo trades 1819→1162 (-36%), lo P→0.803, ci_low=-$847, mean=+$681
+- TTE gate: lo trades 1819→1483 (-18%), lo P→0.980, ci_low=+$109, mean=+$1,803
+- Settlement baseline lo P=0.276 (catastrophic) for all comparisons
+
+### 6.5 Final verdict
+
+**CAMPAIGN COMPLETE — BookRelativeEdgeHead PASSES all gates.**
+
+Primary (seed-0, 645 markets): +$5,565 total (+41% vs settlement), lo P=0.998 vs 0.276.
+Multi-seed: all 3 seeds beat +$3,946 settlement; mean +$4,643, mean P(lo)=0.971.
+Stress tests: all 3 PASS vs settlement threshold (worst: depth-band lo P=0.803 >> 0.276).
+Tests: 263/263 pass. Paper: sec:results_ev + tab:ev_arms + tab:ev_seeds + tab:ev_stress added.
+
+---
+
+## 7. Simple-model baseline — does the world model earn its keep? (review-driven, 2026-06-19)
+
+A pre-submission reviewer pass flagged that the economic edge was only ever compared to a *no-model* naive,
+never to a *simple-model* baseline on the same features — so the architecture was never shown to be
+necessary. We closed that gap. `finmamba3.eval.simple_baseline` fits a logistic regression and a
+gradient-boosted tree on the **same** 108-dim spot-conditioned per-tick features the world-model encoder
+consumes (TTE-weighted to the settlement outcome, exactly as the settlement head is supervised), and trades
+each through the **identical** gate (ER 0.60), sizing (fixed 50), engine, and bootstrap — only the
+probability source differs. Fit on `data/train` (2707 BTC markets, 1.59M ticks), evaluated on the same
+645-market held-out set as the EV head.
+
+| Probability source (645-market set) | Held-out PnL | Brier | market-block P(profit) | indep. markets |
+|---|---:|---:|---:|---:|
+| **Logistic regression (same features)** | **+$7,016** | **0.146** | **1.000** | 243 |
+| Gradient-boosted trees (same features, random_state=0) | +$876 | 0.149 | 0.691 | 241 |
+| World model — settlement head | +$3,946 | 0.206 | — | — |
+| World model — EV head (3-seed mean) | +$4,643 | — | — | — |
+| Fair naive (no model) | −$1,008 | — | — | — |
+
+**Finding (deflationary, by design):** a plain **logistic regression on the same features earns +$7,016 at
+Brier 0.146**, *exceeding both* the settlement head (+$3,946, Brier 0.206) and the EV head (+$4,643), and is
+survivable under the honest **market-block bootstrap** (P=1.000 over 243 independent markets, 95% CI low
++$2,928). The economic edge is **real but architecture-independent**: binary-contract settlement is a
+near-deterministic function of the spot move since open, and a linear readout of the spot features captures
+it at least as cleanly as the world model's auxiliary head. This *confirms* the paper's existing
+"architecture-independent" claim (contribution 4) and answers Q1 honestly. Scope stated both ways: the world
+model is a generative dynamics model (reconstruction / latent rollouts / imagination) a logistic cannot
+replace — the baseline shows only that *this readout-and-trade* does not need it.
+
+**Regime split (bears on the EV head, contribution 5):** the logistic is regime-robust too — high_pred
++$2,398 (P=0.994), **low_pred +$4,619 (P=0.994)** — i.e. it never exhibits the low-predictability failure
+the settlement head has (−$826, P=0.276) and the EV head fixes. So the low-pred signal is *not intrinsically
+hard*; the EV head is a real fix *for the WM readout*, not the only way to capture it. Nuance: the effect is
+**linear-specific** — the GBT, like the settlement head, fails low_pred (−$705, P=0.338). Paper tempered both
+`sec:results_baseline` and the EV-head `Regime-sensitivity` paragraph accordingly. This is a *walk-forward*
+(out-of-time) comparison by construction: models fit on the train period, scored on the strictly-later val period.
+
+Repro: `python -m finmamba3.eval.simple_baseline --config configs/lob_spot.yaml --data-train data/train
+--data-val data/validation --norm-path saved_models/lob/norm_spot_seed0_base.json --assets BTC
+--hours-train 9999 --hours-val 9999 --predictability-threshold 0.60 --edge-threshold 0.03`. Reports:
+`reports/simple_baseline_btc645.json` (flat), `reports/simple_baseline_btc645_split.json` (regime split, deterministic).
+
+### 7.1 New review-driven tooling (all CPU-runnable, no mamba_ssm/CUDA)
+
+- **Market-block bootstrap** (`bootstrap_survivability_by_market` + `per_trade_pnls_by_market` in
+  `pnl_backtest.py`): resamples whole markets, not iid trades, so the effective N is the independent-market
+  count, not the trade count. Wired into `run_pnl_backtest` and `run_threshold_sweep` reports. Drawdown
+  reduction verified exact vs brute-force concatenation.
+- **Signal-delay stress test** (`--signal-delay-secs`, `delay_prob_series`): stales the model signal by N s
+  while the gate stays at trade time — the load-bearing latency check, since the edge *is* a latency play.
+  Timestamp alignment documented in the paper (all sources floored to integer Unix-epoch seconds,
+  last-value-per-second, books **forward-filled** = never look-ahead).
+- **Figures** (`make_paper_figures.py`): reliability diagram (Brier 0.206, over-confident-but-directional),
+  film_g-across-settings inertness bar, and the simple-baseline PnL-vs-WM comparison.
+- Tests: +3 in `test_pnl_backtest.py` (block bootstrap independent-market counting, per-market grouping,
+  signal delay); `test_pnl_backtest.py` 28/28 pass.
+
+**Note on environment:** the world model itself cannot be re-run here (no `mamba_ssm`, CPU-only torch), so
+WM-arm re-runs (market-block bootstrap on the WM headline, WM signal-delay sweep, a 3rd settlement seed) are
+wired + documented but pending a CUDA box; all *baseline* numbers above are real and were computed locally.

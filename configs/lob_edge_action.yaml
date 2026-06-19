@@ -1,0 +1,216 @@
+BasicSettings:
+  ObsMode: features
+  FeatureDim: 108
+  ReplayBufferOnGPU: True
+  Seed: 0
+  Env_name: LOB
+  Device: cuda:0
+  Use_amp: True
+  NormClip: 8.0
+  Use_cg: False
+  Compile: False
+  SavePath: None
+
+Evaluate:
+  EpisodeNum: 10
+  NumEnvs: 1
+  DuringTraining: False
+  EverySteps: 1000
+
+JointTrainAgent:
+  SampleMaxSteps: 6000
+  EarlyStoppingPatience: 0
+  EarlyStopMetric: Val/reconstruction_loss
+  SaveBestOnly: false
+  BufferMaxLength: 400000
+  MarketCount: 8
+  WorldModelWarmUp: 64
+  BehaviourWarmUp: 1000000
+  NumEnvs: 1
+  BatchSize: 128
+  AccumSteps: 1
+  BatchLength: 64
+  ImagineBatchSize: 64
+  ImagineContextLength: 8
+  ImagineBatchLength: 16
+  RealityContextLength: 16
+  TrainDynamicsEverySteps: 1
+  TrainDynamicsEpoch: 1
+  TrainAgentEverySteps: 1
+  FreezeWorldModelAfterSteps: 20000
+  FreezeBehaviourAfterSteps: 0
+  SaveEverySteps: 3000
+  LogEvery: 50
+  SaveModels: True
+  Tau: 10
+  ImaginationTau: 10
+  Alpha: 1.0
+  Beta: 1.0
+
+Models:
+  WorldModel:
+    dtype: float32
+    Backbone: Mamba3
+    Act: SiLU
+    CategoricalDim: 32
+    ClassDim: 32
+    HiddenStateDim: 1024
+    Optimiser: Laprop
+    LatentDiscreteType: naive
+    Max_grad_norm: 100
+    Warmup_steps: 100
+    LRSchedule: cosine
+    LRMinRatio: 0.1
+    UseActionInput: True
+    DirectionThresholds: null
+    Dropout: 0.1
+    Unimix_ratio: 0.01
+    Weight_decay: 1.0e-4
+    RepresentationLossWeight: 0.1
+    FreeBits: 1.0
+    Adam:
+      LearningRate: 1.0e-4
+    Laprop:
+      LearningRate: 3.0e-4
+      Epsilon: 1.0e-20
+    Encoder:
+      Type: lob
+      K: 10
+      FeatureDimLevel: 8
+      FeatureDimTick: 28
+      BinaryMarketFeatures: True
+      SpotFeatures: True
+      DModel: 256
+      NumLayers: 2
+      NumHeads: 4
+      DimFeedforward: 512
+      OutputFlattenDim: 2048
+      AggregateOnly: False
+      GradientCheckpointing: False
+    Decoder:
+      Kind: mse
+      HiddenDim: 1024
+      NumLayers: 3
+      NuInit: 5.0
+      LearnableNu: True
+      SizeWeight: 2.0
+    Reward:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Termination:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Transformer:
+      FinalFeatureWidth: 4
+      NumLayers: 2
+      NumHeads: 8
+    Mamba:
+      n_layer: 2
+      d_intermediate: 0
+      ssm_cfg:
+        d_state: 16
+    Mamba3:
+      Enabled: true
+      n_layer: 6
+      is_mimo: false
+      mimo_rank: 4
+      d_state: 128
+      headdim: 64
+      chunk_size: 16
+      is_outproj_norm: false
+      rope_fraction: 0.5
+    Direction:
+      Enabled: True
+      NumClasses: 3
+      Threshold: 0.01
+      LossWeight: 0.5
+      Dropout: 0.0
+      ClassBalanced: True
+    Regime:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+    RegimeFiLM:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+      EntropyCoef: 0.01
+    EpisodicMemory:
+      Enabled: False
+      Capacity: 50000
+      TopK: 4
+      MinFillBeforeRetrieve: 1024
+      RetrieveEvery: 4
+      UseNovelty: False
+      NoveltyThreshold: 0.0
+    Hawkes:
+      Enabled: False
+      LossWeight: 0.1
+    Settlement:
+      Enabled: True
+      LossWeight: 1.0
+      TTEWeighted: True
+      SpotSignAux: True
+      SpotSignWeight: 0.5
+    EdgeHead:
+      Enabled: True
+      HuberWeight: 1.0
+      ActionCE: True         # EV Huber + action CE.
+      ActionCEWeight: 0.5
+      Threshold: 0.03
+
+  Agent:
+    dtype: float32
+    Policy: AC
+    Unimix_ratio: 0
+    AC:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EntropyCoef: 3.e-4
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.0e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+    PPO:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EpsilonClip: 0.2
+      K_epochs: 3
+      Minibatch: 16384
+      CriticCoef: 1
+      EntropyCoef: 3.e-4
+      KL_threshold: 0.01
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+
+Wandb:
+  Init:
+    Mode: offline
+    Project: Drama_LOB_pretrain
+n: lob
