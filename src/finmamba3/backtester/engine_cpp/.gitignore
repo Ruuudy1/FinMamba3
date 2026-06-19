@@ -1,0 +1,7 @@
+# Native build artifacts (built on demand via `python -m finmamba3.backtester.engine_cpp.build`).
+_engine*.pyd
+_engine*.so
+_engine*.lib
+_engine*.exp
+*.obj
+_build_tmp/
