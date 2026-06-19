@@ -7,7 +7,7 @@ State machine per market: UPCOMING -> ACTIVE -> SETTLED
 # region imports
 from __future__ import annotations
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from finmamba3.backtester.data_loader import TickData
 from finmamba3.backtester.strategy import (
     MarketLifecycle,
@@ -15,7 +15,6 @@ from finmamba3.backtester.strategy import (
     MarketView,
     OrderBookSnapshot,
     Settlement,
-    Token,
 )
 # endregion
 

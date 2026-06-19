@@ -20,6 +20,9 @@ import yaml
 from finmamba3.backtester import build_timeline
 from finmamba3.backtester.data_loader import BacktestData, _asset_from_slug
 from finmamba3.backtester.engine import BacktestEngine, MAX_SHARES_PER_TOKEN
+from finmamba3.backtester.engine_cpp import (
+    STRATEGY_NAIVE_LAG, STRATEGY_WORLD_MODEL, align_run_signals, marshal_timeline, run_marshalled,
+)
 from finmamba3.backtester.strategy import BaseStrategy, MarketLifecycle, Order, Settlement, Side, Token
 from finmamba3.config import DotDict, parse_args_and_update_config
 from finmamba3.envs.lob_features import apply_normalization, extract_features, load_normalization
@@ -571,11 +574,55 @@ def _load_config(config_path: Path, overrides: list[str]) -> DotDict:
     return DotDict(parse_args_and_update_config(cfg_raw, argv=[f"--{kv.split('=')[0]}={kv.split('=')[1]}" for kv in overrides]))
 
 
+def _cpp_params(strategy_kwargs: dict, ev_by_slug_ts: dict | None) -> dict:
+    # Flatten the strategy kwargs into the flat params dict the native engine and its fail-fast guard
+    # read; the guard rejects any key whose logic is not yet ported, so the cpp run cannot diverge.
+    return {**strategy_kwargs, "ev_by_slug_ts": ev_by_slug_ts}
+
+
+def _naive_cpp_params(order_size: float, max_tte_frac: float, cusum_threshold: float) -> dict:
+    # The ungated naive baseline as the native engine reads it: fixed size on a CUSUM event, none of the
+    # not-yet-ported gates engaged, so it passes the guard on the v1 native path.
+    return {
+        "edge_threshold": 0.0, "order_size": order_size, "max_tte_frac": max_tte_frac, "min_tte_frac": 0.0,
+        "use_cusum": True, "cusum_threshold": cusum_threshold, "sizing": "fixed",
+        "calibration_temperature": 1.0, "use_predictability_gate": False,
+        "min_book_depth": 0.0, "max_book_depth": 0.0, "ev_by_slug_ts": None,
+    }
+
+
+def _run_engine_arm(
+    engine: str, engine_data: BacktestData, strategy: BaseStrategy,
+    marshalled, strategy_kind: int, params: dict, cash: float, signals=None,
+):
+    """Run one strategy arm through the Python reference engine or the native C++ engine.
+
+    The cpp path replays the timeline marshal_timeline flattened once per regime; signals are the per-run
+    cell-aligned gate arrays, which a sweep hoists out of its loop (constant gate window) and passes in,
+    else run_marshalled aligns them. Both paths return the same result surface (pnl, trades, fills, snapshots).
+    """
+    if engine == "python":
+        return BacktestEngine(engine_data, strategy, starting_cash=cash, snapshot_interval=60).run()
+    return run_marshalled(marshalled, strategy_kind, params, cash, 60, signals=signals)
+
+
+def _sweep_aligned(engine: str, cache: dict, marshalled, strategy_kind: int, params: dict, window: int):
+    # Memoise the cpp sweep's cell-aligned signals per (window, arm): the gate ER / direction depend only
+    # on the gate window, not the swept threshold, so a constant-window sweep aligns once and reuses across
+    # values. The Python engine needs no alignment, so this is a no-op for it.
+    if engine != "cpp":
+        return None
+    key = (window, strategy_kind)
+    if key not in cache:
+        cache[key] = align_run_signals(marshalled, strategy_kind, params)
+    return cache[key]
+
+
 def run_pnl_backtest(
     wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     strategy_kwargs: dict, cash: float, prob_source: str = "settlement",
-    slippage_per_share: float = 0.0,
+    slippage_per_share: float = 0.0, engine: str = "python",
 ) -> dict:
     """Backtest one regime's slugs with the world-model strategy and the naive-lag baseline.
 
@@ -598,18 +645,23 @@ def run_pnl_backtest(
             for ts, prob in world_model_yes_prob_series(wm, seq, device).items():
                 prob_by_slug_ts[(slug, ts)] = prob
     engine_data = _data_for_slugs(bt, slugs)
-    model_strategy = WorldModelStrategy(
-        prob_by_slug_ts, bankroll=cash,
-        ev_by_slug_ts=ev_by_slug_ts if prob_source == "edge" else None,
-        **strategy_kwargs,
+    include_depth = strategy_kwargs["min_book_depth"] > 0.0 or strategy_kwargs["max_book_depth"] > 0.0
+    marshalled = marshal_timeline(engine_data, slugs, prob_by_slug_ts, include_depth=include_depth) if engine == "cpp" else None
+    edge_signals = ev_by_slug_ts if prob_source == "edge" else None
+    model_strategy = WorldModelStrategy(prob_by_slug_ts, bankroll=cash, ev_by_slug_ts=edge_signals, **strategy_kwargs)
+    model_result = _run_engine_arm(
+        engine, engine_data, model_strategy, marshalled,
+        STRATEGY_WORLD_MODEL, _cpp_params(strategy_kwargs, edge_signals), cash,
     )
-    model_result = BacktestEngine(engine_data, model_strategy, starting_cash=cash, snapshot_interval=60).run()
     naive_strategy = NaiveLagStrategy(
         cusum_threshold=strategy_kwargs["cusum_threshold"],
         order_size=strategy_kwargs["order_size"],
         max_tte_frac=strategy_kwargs["max_tte_frac"],
     )
-    naive_result = BacktestEngine(engine_data, naive_strategy, starting_cash=cash, snapshot_interval=60).run()
+    naive_result = _run_engine_arm(
+        engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG,
+        _naive_cpp_params(strategy_kwargs["order_size"], strategy_kwargs["max_tte_frac"], strategy_kwargs["cusum_threshold"]), cash,
+    )
     bootstrap = bootstrap_survivability(per_trade_pnls(model_result, slippage_per_share), bankroll=cash)
     return {
         "model": {
@@ -680,7 +732,7 @@ def run_threshold_sweep(
     wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     base_kwargs: dict, values: list[float], cash: float, slippage_per_share: float = 0.0,
-    sweep_param: str = "predictability", sample_mode: str = "random_sample",
+    sweep_param: str = "predictability", sample_mode: str = "random_sample", engine: str = "python",
 ) -> dict:
     """Sweep one strategy hyperparameter on the full market set, precomputing the YES probs once.
 
@@ -696,6 +748,10 @@ def run_threshold_sweep(
         for ts, prob in world_model_yes_prob_series(wm, seq, device, sample_mode=sample_mode).items():
             prob_by_slug_ts[(slug, ts)] = prob
     engine_data = _data_for_slugs(bt, slugs)
+    include_depth = base_kwargs["min_book_depth"] > 0.0 or base_kwargs["max_book_depth"] > 0.0
+    marshalled = marshal_timeline(engine_data, slugs, prob_by_slug_ts, include_depth=include_depth) if engine == "cpp" else None
+    gate_signals_by_window: dict = {}
+    aligned_by_window_arm: dict = {}
     rows = []
     for value in values:
         kwargs = dict(base_kwargs)
@@ -706,20 +762,33 @@ def run_threshold_sweep(
             kwargs["predictability_window"] = int(value)
         else:
             kwargs["predictability_threshold"] = value
-        gate_er, gate_dir = _gate_signals_by_slug_ts(bt, prob_by_slug_ts, int(kwargs["predictability_window"]))
+        window = int(kwargs["predictability_window"])
+        # The gate signals depend only on the window, so memoise them: a threshold or edge sweep computes
+        # them once (shared by both engines) instead of per value, and the cpp arms align them once too.
+        if window not in gate_signals_by_window:
+            gate_signals_by_window[window] = _gate_signals_by_slug_ts(bt, prob_by_slug_ts, window)
+        gate_er, gate_dir = gate_signals_by_window[window]
         strategy = WorldModelStrategy(prob_by_slug_ts, bankroll=cash, gate_er_by_slug_ts=gate_er, **kwargs)
-        model_result = BacktestEngine(engine_data, strategy, starting_cash=cash, snapshot_interval=60).run()
+        model_params = {**_cpp_params(kwargs, None), "gate_er_by_slug_ts": gate_er}
         # Fair baseline: the identical asset-correct predictability gate, buying the observable spot-trend
         # direction with no model, so the model must beat trend-following over the same selective gate.
         naive_pred_threshold = value if sweep_param == "predictability" else base_kwargs["predictability_threshold"]
         naive_strategy = NaiveLagStrategy(
             cusum_threshold=base_kwargs["cusum_threshold"], order_size=base_kwargs["order_size"],
             max_tte_frac=base_kwargs["max_tte_frac"], use_predictability_gate=True,
-            predictability_threshold=naive_pred_threshold, predictability_window=int(kwargs["predictability_window"]),
+            predictability_threshold=naive_pred_threshold, predictability_window=window,
             gate_er_by_slug_ts=gate_er, gate_dir_by_slug_ts=gate_dir,
             min_book_depth=base_kwargs["min_book_depth"], max_book_depth=base_kwargs["max_book_depth"],
         )
-        naive_result = BacktestEngine(engine_data, naive_strategy, starting_cash=cash, snapshot_interval=60).run()
+        naive_sweep_params = {
+            **base_kwargs, "use_predictability_gate": True, "predictability_threshold": naive_pred_threshold,
+            "predictability_window": window, "ev_by_slug_ts": None,
+            "gate_er_by_slug_ts": gate_er, "gate_dir_by_slug_ts": gate_dir,
+        }
+        model_signals = _sweep_aligned(engine, aligned_by_window_arm, marshalled, STRATEGY_WORLD_MODEL, model_params, window)
+        naive_signals = _sweep_aligned(engine, aligned_by_window_arm, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, window)
+        model_result = _run_engine_arm(engine, engine_data, strategy, marshalled, STRATEGY_WORLD_MODEL, model_params, cash, model_signals)
+        naive_result = _run_engine_arm(engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, cash, naive_signals)
         trade_pnls = per_trade_pnls(model_result, slippage_per_share)
         boot = bootstrap_survivability(trade_pnls, bankroll=cash)
         rows.append({
@@ -789,6 +858,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cash", type=float, default=10_000.0)
     p.add_argument("--out", type=Path, default=Path("reports/pnl_backtest.json"))
     p.add_argument("--device", default=None)
+    p.add_argument("--engine", choices=("python", "cpp"), default="python",
+                   help="python = pure-Python reference engine (default); cpp = native engine (build with "
+                        "`python -m finmamba3.backtester.engine_cpp.build`). Parity-checked; amortises across a sweep.")
     return p.parse_args()
 
 
@@ -856,7 +928,7 @@ def main() -> int:
         sweep_report = run_threshold_sweep(
             wm, bt, stats, all_slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, values, args.cash, args.slippage_per_share,
-            args.sweep_param, "probs" if args.deterministic_latent else "random_sample",
+            args.sweep_param, "probs" if args.deterministic_latent else "random_sample", engine=args.engine,
         )
         sweep_report["checkpoint"] = str(args.checkpoint)
         sweep_report["data_val"] = str(args.data_val)
@@ -882,7 +954,7 @@ def main() -> int:
             wm, bt, stats, slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, args.cash,
             prob_source=args.prob_source,
-            slippage_per_share=args.slippage_per_share,
+            slippage_per_share=args.slippage_per_share, engine=args.engine,
         )
         cell = report[label]
         boot = cell["model"]["bootstrap"]

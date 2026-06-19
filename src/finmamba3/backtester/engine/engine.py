@@ -9,7 +9,7 @@ to run a strategy over historical data.
 from __future__ import annotations
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from finmamba3.backtester.data_loader import BacktestData, TickData
 from .execution import ExecutionEngine
@@ -20,9 +20,6 @@ from finmamba3.backtester.strategy import (
     Fill,
     MarketLifecycle,
     MarketState,
-    MarketView,
-    Order,
-    PositionView,
     Settlement,
 )
 # endregion
@@ -180,10 +177,7 @@ class BacktestEngine:
         for settlement in settled:
             self.portfolio.apply_settlement(settlement)
             self.all_settlements.append(settlement)
-            try:
-                self.strategy.on_settlement(settlement)
-            except Exception as e:
-                logger.warning(f"Strategy on_settlement error: {e}")
+            self.strategy.on_settlement(settlement)
 
         # 3. Enrich market views with current tick data
         enriched_views = self.market_manager.enrich_views(active_views, tick)
@@ -198,10 +192,7 @@ class BacktestEngine:
         for fill in fills:
             self.portfolio.apply_fill(fill)
             self.all_fills.append(fill)
-            try:
-                self.strategy.on_fill(fill)
-            except Exception as e:
-                logger.warning(f"Strategy on_fill error: {e}")
+            self.strategy.on_fill(fill)
 
         # 5. Build MarketState for strategy
         total_value = self.portfolio.mark_to_market(enriched_views)
@@ -218,15 +209,7 @@ class BacktestEngine:
         )
 
         # 6. Call strategy
-        try:
-            orders = self.strategy.on_tick(state)
-        except Exception as e:
-            logger.warning(f"Strategy on_tick error: {e}")
-            orders = []
-
-        if orders is None:
-            orders = []
-
+        orders = self.strategy.on_tick(state)
         # 7. Validate and queue orders
         if orders:
             self.execution.queue_orders(

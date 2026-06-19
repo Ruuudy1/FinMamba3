@@ -8,13 +8,11 @@ fill logic for realistic backtesting.
 # region imports
 from __future__ import annotations
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from finmamba3.backtester.strategy import (
     Fill,
     MarketView,
     Order,
-    OrderBookLevel,
-    OrderBookSnapshot,
     Side,
     Token,
 )

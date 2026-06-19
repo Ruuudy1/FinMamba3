@@ -7,7 +7,7 @@ Tracks cash balance, token positions per market, and handles settlement payouts.
 # region imports
 from __future__ import annotations
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from finmamba3.backtester.strategy import (
     Fill,
     MarketView,
