@@ -17,19 +17,18 @@ python -m pytest tests/
   `src/finmamba3/eval/eval_regime_generalization_fi2010.py`.
 - **Polymarket** — binary-outcome LOB data under `data/` (gitignored). Loaded via `src/finmamba3/backtester/`.
 
-## PnL backtester dependency (decoupled, not vendored)
-`src/finmamba3/eval/pnl_backtest.py` judges a frozen world model by simulated trading PnL. It depends on the external
-DATAHACKS2026 execution engine (a pure order-matching + settlement engine with no torch dependency), which is **not
-vendored** here. Point the adapter at a local checkout with the `DATAHACKS2026_PATH` environment variable:
+## PnL backtester (vendored execution engine)
+`src/finmamba3/eval/pnl_backtest.py` judges a frozen world model by simulated trading PnL. The order-matching +
+settlement engine it runs on is **vendored** here as `src/finmamba3/backtester/engine/` (a pure CPU engine with no
+torch dependency) and consumes this repo's timeline dataclasses directly, so no external checkout or environment
+variable is needed:
 
 ```
-export DATAHACKS2026_PATH=/path/to/DATAHACKS2026
 python -m finmamba3.eval.pnl_backtest --config configs/lob_spot.yaml --checkpoint <final.pth> ...
 ```
 
-If `DATAHACKS2026_PATH` is unset, the adapter falls back to a repo-local `tmppolymarket-bot/` checkout. The engine
-exposes the `BaseStrategy` / `Order` interface that `WorldModelStrategy` implements; the dependency direction is
-one-way (this repo depends on the engine's interface, never the reverse).
+The engine exposes the `BaseStrategy` / `Order` interface that `WorldModelStrategy` implements; the dependency
+direction is one-way (the engine never imports model or eval code).
 
 ## Reproducing the headline result
 See `RESULTS.md` §3 for the exact train and backtest commands, the frozen thresholds, and the deterministic

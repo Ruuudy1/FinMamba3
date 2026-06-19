@@ -1,0 +1,26 @@
+# The execution engine is vendored into src/finmamba3/backtester/engine, so the external checkout is dead weight.
+tmppolymarket-bot/
+
+# Experiment tracking and run artifacts (gigabytes; never needed in the image).
+wandb/
+runs/
+reports/
+
+# Datasets and checkpoints are mounted or downloaded at runtime, not baked into the image.
+data/
+*.ckpt
+*.pt
+*.safetensors
+
+# VCS, caches, editor/agent state.
+.git/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.claude/
+
+# Local research notes and LaTeX build artifacts.
+*.pdf
+*.aux
+*.log
+*.out

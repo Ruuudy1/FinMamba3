@@ -1,7 +1,10 @@
-"""Vendored data loader + dataclasses from the DATAHACKS2026 backtester.
+"""Timeline data loader, dataclasses, and the vendored execution engine for the Polymarket backtester.
 
-The Gymnasium environment in ``envs.polymarket_lob_env`` implements a small
-execution and portfolio layer around these pure timeline structures.
+``data_loader`` builds the per-second timeline (``build_timeline``) and ``strategy`` holds the dataclass
+contracts plus ``BaseStrategy``. The full execution engine (tick loop, walk-the-book execution,
+portfolio) lives in the ``engine`` subpackage and consumes these same structures; it is imported
+explicitly via ``finmamba3.backtester.engine`` rather than re-exported here, so the data-pipeline
+modules that only need ``build_timeline`` do not pull the engine in.
 """
 # region imports
 from .data_loader import BacktestData, TickData, build_timeline

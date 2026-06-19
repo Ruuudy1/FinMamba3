@@ -1,11 +1,10 @@
 """Phase 1: WorldModelStrategy turns a divergence between the model's YES probability and the book
-into an order, and is a no-op when they agree. Importing pnl_backtest inserts the DATAHACKS2026
-engine path, so the engine dataclasses are available to build a synthetic MarketState.
+into an order, and is a no-op when they agree. The execution engine is vendored in this repo, so the
+engine and its dataclasses import directly from finmamba3.backtester.
 """
 # region imports
-import finmamba3.eval.pnl_backtest  # noqa: F401  Inserts the engine path on sys.path as a side effect.
-from backtester.engine import BacktestEngine
-from backtester.strategy import MarketState, MarketView, OrderBookLevel, OrderBookSnapshot, PositionView, Side, Token
+from finmamba3.backtester.engine import BacktestEngine
+from finmamba3.backtester.strategy import MarketState, MarketView, OrderBookLevel, OrderBookSnapshot, PositionView, Side, Token
 from finmamba3.backtester import BacktestData, OrderBookLevel as RepoLevel, OrderBookSnapshot as RepoBook, StoredBook, TickData
 from finmamba3.backtester.strategy import MarketLifecycle, Settlement
 from finmamba3.backtester.strategy import Token as RepoToken
@@ -13,8 +12,7 @@ from finmamba3.eval.pnl_backtest import (
     CusumGate,
     NaiveLagStrategy,
     WorldModelStrategy,
-    _engine_data_for_slugs,
-    _engine_ticks,
+    _data_for_slugs,
     bootstrap_survivability,
     kelly_shares,
     per_trade_pnls,
@@ -96,8 +94,8 @@ def _repo_stored(yes_mid):
     )
 
 
-def test_converter_and_engine_settle_a_winning_yes_trade():
-    # A tiny repo timeline drives the real engine through the adapter's converter: a YES contract that
+def test_engine_settles_a_winning_yes_trade():
+    # A tiny repo timeline drives the vendored engine directly (no converter): a YES contract that
     # settles YES, with the model forced 0.9 vs a 0.40 book, must fill cheap YES and book a positive PnL.
     timeline = []
     for ts in range(7):
@@ -114,8 +112,7 @@ def test_converter_and_engine_settle_a_winning_yes_trade():
     )
     prob_by_slug_ts = {(_SLUG, ts): 0.90 for ts in range(7)}
     strat = WorldModelStrategy(prob_by_slug_ts, edge_threshold=0.05, order_size=50.0)
-    engine_ticks = _engine_ticks(bt)
-    engine_data = _engine_data_for_slugs(engine_ticks, bt, [_SLUG])
+    engine_data = _data_for_slugs(bt, [_SLUG])
     result = BacktestEngine(engine_data, strat, starting_cash=10_000.0, snapshot_interval=1).run()
     assert result.total_trades >= 1
     assert result.total_settlements == 1

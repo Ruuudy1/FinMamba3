@@ -1,51 +1,32 @@
 """PnL backtest adapter: judge a frozen world model by simulated trading PnL, not a forecasting proxy.
 
-This module is the one place the torch world model meets the DATAHACKS2026 execution engine. It
-depends on the engine's BaseStrategy/Order interface (the engine is a separate, non-vendored
-dependency reached via the DATAHACKS2026_PATH env var, default the repo-local tmppolymarket-bot
-checkout); the engine never depends on this repo. The frozen model's spot-conditioned settlement
-YES probability is precomputed with this repo's exact training feature pipeline, so the probability
-the strategy trades on is the one the model was trained to produce (no train/serve skew). A thin
-WorldModelStrategy turns a divergence from the book's implied probability into an order, which the
-engine matches T+1 and settles for the headline PnL / Sharpe per spot-volatility regime.
+This module is the one place the torch world model meets the execution engine, now vendored in this
+repo as ``finmamba3.backtester.engine`` and consuming this repo's timeline dataclasses directly. The
+frozen model's spot-conditioned settlement YES probability is precomputed with this repo's exact
+training feature pipeline, so the probability the strategy trades on is the one the model was trained
+to produce (no train/serve skew). A thin WorldModelStrategy turns a divergence from the book's implied
+probability into an order, which the engine matches T+1 and settles for the headline PnL / Sharpe per
+spot-volatility regime.
 """
 # region imports
 from __future__ import annotations
 import argparse
 import json
 import logging
-import os
-import sys
 from pathlib import Path
 import numpy as np
 import torch
 import yaml
 from finmamba3.backtester import build_timeline
-from finmamba3.backtester.data_loader import _asset_from_slug
+from finmamba3.backtester.data_loader import BacktestData, _asset_from_slug
+from finmamba3.backtester.engine import BacktestEngine, MAX_SHARES_PER_TOKEN
+from finmamba3.backtester.strategy import BaseStrategy, MarketLifecycle, Order, Settlement, Side, Token
 from finmamba3.config import DotDict, parse_args_and_update_config
 from finmamba3.envs.lob_features import apply_normalization, extract_features, load_normalization
 from finmamba3.eval.compare_direction import load_world_model
 from finmamba3.eval.predictability import efficiency_ratio, predictability_from_timeline
 from finmamba3.eval.regime_split import spot_realized_vol_from_timeline, volatility_split
 from finmamba3.sequence_builder import _append_cross_interval, _settlement_yes_outcome, _spot_feature_kwargs
-# The DATAHACKS2026 engine ships no packaging metadata, so its repo root is put on sys.path (default
-# the repo-local checkout) to import `backtester` as a separate dependency rather than vendoring it.
-_DATAHACKS_PATH = os.environ.get(
-    "DATAHACKS2026_PATH", str(Path(__file__).resolve().parents[3] / "tmppolymarket-bot")
-)
-if _DATAHACKS_PATH not in sys.path:
-    sys.path.insert(0, _DATAHACKS_PATH)
-from backtester.data_loader import BacktestData as EngineData, TickData as EngineTick
-from backtester.engine import BacktestEngine
-from backtester.execution import MAX_SHARES_PER_TOKEN
-from backtester.strategy import (
-    BaseStrategy,
-    MarketLifecycle as EngineLifecycle,
-    Order,
-    Settlement as EngineSettlement,
-    Side,
-    Token,
-)
 # endregion
 logger = logging.getLogger(__name__)
 
@@ -538,46 +519,26 @@ def _eval_sequence(bt, slug, stats, include_binary: bool, include_spot: bool, in
     return apply_normalization(raw, stats)
 
 
-def _engine_ticks(bt) -> list:
-    # Convert this repo's timeline into the engine's tick contract: order_books[slug] becomes the
-    # {yes_book, no_book} dict enrich_views expects, while the OrderBookSnapshot objects duck-type
-    # unchanged. Building the ticks once lets both regime runs reuse them with different lifecycles.
-    engine_ticks = []
-    for tick in bt.timeline:
-        order_books = {
-            slug: {"yes_book": stored.yes_book, "no_book": stored.no_book}
-            for slug, stored in tick.order_books.items()
-        }
-        engine_ticks.append(EngineTick(
-            ts_sec=tick.ts_sec,
-            market_prices=tick.market_prices,
-            order_books=order_books,
-            book_timestamps=tick.book_timestamps,
-            btc_mid=tick.btc_mid,
-            btc_spread=tick.btc_spread,
-            chainlink_btc=tick.chainlink_btc,
-        ))
-    return engine_ticks
-
-
-def _engine_data_for_slugs(engine_ticks, bt, slugs: list[str]) -> EngineData:
+def _data_for_slugs(bt, slugs: list[str]) -> BacktestData:
     # The engine only tracks, trades and settles the lifecycles it is handed, so restricting them to
     # one regime's slugs scopes the run to that regime while the shared timeline carries every book.
+    # The vendored engine consumes this repo's timeline dataclasses directly, so there is no per-tick
+    # translation: the shared bt.timeline is reused as-is and only the lifecycles/settlements are scoped.
     wanted = {slug: True for slug in slugs}
     lifecycles = [
-        EngineLifecycle(lc.market_slug, lc.interval, lc.start_ts, lc.end_ts)
+        MarketLifecycle(lc.market_slug, lc.interval, lc.start_ts, lc.end_ts)
         for lc in bt.lifecycles if lc.market_slug in wanted
     ]
     settlements = {}
     for slug in slugs:
         st = bt.settlements.get(slug)
         if st is not None:
-            settlements[slug] = EngineSettlement(
-                st.market_slug, st.interval, Token(st.outcome.value),
+            settlements[slug] = Settlement(
+                st.market_slug, st.interval, st.outcome,
                 st.start_ts, st.end_ts, st.chainlink_open, st.chainlink_close,
             )
-    return EngineData(
-        timeline=engine_ticks, lifecycles=lifecycles, settlements=settlements,
+    return BacktestData(
+        timeline=bt.timeline, lifecycles=lifecycles, settlements=settlements,
         start_ts=bt.start_ts, end_ts=bt.end_ts,
     )
 
@@ -611,7 +572,7 @@ def _load_config(config_path: Path, overrides: list[str]) -> DotDict:
 
 
 def run_pnl_backtest(
-    wm, bt, stats, slugs: list[str], engine_ticks, device: torch.device,
+    wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     strategy_kwargs: dict, cash: float, prob_source: str = "settlement",
     slippage_per_share: float = 0.0,
@@ -636,7 +597,7 @@ def run_pnl_backtest(
         else:
             for ts, prob in world_model_yes_prob_series(wm, seq, device).items():
                 prob_by_slug_ts[(slug, ts)] = prob
-    engine_data = _engine_data_for_slugs(engine_ticks, bt, slugs)
+    engine_data = _data_for_slugs(bt, slugs)
     model_strategy = WorldModelStrategy(
         prob_by_slug_ts, bankroll=cash,
         ev_by_slug_ts=ev_by_slug_ts if prob_source == "edge" else None,
@@ -716,7 +677,7 @@ def settlement_calibration(prob_by_slug_ts: dict, bt, num_bins: int = 10) -> dic
 
 
 def run_threshold_sweep(
-    wm, bt, stats, slugs: list[str], engine_ticks, device: torch.device,
+    wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     base_kwargs: dict, values: list[float], cash: float, slippage_per_share: float = 0.0,
     sweep_param: str = "predictability", sample_mode: str = "random_sample",
@@ -734,7 +695,7 @@ def run_threshold_sweep(
         seq = _eval_sequence(bt, slug, stats, include_binary, include_spot, include_cross)
         for ts, prob in world_model_yes_prob_series(wm, seq, device, sample_mode=sample_mode).items():
             prob_by_slug_ts[(slug, ts)] = prob
-    engine_data = _engine_data_for_slugs(engine_ticks, bt, slugs)
+    engine_data = _data_for_slugs(bt, slugs)
     rows = []
     for value in values:
         kwargs = dict(base_kwargs)
@@ -872,7 +833,6 @@ def main() -> int:
         f"{shifted_label}={len(shifted_slugs)}; widen --hours-val."
     )
     logger.info(f"{args.regime_axis} split ({split.description}): {reference_label}={len(reference_slugs)} {shifted_label}={len(shifted_slugs)} markets")
-    engine_ticks = _engine_ticks(bt)
     strategy_kwargs = {
         "edge_threshold": args.edge_threshold,
         "order_size": args.order_size,
@@ -894,7 +854,7 @@ def main() -> int:
         values = [float(t) for t in args.sweep_thresholds.split(",")]
         all_slugs = [lc.market_slug for lc in tradeable]
         sweep_report = run_threshold_sweep(
-            wm, bt, stats, all_slugs, engine_ticks, device,
+            wm, bt, stats, all_slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, values, args.cash, args.slippage_per_share,
             args.sweep_param, "probs" if args.deterministic_latent else "random_sample",
         )
@@ -919,7 +879,7 @@ def main() -> int:
     }
     for label, slugs in ((reference_label, reference_slugs), (shifted_label, shifted_slugs)):
         report[label] = run_pnl_backtest(
-            wm, bt, stats, slugs, engine_ticks, device,
+            wm, bt, stats, slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, args.cash,
             prob_source=args.prob_source,
             slippage_per_share=args.slippage_per_share,
