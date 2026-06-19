@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import numpy as np
 import torch
@@ -106,7 +108,8 @@ def bootstrap_survivability(trade_pnls: list[float], bankroll: float = 10_000.0,
     Resamples the realized trades with replacement into n_paths equity curves of the same length,
     and reports the fraction of profitable paths, the worst-5%-tail max drawdown as a fraction of
     bankroll, and the 95% CI on terminal PnL. Trade returns are non-normal, so this replaces the
-    Gaussian t-test as the survivability gate.
+    Gaussian t-test as the survivability gate. This treats every trade as an independent draw; when
+    trades within a market are correlated, bootstrap_survivability_by_market is the honest test.
     """
     if not trade_pnls:
         return {"n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0, "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0}
@@ -119,6 +122,76 @@ def bootstrap_survivability(trade_pnls: list[float], bankroll: float = 10_000.0,
     drawdown = (running_peak - equity).max(axis=1) / bankroll
     return {
         "n_trades": int(pnls.shape[0]),
+        "frac_profitable": float(np.mean(terminal > 0.0)),
+        "drawdown_p95": float(np.percentile(drawdown, 95.0)),
+        "ci_low": float(np.percentile(terminal, 2.5)),
+        "ci_high": float(np.percentile(terminal, 97.5)),
+        "mean_terminal": float(np.mean(terminal)),
+    }
+
+
+def per_trade_pnls_by_market(result, slippage_per_share: float = 0.0) -> dict:
+    """Realized per-trade PnL grouped by market slug, the input to the market-block bootstrap.
+
+    Trades inside one market share its single settlement outcome and sit on overlapping holding
+    windows, so they are not independent draws; grouping them lets the block bootstrap resample a
+    market's entire trade vector at once and respect that dependence. Same per-fill PnL convention as
+    per_trade_pnls (the strategy only ever buys), keyed by market_slug.
+    """
+    outcome_by_slug = {settlement.market_slug: settlement.outcome for settlement in result.settlements}
+    pnls_by_slug = {}
+    for fill in result.fills:
+        outcome = outcome_by_slug.get(fill.market_slug)
+        if outcome is None:
+            continue
+        payout = 1.0 if fill.token == outcome else 0.0
+        pnls_by_slug.setdefault(fill.market_slug, []).append(float(fill.size * (payout - fill.avg_price) - slippage_per_share * fill.size))
+    return pnls_by_slug
+
+
+def bootstrap_survivability_by_market(pnls_by_market: dict, bankroll: float = 10_000.0, n_paths: int = 10_000, seed: int = 0) -> dict:
+    """Market-block bootstrap: resample whole markets with replacement, not individual trades.
+
+    Each path draws as many markets as were traded (with replacement), concatenates their trade
+    vectors in a random order, and scores terminal PnL and worst-case drawdown on that equity curve.
+    Because a market's trades move together exactly as they did in reality, the effective sample size
+    is the number of independent markets, not the (far larger) number of correlated trades, so this is
+    the honest survivability gate; the iid bootstrap_survivability overstates P(profit) when intra-market
+    trades are correlated. Drawdown is reduced per market in O(1) from each market's (total, low, high,
+    intrinsic-drawdown) summary, so 10k paths over hundreds of markets stay cheap. n_markets is the true
+    independent-unit count the report should cite alongside n_trades.
+    """
+    slugs = [slug for slug in pnls_by_market.keys() if pnls_by_market[slug]]
+    if not slugs:
+        return {"n_markets": 0, "n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0, "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0}
+    cumulatives = [np.cumsum(np.asarray(pnls_by_market[slug], dtype=np.float64)) for slug in slugs]
+    totals = np.array([float(c[-1]) for c in cumulatives])
+    lows = np.array([float(c.min()) for c in cumulatives])
+    highs = np.array([float(c.max()) for c in cumulatives])
+    intrinsic_dd = np.array([float((np.maximum.accumulate(c) - c).max()) for c in cumulatives])
+    n_markets = len(slugs)
+    n_trades = int(sum(c.shape[0] for c in cumulatives))
+    rng = np.random.default_rng(seed)
+    draws = rng.integers(0, n_markets, size=(n_paths, n_markets))
+    drawn_totals = totals[draws]
+    terminal = drawn_totals.sum(axis=1)
+    # Worst-case drawdown over each path's equity curve, vectorized over all paths at once. The per-path
+    # Python loop this replaces was ~98% of a sweep value's wall-clock and held the GIL (so a threaded
+    # sweep could not parallelize it); the numpy reductions below drop the GIL. The equity before market i
+    # is a bankroll-seeded left-to-right cumsum, whose float association is identical to the scalar
+    # `prefix += totals[market]` accumulation, so the drawdown is bitwise-identical to the old loop.
+    equity_before = np.cumsum(np.concatenate([np.full((n_paths, 1), bankroll), drawn_totals[:, :-1]], axis=1), axis=1)
+    equity_high = equity_before + highs[draws]
+    # Peak before market i is the inclusive running peak shifted one market right, floored at bankroll.
+    running_peak = np.maximum.accumulate(equity_high, axis=1)
+    peak_before = np.empty_like(equity_high)
+    peak_before[:, 0] = bankroll
+    peak_before[:, 1:] = np.maximum(bankroll, running_peak[:, :-1])
+    dip = np.maximum(intrinsic_dd[draws], peak_before - (equity_before + lows[draws]))
+    drawdown = dip.max(axis=1) / bankroll
+    return {
+        "n_markets": n_markets,
+        "n_trades": n_trades,
         "frac_profitable": float(np.mean(terminal > 0.0)),
         "drawdown_p95": float(np.percentile(drawdown, 95.0)),
         "ci_low": float(np.percentile(terminal, 2.5)),
@@ -618,11 +691,33 @@ def _sweep_aligned(engine: str, cache: dict, marshalled, strategy_kind: int, par
     return cache[key]
 
 
+def _engine_workers(engine: str, engine_threads: int) -> int:
+    # The cpp engine releases the GIL inside its tick loop, so independent backtests run on real cores;
+    # the python reference engine holds the GIL throughout, so it always stays serial. 0 = auto.
+    if engine != "cpp":
+        return 1
+    if engine_threads > 0:
+        return engine_threads
+    return os.cpu_count() or 1
+
+
+def _run_concurrent(tasks: list, max_workers: int) -> list:
+    # Run independent zero-arg backtest tasks, preserving input order so the result equals the serial path
+    # exactly. A single task or max_workers <= 1 stays on the calling thread (the python engine, and the
+    # --engine-threads 1 parity escape hatch). The marshalled timeline and aligned signals each task reads
+    # are immutable, and each backtest allocates its own engine state, so the runs do not interfere.
+    if max_workers <= 1 or len(tasks) <= 1:
+        return [task() for task in tasks]
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as pool:
+        futures = [pool.submit(task) for task in tasks]
+        return [future.result() for future in futures]
+
+
 def run_pnl_backtest(
     wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     strategy_kwargs: dict, cash: float, prob_source: str = "settlement",
-    slippage_per_share: float = 0.0, engine: str = "python",
+    slippage_per_share: float = 0.0, engine: str = "python", engine_threads: int = 0,
 ) -> dict:
     """Backtest one regime's slugs with the world-model strategy and the naive-lag baseline.
 
@@ -649,26 +744,30 @@ def run_pnl_backtest(
     marshalled = marshal_timeline(engine_data, slugs, prob_by_slug_ts, include_depth=include_depth) if engine == "cpp" else None
     edge_signals = ev_by_slug_ts if prob_source == "edge" else None
     model_strategy = WorldModelStrategy(prob_by_slug_ts, bankroll=cash, ev_by_slug_ts=edge_signals, **strategy_kwargs)
-    model_result = _run_engine_arm(
-        engine, engine_data, model_strategy, marshalled,
-        STRATEGY_WORLD_MODEL, _cpp_params(strategy_kwargs, edge_signals), cash,
-    )
     naive_strategy = NaiveLagStrategy(
         cusum_threshold=strategy_kwargs["cusum_threshold"],
         order_size=strategy_kwargs["order_size"],
         max_tte_frac=strategy_kwargs["max_tte_frac"],
     )
-    naive_result = _run_engine_arm(
-        engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG,
-        _naive_cpp_params(strategy_kwargs["order_size"], strategy_kwargs["max_tte_frac"], strategy_kwargs["cusum_threshold"]), cash,
+    model_params = _cpp_params(strategy_kwargs, edge_signals)
+    naive_params = _naive_cpp_params(strategy_kwargs["order_size"], strategy_kwargs["max_tte_frac"], strategy_kwargs["cusum_threshold"])
+    # Both arms replay the same immutable timeline independently, so run them concurrently on the cpp path.
+    model_result, naive_result = _run_concurrent(
+        [
+            lambda: _run_engine_arm(engine, engine_data, model_strategy, marshalled, STRATEGY_WORLD_MODEL, model_params, cash),
+            lambda: _run_engine_arm(engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG, naive_params, cash),
+        ],
+        _engine_workers(engine, engine_threads),
     )
     bootstrap = bootstrap_survivability(per_trade_pnls(model_result, slippage_per_share), bankroll=cash)
+    bootstrap_market = bootstrap_survivability_by_market(per_trade_pnls_by_market(model_result, slippage_per_share), bankroll=cash)
     return {
         "model": {
             "pnl": float(model_result.total_pnl),
             "sharpe": _sharpe_from_snapshots(model_result.portfolio_snapshots),
             "trades": int(model_result.total_trades),
             "bootstrap": bootstrap,
+            "bootstrap_market": bootstrap_market,
         },
         "naive": {
             "pnl": float(naive_result.total_pnl),
@@ -728,11 +827,27 @@ def settlement_calibration(prob_by_slug_ts: dict, bt, num_bins: int = 10) -> dic
     }
 
 
+def delay_prob_series(prob_by_slug_ts: dict, delay_secs: int) -> dict:
+    """Shift each model probability later by delay_secs: the signal-delay latency stress test.
+
+    The economic edge is a latency play (it harvests the book's lag behind spot), so it is maximally
+    sensitive to how the model's signal is timed. Re-keying each (slug, ts) probability to (slug,
+    ts + delay) makes the strategy at tick t trade on the model output from t - delay, leaving the
+    causal predictability gate (computed on the original ticks) untouched and staling only the model
+    signal. An edge that survives only because the signal is timestamp-aligned to the book vanishes at
+    the first second of delay; a real edge degrades gracefully. delay_secs <= 0 is the identity.
+    """
+    if delay_secs <= 0:
+        return prob_by_slug_ts
+    return {(slug, ts + delay_secs): prob for (slug, ts), prob in prob_by_slug_ts.items()}
+
+
 def run_threshold_sweep(
     wm, bt, stats, slugs: list[str], device: torch.device,
     include_binary: bool, include_spot: bool, include_cross: bool,
     base_kwargs: dict, values: list[float], cash: float, slippage_per_share: float = 0.0,
     sweep_param: str = "predictability", sample_mode: str = "random_sample", engine: str = "python",
+    signal_delay_secs: int = 0, engine_threads: int = 0,
 ) -> dict:
     """Sweep one strategy hyperparameter on the full market set, precomputing the YES probs once.
 
@@ -747,12 +862,43 @@ def run_threshold_sweep(
         seq = _eval_sequence(bt, slug, stats, include_binary, include_spot, include_cross)
         for ts, prob in world_model_yes_prob_series(wm, seq, device, sample_mode=sample_mode).items():
             prob_by_slug_ts[(slug, ts)] = prob
+    # The signal-delay stress test stales only the model probability; the gate is re-derived on the
+    # delayed trade ticks below so it still reads the genuine causal ER at trade time. The native engine
+    # marshals probs ahead of the loop, so delay is restricted to the python reference engine.
+    assert signal_delay_secs <= 0 or engine == "python", "signal_delay_secs requires --engine python"
+    traded_probs = delay_prob_series(prob_by_slug_ts, signal_delay_secs)
     engine_data = _data_for_slugs(bt, slugs)
     include_depth = base_kwargs["min_book_depth"] > 0.0 or base_kwargs["max_book_depth"] > 0.0
-    marshalled = marshal_timeline(engine_data, slugs, prob_by_slug_ts, include_depth=include_depth) if engine == "cpp" else None
+    marshalled = marshal_timeline(engine_data, slugs, traded_probs, include_depth=include_depth) if engine == "cpp" else None
     gate_signals_by_window: dict = {}
     aligned_by_window_arm: dict = {}
-    rows = []
+    def _row_task(value, strategy, model_params, model_signals, naive_strategy, naive_sweep_params, naive_signals):
+        # Bind one sweep value's prepared inputs into a zero-arg closure so _run_concurrent can fan the
+        # values across cores; the bootstrap is folded in so each task builds its whole row off-thread.
+        def _task():
+            model_result = _run_engine_arm(engine, engine_data, strategy, marshalled, STRATEGY_WORLD_MODEL, model_params, cash, model_signals)
+            naive_result = _run_engine_arm(engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, cash, naive_signals)
+            trade_pnls = per_trade_pnls(model_result, slippage_per_share)
+            boot = bootstrap_survivability(trade_pnls, bankroll=cash)
+            boot_market = bootstrap_survivability_by_market(per_trade_pnls_by_market(model_result, slippage_per_share), bankroll=cash)
+            return {
+                "value": float(value),
+                "sweep_param": sweep_param,
+                "pnl": float(model_result.total_pnl),
+                "pnl_after_slippage": float(sum(trade_pnls)),
+                "trades": int(model_result.total_trades),
+                "naive_pnl": float(naive_result.total_pnl),
+                "naive_trades": int(naive_result.total_trades),
+                "model_minus_naive": float(model_result.total_pnl - naive_result.total_pnl),
+                "frac_profitable": boot["frac_profitable"],
+                "drawdown_p95": boot["drawdown_p95"],
+                "n_markets_traded": boot_market["n_markets"],
+                "frac_profitable_market": boot_market["frac_profitable"],
+                "drawdown_p95_market": boot_market["drawdown_p95"],
+                "ci_low_market": boot_market["ci_low"],
+            }
+        return _task
+    tasks = []
     for value in values:
         kwargs = dict(base_kwargs)
         kwargs["use_predictability_gate"] = True
@@ -763,12 +909,12 @@ def run_threshold_sweep(
         else:
             kwargs["predictability_threshold"] = value
         window = int(kwargs["predictability_window"])
-        # The gate signals depend only on the window, so memoise them: a threshold or edge sweep computes
-        # them once (shared by both engines) instead of per value, and the cpp arms align them once too.
+        # The gate signals depend only on the window, so memoise them here (serially, before the parallel
+        # fan-out below): a threshold or edge sweep computes them once and the cpp arms align them once too.
         if window not in gate_signals_by_window:
-            gate_signals_by_window[window] = _gate_signals_by_slug_ts(bt, prob_by_slug_ts, window)
+            gate_signals_by_window[window] = _gate_signals_by_slug_ts(bt, traded_probs, window)
         gate_er, gate_dir = gate_signals_by_window[window]
-        strategy = WorldModelStrategy(prob_by_slug_ts, bankroll=cash, gate_er_by_slug_ts=gate_er, **kwargs)
+        strategy = WorldModelStrategy(traded_probs, bankroll=cash, gate_er_by_slug_ts=gate_er, **kwargs)
         model_params = {**_cpp_params(kwargs, None), "gate_er_by_slug_ts": gate_er}
         # Fair baseline: the identical asset-correct predictability gate, buying the observable spot-trend
         # direction with no model, so the model must beat trend-following over the same selective gate.
@@ -787,22 +933,8 @@ def run_threshold_sweep(
         }
         model_signals = _sweep_aligned(engine, aligned_by_window_arm, marshalled, STRATEGY_WORLD_MODEL, model_params, window)
         naive_signals = _sweep_aligned(engine, aligned_by_window_arm, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, window)
-        model_result = _run_engine_arm(engine, engine_data, strategy, marshalled, STRATEGY_WORLD_MODEL, model_params, cash, model_signals)
-        naive_result = _run_engine_arm(engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, cash, naive_signals)
-        trade_pnls = per_trade_pnls(model_result, slippage_per_share)
-        boot = bootstrap_survivability(trade_pnls, bankroll=cash)
-        rows.append({
-            "value": float(value),
-            "sweep_param": sweep_param,
-            "pnl": float(model_result.total_pnl),
-            "pnl_after_slippage": float(sum(trade_pnls)),
-            "trades": int(model_result.total_trades),
-            "naive_pnl": float(naive_result.total_pnl),
-            "naive_trades": int(naive_result.total_trades),
-            "model_minus_naive": float(model_result.total_pnl - naive_result.total_pnl),
-            "frac_profitable": boot["frac_profitable"],
-            "drawdown_p95": boot["drawdown_p95"],
-        })
+        tasks.append(_row_task(value, strategy, model_params, model_signals, naive_strategy, naive_sweep_params, naive_signals))
+    rows = _run_concurrent(tasks, _engine_workers(engine, engine_threads))
     return {
         "n_markets": len(slugs), "n_probs": len(prob_by_slug_ts),
         "calibration": settlement_calibration(prob_by_slug_ts, bt), "sweep": rows,
@@ -843,6 +975,8 @@ def parse_args() -> argparse.Namespace:
                         "precomputes probs once and reports per-threshold deployable PnL + survivability.")
     p.add_argument("--slippage-per-share", type=float, default=0.0,
                    help="Per-share execution cost subtracted from each fill in the sweep's bootstrap (deployability stress test).")
+    p.add_argument("--signal-delay-secs", type=int, default=0,
+                   help="Stale the model signal by N seconds before trading (latency stress test); the gate stays at trade time. python engine only.")
     p.add_argument("--calibration-temperature", type=float, default=1.0,
                    help="Post-hoc temperature on the settlement prob (fit on train); >1 softens the over-confident head for Kelly.")
     p.add_argument("--sweep-param", choices=("predictability", "edge", "window"), default="predictability",
@@ -861,6 +995,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--engine", choices=("python", "cpp"), default="python",
                    help="python = pure-Python reference engine (default); cpp = native engine (build with "
                         "`python -m finmamba3.backtester.engine_cpp.build`). Parity-checked; amortises across a sweep.")
+    p.add_argument("--engine-threads", type=int, default=0,
+                   help="Threads for independent cpp backtests (sweep values, both arms); 0 = auto (os.cpu_count()), "
+                        "1 = serial. The cpp engine releases the GIL so these run on real cores; the python engine ignores it.")
     return p.parse_args()
 
 
@@ -929,7 +1066,9 @@ def main() -> int:
             wm, bt, stats, all_slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, values, args.cash, args.slippage_per_share,
             args.sweep_param, "probs" if args.deterministic_latent else "random_sample", engine=args.engine,
+            signal_delay_secs=args.signal_delay_secs, engine_threads=args.engine_threads,
         )
+        sweep_report["signal_delay_secs"] = int(args.signal_delay_secs)
         sweep_report["checkpoint"] = str(args.checkpoint)
         sweep_report["data_val"] = str(args.data_val)
         sweep_report["slippage_per_share"] = float(args.slippage_per_share)
@@ -954,7 +1093,7 @@ def main() -> int:
             wm, bt, stats, slugs, device,
             include_binary, include_spot, include_cross, strategy_kwargs, args.cash,
             prob_source=args.prob_source,
-            slippage_per_share=args.slippage_per_share, engine=args.engine,
+            slippage_per_share=args.slippage_per_share, engine=args.engine, engine_threads=args.engine_threads,
         )
         cell = report[label]
         boot = cell["model"]["bootstrap"]

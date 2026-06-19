@@ -239,6 +239,11 @@ py::dict run_backtest(
     std::deque<double> spot_window;
     bool have_prev_spot = false;
     double prev_spot = 0.0;
+    // The tick loop and final mark-to-market touch only C++ state and the raw (.unchecked) array
+    // accessors above — no Python objects — so drop the GIL across the whole compute. This lets the
+    // PnL adapter run independent backtests (sweep values, both arms) concurrently on real cores; it
+    // is re-acquired below before the result dict is built. Single-run output is byte-identical.
+    py::gil_scoped_release nogil;
     for (long long t = 0; t < total_ticks; ++t) {
         const long long now = ts_(t);
         // 0. Refresh each present market's current book / signals from this tick's CSR cells.
@@ -543,6 +548,7 @@ py::dict run_backtest(
             final_value += position.cost_basis;
         }
     }
+    py::gil_scoped_acquire gil;  // re-acquire the GIL: the result dict below touches Python objects.
     py::list fills_out;
     for (const EngineFill& fill : all_fills) {
         fills_out.append(py::make_tuple(fill.market, fill.token, fill.size, fill.avg_price));

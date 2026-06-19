@@ -14,8 +14,11 @@ from finmamba3.eval.pnl_backtest import (
     WorldModelStrategy,
     _data_for_slugs,
     bootstrap_survivability,
+    bootstrap_survivability_by_market,
+    delay_prob_series,
     kelly_shares,
     per_trade_pnls,
+    per_trade_pnls_by_market,
     settlement_calibration,
 )
 # endregion
@@ -196,6 +199,61 @@ def test_bootstrap_constant_positive_trades_are_fully_survivable():
     assert result["frac_profitable"] == 1.0
     assert result["drawdown_p95"] == 0.0
     assert result["n_trades"] == 4
+
+
+def test_per_trade_pnls_by_market_groups_fills_by_slug():
+    # Two markets settle opposite ways; grouping must keep each market's fills together for block resampling.
+    timeline = []
+    other = "btc-updown-5m-300"
+    for ts in range(7):
+        tick = TickData(ts_sec=ts, btc_mid=50_000.0, chainlink_btc=50_000.0)
+        tick.order_books[_SLUG] = _repo_stored(0.40)
+        tick.order_books[other] = _repo_stored(0.40)
+        tick.book_timestamps[_SLUG] = ts
+        tick.book_timestamps[other] = ts
+        timeline.append(tick)
+    bt = BacktestData(
+        timeline=timeline,
+        lifecycles=[MarketLifecycle(_SLUG, "5m", 0, 5), MarketLifecycle(other, "5m", 0, 5)],
+        settlements={
+            _SLUG: Settlement(_SLUG, "5m", RepoToken.YES, 0, 5, 50_000.0, 50_500.0),
+            other: Settlement(other, "5m", RepoToken.NO, 0, 5, 50_000.0, 49_500.0),
+        },
+        start_ts=0, end_ts=6,
+    )
+    probs = {(_SLUG, ts): 0.90 for ts in range(7)}
+    probs.update({(other, ts): 0.90 for ts in range(7)})
+    strat = WorldModelStrategy(probs, edge_threshold=0.05, order_size=50.0)
+    result = BacktestEngine(_data_for_slugs(bt, [_SLUG, other]), strat, starting_cash=10_000.0, snapshot_interval=1).run()
+    by_market = per_trade_pnls_by_market(result)
+    # Both markets traded; the winning-YES market's fills are positive, the NO-settling market's negative.
+    assert set(by_market.keys()) == {_SLUG, other}
+    assert all(pnl > 0.0 for pnl in by_market[_SLUG])
+    assert all(pnl < 0.0 for pnl in by_market[other])
+    # The flattened by-market PnLs match the ungrouped per-trade list.
+    assert sorted(p for v in by_market.values() for p in v) == sorted(per_trade_pnls(result))
+
+
+def test_market_block_bootstrap_counts_independent_markets_not_trades():
+    # Ten trades inside ONE market are one independent bet: a losing market is never profitable, however
+    # many correlated trades it holds, where the iid bootstrap would see ten "independent" losers.
+    pnls_by_market = {"m0": [-3.0] * 10}
+    block = bootstrap_survivability_by_market(pnls_by_market, bankroll=10_000.0, n_paths=500, seed=0)
+    assert block["n_markets"] == 1
+    assert block["n_trades"] == 10
+    assert block["frac_profitable"] == 0.0
+    # A balanced book of one reliably-winning and one reliably-losing market straddles zero.
+    mixed = bootstrap_survivability_by_market({"win": [4.0, 4.0], "lose": [-4.0, -4.0]}, n_paths=2000, seed=1)
+    assert mixed["n_markets"] == 2
+    assert 0.0 < mixed["frac_profitable"] < 1.0
+
+
+def test_signal_delay_shifts_probabilities_later_in_time():
+    probs = {(_SLUG, 100): 0.7, (_SLUG, 160): 0.8}
+    delayed = delay_prob_series(probs, 30)
+    assert delayed == {(_SLUG, 130): 0.7, (_SLUG, 190): 0.8}
+    # A non-positive delay is the identity (same object), so the no-delay path costs nothing.
+    assert delay_prob_series(probs, 0) is probs
 
 
 def test_predictability_gate_blocks_chop_allows_trend():
