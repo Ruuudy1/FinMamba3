@@ -1,0 +1,203 @@
+BasicSettings:
+  ObsMode: features
+  FeatureDim: 100         # K(10) * F_level(8) + F_tick(20: 14 base + 6 binary-market)
+  ReplayBufferOnGPU: True
+  Seed: 3710
+  Env_name: LOB
+  Device: cuda:0
+  Use_amp: True
+  NormClip: 8.0
+  Use_cg: False
+  Compile: False
+  SavePath: None
+
+Evaluate:
+  EpisodeNum: 10
+  NumEnvs: 1
+  DuringTraining: False
+  EverySteps: 1000
+
+JointTrainAgent:
+  SampleMaxSteps: 20000
+  EarlyStoppingPatience: 5
+  SaveBestOnly: true
+  BufferMaxLength: 50000
+  WorldModelWarmUp: 64
+  BehaviourWarmUp: 1000000   # effectively disables agent training
+  NumEnvs: 1
+  BatchSize: 64
+  AccumSteps: 2        # Effective batch 128
+  BatchLength: 48      # Increased from 32 to handle imagination rollouts (context 8 + horizon 16 + buffer)
+  ImagineBatchSize: 64
+  ImagineContextLength: 8
+  ImagineBatchLength: 16
+  RealityContextLength: 16
+  TrainDynamicsEverySteps: 1
+  TrainDynamicsEpoch: 1
+  TrainAgentEverySteps: 1
+  FreezeWorldModelAfterSteps: 20000
+  FreezeBehaviourAfterSteps: 0
+  SaveEverySteps: 2000
+  LogEvery: 50
+  SaveModels: True
+  Tau: 10
+  ImaginationTau: 10
+  Alpha: 1.0
+  Beta: 1.0
+
+Models:
+  WorldModel:
+    dtype: float32
+    Backbone: TransformerModern    # Changed from Mamba3 to TransformerModern
+    Act: SiLU
+    CategoricalDim: 16
+    ClassDim: 16
+    HiddenStateDim: 512
+    Optimiser: Laprop
+    LatentDiscreteType: naive
+    Max_grad_norm: 100
+    Warmup_steps: 500
+    LRSchedule: cosine
+    LRMinRatio: 0.1
+    UseActionInput: True
+    DirectionThresholds: null
+    Dropout: 0.2               # Matches Mamba3 config
+    Unimix_ratio: 0.01
+    Weight_decay: 1.0e-3
+    RepresentationLossWeight: 0.1
+    FreeBits: 2.0
+    Adam:
+      LearningRate: 1.0e-4
+    Laprop:
+      LearningRate: 4.0e-5
+      Epsilon: 1.0e-20
+    Encoder:
+      Type: lob
+      K: 10
+      FeatureDimLevel: 8
+      FeatureDimTick: 20
+      BinaryMarketFeatures: True   # Append boundary/logit/Amihud/variance-ratio tick features (Polymarket only).
+      DModel: 128
+      NumLayers: 2
+      NumHeads: 4
+      DimFeedforward: 256
+      OutputFlattenDim: 1024
+      AggregateOnly: False
+      GradientCheckpointing: False
+    Decoder:
+      Kind: studentt
+      HiddenDim: 512
+      NumLayers: 3
+      NuInit: 5.0
+      LearnableNu: True
+      SizeWeight: 2.0
+    Reward:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Termination:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Transformer:
+      FinalFeatureWidth: 4
+      NumLayers: 4          # Changed from 2 to 4 to match Mamba3
+      NumHeads: 8
+    Mamba:
+      n_layer: 2
+      d_intermediate: 0
+      ssm_cfg:
+        d_state: 16
+    Mamba3:
+      Enabled: false        # Not used for Transformer
+      n_layer: 4
+      is_mimo: true
+      mimo_rank: 4
+      d_state: 128
+      headdim: 64
+      chunk_size: 16
+      is_outproj_norm: false
+      rope_fraction: 0.5
+    Direction:
+      Enabled: True
+      NumClasses: 3
+      Threshold: 0.01
+      LossWeight: 0.5
+      Dropout: 0.0
+    Regime:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+    RegimeFiLM:
+      Enabled: False        # Transformer doesn't use RegimeFiLM (Mamba3-specific)
+      NumRegimes: 8
+      EmbedDim: 32
+      EntropyCoef: 0.01
+    EpisodicMemory:
+      Enabled: False
+      Capacity: 50000
+      TopK: 4
+      MinFillBeforeRetrieve: 1024
+      RetrieveEvery: 4
+      UseNovelty: False
+      NoveltyThreshold: 0.0
+    Hawkes:
+      Enabled: False
+      LossWeight: 0.1
+    Settlement:
+      Enabled: False
+      LossWeight: 0.25
+
+  Agent:
+    dtype: float32
+    Policy: AC
+    Unimix_ratio: 0
+    AC:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EntropyCoef: 3.e-4
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.0e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+    PPO:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EpsilonClip: 0.2
+      K_epochs: 3
+      Minibatch: 16384
+      CriticCoef: 1
+      EntropyCoef: 3.e-4
+      KL_threshold: 0.01
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+
+Wandb:
+  Init:
+    Mode: offline
+    Project: Drama_LOB_pretrain
+n: lob

@@ -67,7 +67,7 @@ def imagine_rollout(
         prefix_latent = ctx_latent
         prefix_action = action
         for step in range(horizon):
-            if world_model.model == "Transformer":
+            if world_model.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                 temporal_mask = get_subsequent_mask_with_batch_length(
                     prefix_latent.shape[1], prefix_latent.device
@@ -139,9 +139,7 @@ def _validation_metrics(
         post_logits = world_model.dist_head.forward_post(embedding)
         sample = world_model.straight_through_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
-        obs_hat = world_model.obs_decoder(flattened_sample)
-        reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
-        if world_model.model == "Transformer":
+        if world_model.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             temporal_mask = get_subsequent_mask_with_batch_length(
                 batch_length, flattened_sample.device
@@ -152,7 +150,19 @@ def _validation_metrics(
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
         prior_sample = world_model.straight_through_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
-        next_hat = world_model.obs_decoder(prior_flat)
+        
+        if world_model.decoder_kind == 'studentt':
+            obs_hat_mean, obs_hat_log_scale = world_model.obs_decoder(flattened_sample)
+            reconstruction_loss = world_model.reconstruction_loss_func(world_model.obs_decoder, obs_hat_mean, obs_hat_log_scale, obs)
+            obs_hat = obs_hat_mean
+            
+            prior_decoder_out = world_model.obs_decoder(prior_flat)
+            next_hat_mean, _ = prior_decoder_out
+            next_hat = next_hat_mean
+        else:
+            obs_hat = world_model.obs_decoder(flattened_sample)
+            reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
+            next_hat = world_model.obs_decoder(prior_flat)
     target_next = obs[:, 1:].detach().float()
     pred_next = next_hat.detach().float()
     diff = pred_next - target_next

@@ -27,7 +27,7 @@ JointTrainAgent:
   NumEnvs: 1
   BatchSize: 64        # Reverted from 512: the big batch converged worse (val 390 vs 368) and ran ~5x slower.
   AccumSteps: 2        # Effective batch 128; the known-good config that reached val 368 in ~38 min.
-  BatchLength: 32
+  BatchLength: 48
   ImagineBatchSize: 64
   ImagineContextLength: 8
   ImagineBatchLength: 16
@@ -67,11 +67,11 @@ Models:
     LRMinRatio: 0.1         # Cosine floor as a fraction of the peak LR.
     UseActionInput: True    # Phase A populates action=0; set False to drop the dead one-hot path.
     DirectionThresholds: null   # Set to e.g. [0.0001, 0.001, 0.005, 0.01] for a multi-threshold sweep.
-    Dropout: 0.1
+    Dropout: 0.2
     Unimix_ratio: 0.01
-    Weight_decay: 1.0e-4
+    Weight_decay: 1.0e-3
     RepresentationLossWeight: 0.1   # Beta on the representation-side KL term in the split KL.
-    FreeBits: 1.0                   # Per-step KL floor in nats; KL is clipped to zero below this.
+    FreeBits: 2.0                   # Per-step KL floor in nats; KL is clipped to zero below this.
     Adam:
       LearningRate: 1.0e-4
     Laprop:
@@ -91,7 +91,7 @@ Models:
       AggregateOnly: False
       GradientCheckpointing: False   # Trade ~10% recompute for ~30% transformer activation memory if T4 OOMs.
     Decoder:
-      Kind: mse              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.
+      Kind: studentt              # 'mse' for Gaussian, 'studentt' for heavy-tailed log-likelihood.
       HiddenDim: 512
       NumLayers: 3
       NuInit: 5.0            # Student-t degrees of freedom; ignored for 'mse'.
@@ -143,7 +143,7 @@ Models:
       NumRegimes: 8
       EmbedDim: 32
     RegimeFiLM:
-      Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
+      Enabled: True          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
       NumRegimes: 8
       EmbedDim: 32
       EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
