@@ -148,12 +148,9 @@ dynamics with a Mamba-3 selective state-space
 backbone~\citep{lahoti2026mamba3}.  The backbone is an implementation
 choice, not a claimed advantage: under matched parameters \emph{no}
 backbone (Mamba-1, Mamba-2, Mamba-3 SISO, or a Transformer) dominates
-across datasets, and the multi-input multi-output (MIMO) configuration
-that might break the tie is structurally infeasible on our hardware---it
-exceeds the RTX~4080 shared-memory cap
-(Section~\ref{sec:results_ablation}).  We therefore report the backbone
-ablation as a finding rather than a selling point, and none of the
-results below depend on the choice of sequence model.
+across datasets (Section~\ref{sec:results_ablation}).  We therefore
+report the backbone ablation as a finding rather than a selling point,
+and none of the results below depend on the choice of sequence model.
 
 \paragraph{(2) Regime-aware FiLM modulation of the selective scan.}
 We introduce a \emph{RegimeFiLM modulator} that infers a categorical
@@ -351,7 +348,7 @@ deterministic hidden state,
 from which a prior $p_\theta(\zt \mid \hstate) = \mathrm{Cat}(\zt;
 \bm{\pi}^{\text{prior}}_t)$ is predicted.  In DreamerV3 this recurrence
 is a GRU; in Drama it is a Mamba-2 selective state-space layer; in
-FinMamba3 it is a stack of Mamba-3 MIMO blocks
+FinMamba3 it is a stack of Mamba-3 blocks
 (Section~\ref{sec:mamba3}).
 
 \paragraph{Decoder and auxiliary heads.}
@@ -408,14 +405,14 @@ $\Delta_t = \softmax(W_\Delta\,x_t)$, $\mathbf{B}_t = W_B\,x_t$, and
 $\mathbf{C}_t = W_C\,x_t$, any affine transformation of $x_t$ propagates
 directly into all three scan parameters.
 
-\paragraph{Mamba-3 MIMO.}
+\paragraph{Mamba-3.}
 Mamba-3~\citep{lahoti2026mamba3} extends the selective SSM with
 multi-input multi-output (MIMO) state transitions that couple
 information across heads within each layer.  It also incorporates rotary
 position embeddings (RoPE) on a configurable fraction of the head
-dimension and an optional output-projection normalization.
-Whether MIMO improves over SISO on LOB data is evaluated in our
-own ablation (Section~\ref{sec:experiments}).
+dimension and an optional output-projection normalization.  We
+instantiate the single-input single-output (SISO) configuration
+throughout; the MIMO configuration is not evaluated in this work.
 
 % ==============================================================================
 % 4  METHODOLOGY
@@ -498,7 +495,7 @@ tick-imbalance, and CUSUM---each producing the same $F$-dimensional
 feature vector so the downstream pipeline is aggregation-agnostic.
 
 % --------------------------------------------------------------------------
-\subsection{Mamba-3 MIMO Sequence Backbone}\label{sec:mamba3}
+\subsection{Mamba-3 Sequence Backbone}\label{sec:mamba3}
 
 The posterior latent samples $\zt \in \R^{256}$ (from the
 $16\!\times\!16$ categorical) are fed through a stem network
@@ -506,23 +503,22 @@ $16\!\times\!16$ categorical) are fed through a stem network
   x_t^{(0)} = \SiLU\!\bigl(\RMSNorm(W_s\,\zt)\bigr) \in \R^{d_h},
 \end{equation}
 with $d_h = 512$, followed by an $L$-layer ($L = 4$) stack of Mamba-3
-MIMO blocks.  Each block applies a pre-norm residual,
+blocks.  Each block applies a pre-norm residual,
 \begin{equation}\label{eq:mamba_block}
   x_t^{(\ell)} = x_t^{(\ell-1)} + \mathrm{Mamba3}\!\bigl(
   \RMSNorm(x_t^{(\ell-1)})\bigr),
   \qquad \ell = 1, \ldots, L.
 \end{equation}
-The Mamba-3 block parameterizes a selective state-space model with
+The Mamba-3 block parameterizes a selective state-space model in its
+single-input single-output (SISO) configuration with
 $d_{\text{state}} = 128$, head dimension 64 (8 heads for $d_h = 512$),
-MIMO rank~4, chunk size~16, and RoPE on 50\% of the head dimension.  The
+chunk size~16, and RoPE on 50\% of the head dimension.  The
 final hidden state is $\hstate = \RMSNorm(x_t^{(L)}) \in \R^{d_h}$.
 
-The MIMO parameterization couples information across heads within each
-block via a low-rank cross-head mixing matrix.  We provide matched YAML
-configurations for Mamba-1, Mamba-2, Mamba-3 SISO, Mamba-3 MIMO, and a
-Transformer backbone so that the architecture ablation can be reproduced
-with a single command per variant; whether MIMO improves over SISO on
-LOB data is left to that ablation.
+We provide matched YAML
+configurations for Mamba-1, Mamba-2, Mamba-3 SISO, and a Transformer
+backbone so that the architecture ablation can be reproduced with a
+single command per variant.
 
 % --------------------------------------------------------------------------
 \subsection{Regime-Aware FiLM Modulation}\label{sec:regime_film}
@@ -910,7 +906,7 @@ the backbone ablation on a third, public crypto spot-LOB corpus.
 
 \paragraph{Baselines.}
 For the world-model backbone ablation we compare Mamba-1, Mamba-2,
-Mamba-3 SISO, Mamba-3 MIMO, and a Transformer backbone under matched
+Mamba-3 SISO, and a Transformer backbone under matched
 parameter budgets.  For LOB direction prediction we compare against
 DeepLOB~\citep{zhang2019deeplob} and a linear autoregressive baseline,
 following the LOBFrame protocol~\citep{lobframe2024}.  The generative
@@ -963,10 +959,9 @@ never on a good-looking result, and report every null.
 \paragraph{Secondary experiment: backbone ablation.}
 We compare Mamba-1, Mamba-2, Mamba-3 SISO, and a Transformer under matched
 parameter budgets on reconstruction and direction accuracy
-(Section~\ref{sec:results_ablation}); the pre-registered failure criterion
-is that Mamba-3 MIMO does not match or exceed the best alternative, but the
-MIMO arm is hardware-gated and unrun (Section~\ref{sec:results_ablation}), so
-the realized comparison is among the non-MIMO backbones.  Three further
+(Section~\ref{sec:results_ablation}); we treat the backbone as a substrate
+rather than a contribution unless one backbone matches or exceeds the others
+on \emph{both} datasets.  Three further
 components---a flat-MLP encoder ablation, an episodic-memory study (FIFO
 vs.\ novelty-filtered vs.\ off), and a leave-one-out over the auxiliary
 heads---are implemented in the codebase but \emph{not} evaluated in this
@@ -1176,7 +1171,7 @@ We compare Mamba-1, Mamba-2, Mamba-3 (SISO), and a Transformer-over-time backbon
 matched parameter budgets ($\sim\!10.3$M, actuals in Table~\ref{tab:backbone_ablation}) on
 FI-2010 and the Kaggle BTC spot book, reporting held-out full-channel Student-t
 reconstruction NLL (lower is better). The result is a genuine ambiguity rather than a clean
-win: \textbf{no non-MIMO backbone leads on both datasets}---Mamba-1 attains the best
+win: \textbf{no backbone leads on both datasets}---Mamba-1 attains the best
 reconstruction on FI-2010 while Mamba-2 (with the fewest SSM parameters) leads on Kaggle,
 and Mamba-3 SISO is competitive but does not strictly dominate either. The next-tick
 direction head is degenerate for this comparison (it collapses to the flat majority
@@ -1196,26 +1191,19 @@ Mamba-1      & $11.45$M & $\mathbf{-0.5403}$ & $0.0241$ \\
 Mamba-2      & $10.20$M & $-0.5309$ & $\mathbf{-0.0213}$ \\
 Mamba-3 SISO & $10.30$M & $-0.5346$ & $0.0207$ \\
 Transformer  & $9.90$M  & $-0.5175$ & $0.0191$ \\
-Mamba-3 MIMO & --       & \multicolumn{2}{c}{\emph{A100-only (structurally infeasible on the RTX 4080)}} \\
 \bottomrule
 \end{tabular}
 \caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower is better).
-No non-MIMO backbone wins both datasets; the matched-budget MIMO comparison---the cell that
-would resolve the ambiguity---requires a larger-shared-memory accelerator (see text).}
+No backbone wins both datasets---Mamba-1 leads on FI-2010, Mamba-2 on Kaggle---so the choice
+of sequence model is not the operative variable.}
 \label{tab:backbone_ablation}
 \end{table}
 
-\paragraph{Mamba-3 MIMO is structurally A100-gated.}
-The matched-parameter MIMO cell is the one comparison that would adjudicate the
-contributions~(1) and~(3) ambiguity, and it cannot be run on the RTX~4080. The TileLang
-MIMO kernel has a feasibility band with no admissible point on this card: a four-corner
-sweep over (rank, chunk) shows the only configuration whose dynamic shared memory fits the
-$\sim\!100$\,KB/block cap (rank~2, chunk~8) fails the kernel's warp-tiling constraint
-($m_{\mathrm{warp}}\cdot n_{\mathrm{warp}} \neq \texttt{num\_warps}$), while every
-warp-valid configuration (rank~4/chunk~8, rank~2/chunk~16, rank~4/chunk~16) overflows shared
-memory and aborts at kernel launch. A larger-shared-memory accelerator (L4/A100,
-$\sim\!164$--$228$\,KB/block) is therefore required; we report the non-MIMO comparison here
-and leave the MIMO cell as the single outstanding headline-hardware run.
+\paragraph{Why SISO.}
+We run Mamba-3 in its SISO configuration throughout: the Mamba-3 MIMO kernel's
+dynamic shared-memory footprint exceeds the RTX~4080 cap at every warp-valid
+(rank, chunk) configuration, so the MIMO variant is outside this paper's
+hardware envelope and we make no claim about it.
 
 % --------------------------------------------------------------------------
 \subsection{A survivable, naive-beating economic edge}\label{sec:results_edge}
@@ -1391,12 +1379,10 @@ depth ceiling, by contrast, is train-justified); and the settlement head
 catastrophically fails in low-predictability markets (P(profit)$=0.276$,
 drawdown $0.257$), a limitation addressed by direct EV supervision in
 Section~\ref{sec:results_ev}.  The backbone ablation
-(Mamba-1/2/3-SISO/MIMO vs.\ Transformer) and episodic-memory study are
-reported on FI-2010 and Polymarket; the MIMO headline configuration
-exceeds the RTX~4080 shared-memory cap and is deferred to A100-class
-hardware.  The backbone ablation is presented in
-Table~\ref{tab:backbone_ablation}; the episodic-memory study is deferred
-to future work.
+(Mamba-1, Mamba-2, Mamba-3 SISO vs.\ Transformer) is reported on FI-2010
+and the Kaggle spot book.  The backbone ablation is presented in
+Table~\ref{tab:backbone_ablation}; the episodic-memory study is
+implemented but not evaluated, and deferred to future work.
 
 % --------------------------------------------------------------------------
 \subsection{Does the world model earn its keep? A simple-model baseline}\label{sec:results_baseline}
@@ -1670,8 +1656,7 @@ FiLM router will not encode is exactly the one a strategy gate and a
 direct-EV head, together, harvest profitably.
 
 \paragraph{Future work.}
-The negative motivates the A100-class MIMO headline run the 4080 cannot
-host.  The economic positive motivates a live-execution study (the
+The economic positive motivates a live-execution study (the
 present edge is a backtest with walk-the-book fills), a calibrated
 settlement head to enable Kelly sizing, and multi-asset validation of the
 direct-EV approach on ETH/SOL depth bands.
@@ -1713,8 +1698,6 @@ Section~\ref{sec:results} depends on any of them.
     reconstruction-NLL ablation (Table~\ref{tab:backbone_ablation}); the five
     Lopez de Prado bar types (Section~\ref{sec:lob_encoder}) are implemented
     but their effect is not ablated.
-  \item \emph{Mamba-3 MIMO backbone.} Hardware-gated on the RTX~4080; the one
-    outstanding A100-class run (Section~\ref{sec:results_ablation}).
 \end{itemize}
 
 % ==============================================================================

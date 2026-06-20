@@ -121,7 +121,7 @@ Models:
       n_layer: 6              # 2 was Drama-Atari default; A100 max-util recipe uses 6 for
                               # more depth/capacity and more total GPU work per step.
                               # Activation checkpointing on the encoder is available if VRAM is tight.
-      is_mimo: true
+      is_mimo: false
       mimo_rank: 4            # The MIMO kernel's dynamic SMEM scales with chunk_size*mimo_rank.
                               # rank 4 needs ~120 KB at chunk_size=8 (fits A100's ~166 KB) and
                               # ~219 KB at chunk_size=16 (fits H100's ~227 KB). rank 8 needs ~217 KB

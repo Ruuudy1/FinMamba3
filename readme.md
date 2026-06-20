@@ -83,11 +83,11 @@ pretraining:
 The system adapts Drama to LOB microstructure with a microstructure-aware
 feature encoder, an episodic-memory ablation switch with optional learned write
 policy, and Lopez de Prado financial data structures for tick-stream denoising.
-Under matched parameters no backbone (Mamba-1/2, Mamba-3 SISO, or a pre-norm
-Transformer) dominates across datasets, and the Mamba-3 MIMO configuration is
-structurally infeasible on the RTX 4080 (it exceeds the shared-memory cap) — so
-the backbone is reported as a substrate, not a claimed advantage, with the
-matched-budget MIMO run the one outstanding A100-class experiment.
+Under matched parameters no backbone (Mamba-1, Mamba-2, Mamba-3 SISO, or a
+Transformer) dominates across datasets, so the backbone is reported as a
+substrate, not a claimed advantage. We run Mamba-3 in its SISO configuration
+throughout; the MIMO kernel exceeds the RTX 4080 shared-memory cap, so MIMO is
+outside this project's hardware envelope and we make no claim about it.
 
 ## Run On Colab
 
@@ -95,13 +95,14 @@ Use exactly one notebook:
 
 `notebooks/colab_lob_pretrain.ipynb`
 
-The notebook works on any CUDA GPU for SISO. Mamba-3 MIMO requires the
-TileLang kernel and has no Python fallback, so use H100/H200 (sm_90) or B200
-(sm_100) for the full `d_state=128` MIMO experiment. A100 can fit the
-compatibility `chunk_size=8` path, but the observed Polymarket MIMO run was
-~9.49 s/it (~39.5 hours for 15k steps), so it is not practical for the final
-MIMO-vs-SISO comparison. L4/T4 and workstation Blackwell cards generally need
-`USE_MIMO = False` or a non-comparable `MIMO_D_STATE = 64` run.
+The notebook works on any CUDA GPU for the SISO backbone the paper uses. The
+codebase retains optional Mamba-3 MIMO support, but it is not part of the
+paper's results and we make no claim about it: it requires the TileLang kernel
+(no Python fallback) and an H100/H200 (sm_90) or B200 (sm_100) for the full
+`d_state=128` path. To experiment with it anyway, A100 can fit the compatibility
+`chunk_size=8` path, but the observed Polymarket MIMO run was ~9.49 s/it
+(~39.5 hours for 15k steps); L4/T4 and workstation Blackwell cards generally need
+`USE_MIMO = False`.
 
 Colab Pro+ improves access but does not guarantee H100; Google notes that
 runtime GPU resources vary and are subject to availability:
@@ -113,9 +114,9 @@ https://colab.research.google.com/github/Ruuudy1/FinMamba3/blob/main/notebooks/c
 
 Then:
 
-1. Set the runtime to a GPU instance (Runtime, Change runtime type). For a
-   final MIMO run, use a runtime or rental provider where H100/H200/B200 is
-   explicitly reserved.
+1. Set the runtime to a GPU instance (Runtime, Change runtime type). (The
+   optional MIMO path needs H100/H200/B200; it is not part of the paper's
+   results.)
 2. Add your `HF_TOKEN` to Colab Secrets (key icon, left sidebar). The token
    needs write access for compiled wheels, checkpoints, and run logs.
 3. Hit Run all.
@@ -124,7 +125,7 @@ By default the first cell sets:
 
 ```python
 DATASET = "polymarket"  # reproduces the original Polymarket workflow
-MAX_STEPS = 15000       # full Mamba-3 MIMO pretrain budget
+MAX_STEPS = 15000       # full Mamba-3 pretrain budget
 RUN_PROBES = False
 SMOKE_TEST = False
 ```
@@ -297,8 +298,8 @@ notebooks/
   colab_lob_pretrain.ipynb
 pyproject.toml                  Editable-install packaging (pip install -e .)
 configs/
-  lob.yaml                      Polymarket default. Mamba-3 MIMO baseline, 94-dim features.
-  fi2010.yaml                   FI-2010 default. Mamba-3 MIMO, 46-dim features.
+  lob.yaml                      Polymarket default. Mamba-3 (SISO) backbone, 94-dim features.
+  fi2010.yaml                   FI-2010 default. Mamba-3 (SISO), 46-dim features.
   lob_em.yaml                   Episodic memory enabled (FIFO writes).
   lob_full_ablation.yaml        Student-t + Hawkes + Settlement + EM-novelty + multi-threshold.
   lob_aggregate_only.yaml       Tick-aggregate features only; per-level depth masked.
@@ -323,7 +324,7 @@ src/finmamba3/
     lob_labels.py               Triple-barrier and multi-threshold direction targets
     lob_env.py                  Gymnasium trading environment with reward variants
   models/
-    world_model.py              Mamba3 MIMO world model (core orchestration)
+    world_model.py              Mamba-3 world model (core orchestration)
     world_model_heads.py        DistHead / RewardHead / TerminationHead
     lob_encoder.py              Transformer-over-depth-tokens encoder + Student-t decoder
     mamba_backbone.py           FinMamba3 sequence wrapper for upstream Mamba
@@ -382,27 +383,27 @@ a 105% normalized score with linear-time complexity. Key claim: parameter
 efficiency vs. Transformer / RSSM / DreamerV3 baselines on a single laptop.
 
 Where we deviate:
-- We swap Mamba-2 for Mamba-3 MIMO (see below).
+- We swap Mamba-2 for Mamba-3 (SISO; see below).
 - We dropped Drama's "Dynamic Frequency-based Sampling" replay scheme in
   favour of an imagine-counter penalty in `replay_buffer.py:47`. This is an
   undocumented deviation; either bring it back as a baseline or write a
   paragraph defending why tick-frequency, not state-visit-frequency, is the
   bottleneck for LOB sequences.
 
-### Mamba-3 MIMO (Lahoti et al., arxiv 2603.15569, ICLR 2026)
+### Mamba-3 (Lahoti et al., arxiv 2603.15569, ICLR 2026)
 
-The strongest single novelty axis. Headline numbers: at 1.5B scale, Mamba-3 +
-MIMO improves average downstream accuracy by 1.8 points over Gated DeltaNet
-(0.6 from M3, 1.2 from MIMO), and Mamba-3 matches Mamba-2 perplexity at half
-the state size. No published LOB / market-microstructure paper uses Mamba-3,
-and only a handful even use Mamba-2 (`MambaTS`, `MambaStock`, `CryptoMamba`).
-The framing for the paper should be "first Mamba-3 MIMO world model on LOB."
+We instantiate the dynamics with a Mamba-3 SISO backbone. For reference, the
+upstream headline numbers: at 1.5B scale, Mamba-3 + MIMO improves average
+downstream accuracy by 1.8 points over Gated DeltaNet (0.6 from M3, 1.2 from
+MIMO), and Mamba-3 matches Mamba-2 perplexity at half the state size. No
+published LOB / market-microstructure paper uses Mamba-3, and only a handful
+even use Mamba-2 (`MambaTS`, `MambaStock`, `CryptoMamba`). The MIMO variant is
+outside our hardware envelope and is not claimed; the backbone ablation finds
+no backbone dominates, so we treat the sequence model as a substrate.
 
-To validate the architectural claim we ship five matched-config yamls so the
-ablation table can be produced with one command per backbone:
-`lob.yaml` (Mamba-3 MIMO), `lob_mamba1.yaml`,
-`lob_mamba2.yaml`, `lob_transformer.yaml`, and any
-`is_mimo: false` variant of the default for the SISO column.
+We ship matched-config yamls so the ablation table can be produced with one
+command per backbone: `lob_mamba1.yaml`, `lob_mamba2.yaml`,
+`lob_transformer.yaml`, and the Mamba-3 SISO default.
 
 ### Episodic and retrieval-augmented memory (arxiv 2506.06326, 2602.16192, 2202.08417)
 
