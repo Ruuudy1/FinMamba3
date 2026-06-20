@@ -95,8 +95,8 @@ def equity_figure(baseline_json: Path, out_path: Path) -> None:
     arms = report["arms"]
     fig, ax = plt.subplots(figsize=(5.6, 2.8))
     # World-model reference PnLs on the same 645-market set (persisted: tab:ev_arms / tab:ev_seeds).
-    ax.axvline(3946.0, color="#c44e52", lw=1.1, ls="--", label="WM settlement head (+3946)")
-    ax.axvline(4643.0, color="#dd8452", lw=1.1, ls=":", label="WM EV head, 3-seed mean (+4643)")
+    ax.axvline(5147.0, color="#c44e52", lw=1.1, ls="--", label="WM settlement head (+5147)")
+    ax.axvline(4779.0, color="#dd8452", lw=1.1, ls=":", label="WM EV head, 3-seed mean (+4779)")
     ax.axvline(0.0, color="0.8", lw=0.8)
     labels = []
     for index, (name, arm) in enumerate(arms.items()):

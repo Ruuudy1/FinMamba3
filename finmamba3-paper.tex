@@ -1478,8 +1478,8 @@ sizing, engine, and bootstrap---only the probability source differs
 \toprule
 Probability source (645-market set) & Held-out PnL & Brier \\
 \midrule
-Logistic regression (same features)      & $\mathbf{+7{,}016}$ & $\mathbf{0.146}$ \\
-Gradient-boosted trees (same features)   & $+876$ & $0.149$ \\
+Logistic regression (same features)      & $\mathbf{+6{,}914}$ & $\mathbf{0.146}$ \\
+Gradient-boosted trees (same features)   & $+1{,}575$ & $0.149$ \\
 World model --- settlement head          & $+5{,}147$ & $0.206$ \\
 World model --- EV head (3-seed mean)    & $+4{,}779$ & --- \\
 Fair naive (no model)                    & $-1{,}008$ & --- \\
@@ -1489,11 +1489,11 @@ Fair naive (no model)                    & $-1{,}008$ & --- \\
 model.  All arms trade the identical train-frozen gate, sizing, engine, and
 $645$ held-out BTC markets; only the probability source differs.  The logistic
 regression earns the most and is the best-calibrated (lowest Brier), so the
-world-model architecture is \emph{not necessary} for the economic edge.  The
-logistic/GBT/naive rows are on the recorded vintage (re-fitting on $1.6$M
-training ticks exceeds our compute budget); the settlement and EV rows are
-current.  The conclusion is vintage-robust: the recorded logistic ($+\$7{,}016$)
-exceeds even the \emph{higher} current settlement total ($+\$5{,}147$).}
+world-model architecture is \emph{not necessary} for the economic edge.  All
+rows are on the current data vintage; the logistic and gradient-boosted tree
+are fit on a stride-$4$ subsample of the training ticks ($397$k of $1.59$M,
+uniform over the full period) to bound the fit cost.  The logistic
+($+\$6{,}914$) clears both world-model heads.}
 \label{tab:baseline}
 \end{table}
 
@@ -1501,27 +1501,26 @@ exceeds even the \emph{higher} current settlement total ($+\$5{,}147$).}
 \centering
 \includegraphics[width=0.66\linewidth]{figures/simple_baseline_pnl.pdf}
 \caption{\textbf{The economic edge does not need the architecture.}  Held-out
-PnL of the same-feature simple models on the $645$-market set (recorded
+PnL of the same-feature simple models on the $645$-market set (current
 vintage), with their \emph{market-block} $95\%$ confidence intervals (resampling
-whole markets).  The logistic's point total ($+\$7{,}016$) exceeds both
-world-model heads (dashed/dotted), and its market-block interval ($+\$2{,}928$
+whole markets).  The logistic's point total ($+\$6{,}914$) exceeds both
+world-model heads (dashed/dotted), and its market-block interval ($+\$2{,}844$
 to $+\$11$k over $243$ independent markets) survives the dependence-respecting
-bootstrap; the deflationary conclusion holds across vintages, the logistic
-exceeding even the higher current settlement total ($+\$5{,}147$).}
+bootstrap, clearing even the current settlement total ($+\$5{,}147$).}
 \label{fig:baseline}
 \end{figure}
 
 Because the simple models are fit on the training period and scored on the
 strictly-later held-out period, this is by construction a walk-forward
-(out-of-time) comparison: the $+\$7{,}016$ is an out-of-sample number on data
+(out-of-time) comparison: the $+\$6{,}914$ is an out-of-sample number on data
 postdating every training tick, not an in-sample fit.
 
 The result is deflationary by design and we report it as such: a plain
-logistic regression on the same features earns $+\$7{,}016$ at Brier $0.146$,
+logistic regression on the same features earns $+\$6{,}914$ at Brier $0.146$,
 exceeding both the settlement head ($+\$5{,}147$, Brier $0.206$) and the EV
 head ($+\$4{,}779$ mean), and it is survivable under the honest market-block
-bootstrap (P(profit)$=1.000$ over $243$ independent traded markets, $95\%$
-CI lower bound $+\$2{,}928$).  The economic edge is therefore real but
+bootstrap (P(profit)$=0.999$ over $243$ independent traded markets, $95\%$
+CI lower bound $+\$2{,}844$).  The economic edge is therefore real but
 \emph{not} attributable to the sequence model: the settlement of a binary
 contract is a near-deterministic function of the spot move since open, and a
 linear readout of the spot-conditioning features captures it at least as
@@ -1536,12 +1535,12 @@ only that \emph{this particular readout-and-trade} does not require it.
 
 \paragraph{The same-feature logistic is also regime-robust.}
 The deflation extends to the regime axis that motivates the EV head.
-Splitting the held-out set by predictability, the logistic earns $+\$2{,}398$
-in high-predictability and $+\$4{,}619$ in \emph{low}-predictability markets,
-\emph{both} at market-block P(profit)$=0.994$ (recorded vintage)---robustly
+Splitting the held-out set by predictability, the logistic earns $+\$2{,}448$
+in high-predictability and $+\$4{,}466$ in \emph{low}-predictability markets,
+\emph{both} at market-block P(profit)$\ge 0.99$---robustly
 positive in exactly the low-predictability regime where the world model's
-settlement head is \emph{weak} ($+\$51$ at P(profit)$=0.63$ on the current
-vintage; Table~\ref{tab:ev_arms}).  A linear readout of the spot features
+settlement head is \emph{weak} ($+\$51$ at P(profit)$=0.63$;
+Table~\ref{tab:ev_arms}).  A linear readout of the spot features
 therefore does not exhibit the low-predictability shortfall at all: it is a
 property of the settlement head's miscalibration (the anti-directional
 mid-probability bins of Fig.~\ref{fig:reliability}), not of the regime.  This refines---without negating---the EV head
@@ -1726,7 +1725,7 @@ selective-participation strategy---earns $+\$4{,}729$ on held-out BTC
 (408 markets, deterministic), beats a fair trend-following baseline by
 $6$--$9\times$, and is survivable.  We deliberately deflate this result with
 a same-feature control: a logistic regression reproduces and exceeds it
-($+\$7{,}016$), so the economic edge is carried by the spot-conditioned
+($+\$6{,}914$), so the economic edge is carried by the spot-conditioned
 pipeline and selective-participation framing, not by the world-model
 architecture.  Second, broader market coverage
 (645 markets) exposes a regime \emph{weakness} in the settlement head: a

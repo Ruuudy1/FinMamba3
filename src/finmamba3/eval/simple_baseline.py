@@ -12,6 +12,7 @@ backtest was missing. No world-model forward pass is needed, so this runs withou
 # region imports
 from __future__ import annotations
 import argparse
+import gc
 import json
 import logging
 from pathlib import Path
@@ -47,18 +48,20 @@ def _tte_weights(ts_sec: np.ndarray, start_ts: int, end_ts: int) -> np.ndarray:
     return np.clip(1.0 - tau, 0.05, 1.0)
 
 
-def _collect_supervised(bt, stats, slugs, include_binary, include_spot, include_cross, window: int):
+def _collect_supervised(bt, stats, slugs, include_binary, include_spot, include_cross, window: int, stride: int):
     """Stack per-tick features, settlement labels, and TTE weights across markets for model fitting.
 
     Reuses the exact training feature pipeline (_eval_sequence) so the baseline sees the same normalized
     inputs the world-model encoder does; the label is the market's realized YES outcome broadcast to every
     tick. Markets too short to score, or without a settled outcome, are skipped exactly as the world-model
-    evaluator skips them.
+    evaluator skips them. A stride above 1 keeps every stride-th tick of the concatenated time-ordered
+    series, an unbiased subsample over the full training period that bounds the sklearn fit cost without
+    truncating any part of the range.
     """
     lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
     feature_rows = []
-    labels = []
-    weights = []
+    label_rows = []
+    weight_rows = []
     for slug in slugs:
         outcome = _settlement_yes_outcome(bt.settlements.get(slug))
         if outcome is None:
@@ -69,9 +72,17 @@ def _collect_supervised(bt, stats, slugs, include_binary, include_spot, include_
             continue
         lifecycle = lifecycle_by_slug[slug]
         feature_rows.append(flat)
-        labels.append(np.full(flat.shape[0], float(outcome), dtype=np.float64))
-        weights.append(_tte_weights(seq.ts_sec, lifecycle.start_ts, lifecycle.end_ts))
-    return np.concatenate(feature_rows, axis=0), np.concatenate(labels), np.concatenate(weights)
+        label_rows.append(np.full(flat.shape[0], float(outcome), dtype=np.float64))
+        weight_rows.append(_tte_weights(seq.ts_sec, lifecycle.start_ts, lifecycle.end_ts))
+    features = np.concatenate(feature_rows, axis=0)
+    labels = np.concatenate(label_rows)
+    weights = np.concatenate(weight_rows)
+    if stride > 1:
+        # Copy the strided views so the full-resolution base arrays are released before the fit.
+        features = features[::stride].copy()
+        labels = labels[::stride].copy()
+        weights = weights[::stride].copy()
+    return features, labels, weights
 
 
 def _prob_series_from_model(model, bt, stats, slugs, include_binary, include_spot, include_cross, window: int) -> dict:
@@ -139,6 +150,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hours-train", type=float, default=1e9)
     p.add_argument("--hours-val", type=float, default=1e9)
     p.add_argument("--window", type=int, default=64, help="Context window; matches the world-model evaluator's tradeable-tick offset.")
+    p.add_argument("--train-stride", type=int, default=1, help="Keep every K-th supervised training tick (unbiased over time) to bound the sklearn fit cost; 1 = full ~1.6M-tick fit.")
     p.add_argument("--predictability-threshold", type=float, default=0.60, help="Frozen ER gate (headline value).")
     p.add_argument("--predictability-window", type=int, default=120)
     p.add_argument("--edge-threshold", type=float, default=0.03)
@@ -163,9 +175,12 @@ def main() -> int:
     bt_train = build_timeline(data_dir=args.data_train, hours=args.hours_train, assets=assets, intervals=intervals)
     train_count = _usable_tick_count_by_slug(bt_train)
     train_slugs = [lc.market_slug for lc in bt_train.lifecycles if train_count.get(lc.market_slug, 0) >= args.window]
-    features, labels, weights = _collect_supervised(bt_train, stats, train_slugs, include_binary, include_spot, include_cross, args.window)
-    logger.info(f"[baseline] train: {len(train_slugs)} markets, {features.shape[0]} ticks, {features.shape[1]} features, YES rate {labels.mean():.3f}")
-
+    features, labels, weights = _collect_supervised(bt_train, stats, train_slugs, include_binary, include_spot, include_cross, args.window, args.train_stride)
+    logger.info(f"[baseline] train: {len(train_slugs)} markets, {features.shape[0]} ticks (stride={args.train_stride}), {features.shape[1]} features, YES rate {labels.mean():.3f}")
+    # The train timeline is unused past feature collection, so release it before the val timeline is built.
+    # Holding both resident exceeds the 15 GiB WSL cap (the OOM that killed the first stride run mid val build).
+    del bt_train, train_count, train_slugs
+    gc.collect()
     logistic = LogisticRegression(max_iter=2000, C=1.0)
     logistic.fit(features, labels, sample_weight=weights)
     gbt = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, max_depth=4, random_state=0)
