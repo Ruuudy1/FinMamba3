@@ -876,13 +876,13 @@ vector is drawn intact) for every arm we re-execute here.  For the world-model
 headline, whose probabilities are precomputed on GPU, the per-trade
 $P(\text{profit})=1.0$ should be read against its independent-market count.  A
 market-block bootstrap on a re-run of the settlement headline (resampling whole
-markets) keeps the edge alive exactly where the gate routes it: across the
-high-predictability markets it holds $P(\text{profit})=1.0$ with a $95\%$ CI of
-$[+\$2{,}686,\,+\$7{,}951]$ over $129$ independent traded markets, while the
-low-predictability markets straddle zero ($P(\text{profit})=0.53$, CI
-$[-\$3{,}669,\,+\$3{,}681]$ over $139$)---the market-level form of the same
-low-predictability failure the BookRelativeEdgeHead removes
-(Section~\ref{sec:results_ev}).
+markets, so a market's correlated trades count once) keeps the edge alive where
+the gate routes it: across the high-predictability markets it holds
+$P(\text{profit})=1.0$ with a $95\%$ CI of $[+\$2{,}686,\,+\$7{,}951]$ over $129$
+independent traded markets---so the edge survives the dependence-respecting
+accounting, not only the per-trade bootstrap.  The low-predictability markets, by
+contrast, straddle zero---the market-level form of the failure the
+BookRelativeEdgeHead removes (Section~\ref{sec:results_ev}).
 
 % ==============================================================================
 % 5  EXPERIMENTAL SETUP
