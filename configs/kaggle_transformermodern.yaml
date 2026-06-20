@@ -1,0 +1,225 @@
+BasicSettings:
+  ObsMode: features
+  FeatureDim: 94          # K(10) * F_level(8) + F_tick(14); the Polymarket base schema (no binary/spot block).
+  ReplayBufferOnGPU: True
+  Seed: 3710
+  Env_name: LOB
+  Device: cuda:0
+  Use_amp: True
+  NormClip: 8.0
+  Use_cg: False
+  Compile: False
+  SavePath: None
+
+Dataset:
+  Kind: kaggle
+  Kaggle:
+    Asset: BTC                # One of BTC, ETH, ADA; selects data/<Asset>_<Resolution>.csv.
+    Resolution: 1min          # One of 1sec, 1min, 5min. Start on 1min/5min; 1sec is ~1.8 GB.
+    HoursTrain: 168           # 7 days of 1min bars (~10080 ticks) for the train stream.
+    HoursVal: 72              # The next 3 days (~4320 ticks); chronological, non-overlapping, no leakage.
+    FlatThreshold: 0.0        # Loader's diagnostic next-tick label band only; training uses Direction.Threshold.
+
+Evaluate:
+  EpisodeNum: 10
+  NumEnvs: 1
+  DuringTraining: False
+  EverySteps: 1000
+
+JointTrainAgent:
+  SampleMaxSteps: 8000
+  BufferMaxLength: 50000
+  WorldModelWarmUp: 64
+  BehaviourWarmUp: 1000000
+  NumEnvs: 1
+  BatchSize: 64
+  EarlyStoppingPatience: 5
+  SaveBestOnly: true
+  AccumSteps: 2
+  BatchLength: 64
+  ImagineBatchSize: 64
+  ImagineContextLength: 8
+  ImagineBatchLength: 16
+  RealityContextLength: 16
+  TrainDynamicsEverySteps: 1
+  TrainDynamicsEpoch: 1
+  TrainAgentEverySteps: 1
+  FreezeWorldModelAfterSteps: 20000
+  FreezeBehaviourAfterSteps: 0
+  SaveEverySteps: 2000
+  SaveModels: True
+  Tau: 10
+  ImaginationTau: 10
+  Alpha: 1.0
+  Beta: 1.0
+
+Models:
+  WorldModel:
+    dtype: float32
+    Backbone: TransformerModern
+    Act: SiLU
+    CategoricalDim: 16
+    ClassDim: 16
+    HiddenStateDim: 512
+    Optimiser: Laprop
+    LatentDiscreteType: naive
+    Max_grad_norm: 1000
+    Warmup_steps: 500
+    LRSchedule: cosine
+    LRMinRatio: 0.1
+    UseActionInput: True
+    DirectionThresholds: null
+    Dropout: 0.1
+    Unimix_ratio: 0.01
+    Weight_decay: 1.0e-4
+    RepresentationLossWeight: 0.1
+    FreeBits: 1.0
+    Adam:
+      LearningRate: 1.0e-4
+    Laprop:
+      LearningRate: 4.0e-5
+      Epsilon: 1.0e-20
+    Encoder:
+      Type: lob
+      K: 10
+      FeatureDimLevel: 8         # 5 best bid + 5 best ask levels, each in the LEVEL_FEATURE_NAMES layout.
+      FeatureDimTick: 14         # TICK_FEATURE_NAMES aggregates; no binary-market block (spot data).
+      DModel: 256
+      NumLayers: 4
+      NumHeads: 8
+      Dropout: 0.2
+      DimFeedforward: 256
+      OutputFlattenDim: 1024
+      AggregateOnly: False
+      GradientCheckpointing: False
+    Decoder:
+      Kind: studentt                   # Heavy-tailed NLL so the recon-NLL secondary metric can see the regime's 2nd moment.
+      HiddenDim: 512
+      NumLayers: 3
+      NuInit: 5.0
+      LearnableNu: True
+      SizeWeight: 2.0                  # Crypto notionals carry a size/price magnitude asymmetry, unlike pre-normalized FI-2010.
+      LevelSizeIndices: [1, 2, 3]      # log_size, log_cum_depth, vol_share (the 8-feature level size channels).
+      TickSizeIndices: [6, 7, 11, 12]  # log_bid_vol, log_ask_vol, ofi_top, trade_intensity.
+    Reward:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Termination:
+      Enabled: false
+      HiddenUnits: 256
+      LayerNum: 1
+    Transformer:
+      FinalFeatureWidth: 4
+      NumLayers: 3
+      NumHeads: 8
+    Mamba:
+      n_layer: 2
+      d_intermediate: 0
+      ssm_cfg:
+        d_state: 16
+    Mamba3:
+      Enabled: true
+      n_layer: 4
+      is_mimo: false
+      mimo_rank: 4
+      d_state: 128
+      headdim: 64
+      chunk_size: 16
+      is_outproj_norm: false
+      rope_fraction: 0.5
+    Direction:
+      Enabled: True
+      NumClasses: 3
+      Threshold: 0.01                  # Normalized-mid next-tick band; buckets sub-band moves as flat for a 3-class split.
+      LossWeight: 0.5
+      ClassBalanced: False             # Match the FI-2010 baseline; the threshold already gives a populated flat class.
+      Dropout: 0.0
+    Regime:
+      Enabled: False
+      NumRegimes: 8
+      EmbedDim: 32
+    RegimeFiLM:
+      Enabled: False          # In-scan FiLM modulation of the Mamba selection mechanism. Treatment arm sets True.
+      NumRegimes: 4           # FI-2010 carries only a handful of regimes; 4 keeps the router from spreading thin.
+      EmbedDim: 32
+      EntropyCoef: 0.01       # Load-balance weight; spreads usage across regimes to prevent collapse.
+      InitScale: 0.0          # Hypernetwork output init std. 0.0 keeps the exact identity-at-init baseline.
+      Dropout: 0.0            # Dropout on the regime embedding; overfitting guard on the hypernetwork's added capacity.
+      LRMult: 1.0             # Multiplies the world-model LR for the modulator params so the zero-init FiLM can learn faster.
+      WeightDecay: null       # Separate weight decay for the modulator; null reuses the world-model default.
+      ConditionOnVol: False   # Append a causal rolling-mid volatility feature to the router input.
+      VolWindow: 16           # Trailing events over which the causal volatility conditioning feature is measured.
+      SuperviseVol: False              # Add a router cross-entropy toward the regime bucket; the escalation sets True.
+      SuperviseAxis: vol               # 'vol' or 'predictability' (the ER bucket); the escalation supervises on predictability.
+      SupervisionWeight: 0.0           # Scales the router-supervision cross-entropy.
+      FeedObsVol: False                # Route the obs-derived regime feature into the router input.
+      DecoupleRouterFromFiLM: False    # Detach the router logits on the path into the FiLM hypernetwork.
+    EpisodicMemory:
+      Enabled: False
+      Capacity: 50000
+      TopK: 4
+      MinFillBeforeRetrieve: 1024
+      RetrieveEvery: 4
+      UseNovelty: False
+      NoveltyThreshold: 0.0
+    Hawkes:
+      Enabled: False
+      LossWeight: 0.1
+    Settlement:
+      Enabled: False
+      LossWeight: 0.25
+
+  Agent:
+    dtype: float32
+    Policy: AC
+    Unimix_ratio: 0
+    AC:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EntropyCoef: 3.e-4
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.0e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+    PPO:
+      NumLayers: 3
+      Gamma: 0.985
+      Lambda: 0.95
+      EpsilonClip: 0.2
+      K_epochs: 3
+      Minibatch: 16384
+      CriticCoef: 1
+      EntropyCoef: 3.e-4
+      KL_threshold: 0.01
+      Max_grad_norm: 100
+      Warmup_steps: 1000
+      Act: SiLU
+      Optimiser: Laprop
+      Adam:
+        LearningRate: 3.e-5
+        Epsilon: 1.0e-5
+      Laprop:
+        LearningRate: 4.0e-5
+        Epsilon: 1.0e-20
+      Actor:
+        HiddenUnits: 256
+      Critic:
+        HiddenUnits: 512
+
+Wandb:
+  Init:
+    Mode: offline
+    Project: Drama_LOB_pretrain
+n: kaggle
