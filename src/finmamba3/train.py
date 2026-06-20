@@ -542,14 +542,15 @@ def main() -> None:
                 device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
             ):
                 emb = world_model.encoder(probe_obs)
-                seq = world_model.sequence_model(
-                    torch.zeros(
-                        (1, 4, world_model.stoch_flattened_dim),
-                        device=device,
-                        dtype=emb.dtype,
-                    ),
-                    probe_action,
+                probe_latent = torch.zeros(
+                    (1, 4, world_model.stoch_flattened_dim), device=device, dtype=emb.dtype
                 )
+                if world_model.model in ("Transformer", "TransformerModern"):
+                    from finmamba3.models.attention import get_subsequent_mask_with_batch_length
+                    probe_mask = get_subsequent_mask_with_batch_length(4, device)
+                    seq = world_model.sequence_model(probe_latent, probe_action, probe_mask)
+                else:
+                    seq = world_model.sequence_model(probe_latent, probe_action)
             logger.info(
                 f"dtype probe: encoder->{emb.dtype}, sequence_model->{seq.dtype} "
                 f"(use_amp={world_model.use_amp})"

@@ -874,8 +874,15 @@ independent-market count alongside every trade count, and a \emph{market-block}
 bootstrap that resamples whole markets with replacement (a market's trade
 vector is drawn intact) for every arm we re-execute here.  For the world-model
 headline, whose probabilities are precomputed on GPU, the per-trade
-$P(\text{profit})=1.0$ should be read against its $\le\!408$ (resp.\ $645$)
-independent markets; the harness emits the block statistic on any re-run.
+$P(\text{profit})=1.0$ should be read against its independent-market count.  A
+market-block bootstrap on a re-run of the settlement headline (resampling whole
+markets) keeps the edge alive exactly where the gate routes it: across the
+high-predictability markets it holds $P(\text{profit})=1.0$ with a $95\%$ CI of
+$[+\$2{,}686,\,+\$7{,}951]$ over $129$ independent traded markets, while the
+low-predictability markets straddle zero ($P(\text{profit})=0.53$, CI
+$[-\$3{,}669,\,+\$3{,}681]$ over $139$)---the market-level form of the same
+low-predictability failure the BookRelativeEdgeHead removes
+(Section~\ref{sec:results_ev}).
 
 % ==============================================================================
 % 5  EXPERIMENTAL SETUP
@@ -1173,7 +1180,10 @@ FI-2010 and the Kaggle BTC spot book, reporting held-out full-channel Student-t
 reconstruction NLL (lower is better). The result is a genuine ambiguity rather than a clean
 win: \textbf{no backbone leads on both datasets}---Mamba-1 attains the best
 reconstruction on FI-2010 while Mamba-2 (with the fewest SSM parameters) leads on Kaggle,
-and Mamba-3 SISO is competitive but does not strictly dominate either. The next-tick
+and Mamba-3 SISO is competitive but does not strictly dominate either. A pre-norm Transformer
+matched to the Mamba-3 block (RMSNorm, SiLU, $4\times$ FFN; $9.61$M params) is likewise
+competitive but non-dominant ($-0.5041$ FI-2010, $0.0224$ Kaggle), so the transformer's
+non-dominance is not an artifact of an under-tuned post-norm baseline. The next-tick
 direction head is degenerate for this comparison (it collapses to the flat majority
 identically across all backbones), so it cannot discriminate architectures; on the FI-2010
 horizon-$10$ labels, by contrast, a dedicated DeepLOB~\citep{zhang2019deeplob} head reaches
@@ -1190,12 +1200,15 @@ Backbone & Params & FI-2010 recon NLL & Kaggle recon NLL \\
 Mamba-1      & $11.45$M & $\mathbf{-0.5403}$ & $0.0241$ \\
 Mamba-2      & $10.20$M & $-0.5309$ & $\mathbf{-0.0213}$ \\
 Mamba-3 SISO & $10.30$M & $-0.5346$ & $0.0207$ \\
-Transformer  & $9.90$M  & $-0.5175$ & $0.0191$ \\
+Transformer (post-norm) & $9.90$M  & $-0.5175$ & $0.0191$ \\
+Transformer (pre-norm)  & $9.61$M  & $-0.5041$ & $0.0224$ \\
 \bottomrule
 \end{tabular}
 \caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower is better).
 No backbone wins both datasets---Mamba-1 leads on FI-2010, Mamba-2 on Kaggle---so the choice
-of sequence model is not the operative variable.}
+of sequence model is not the operative variable.  Both a standard (post-norm) and a
+Mamba-3-matched (pre-norm, RMSNorm/SiLU/$4\times$ FFN) Transformer are competitive but
+non-dominant, so the non-dominance is not an artifact of an under-tuned transformer baseline.}
 \label{tab:backbone_ablation}
 \end{table}
 
