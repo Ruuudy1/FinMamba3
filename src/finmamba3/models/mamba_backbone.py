@@ -131,6 +131,7 @@ class FinMambaSequenceModel(nn.Module):
         regime_init_scale: float = 0.0,
         regime_dropout: float = 0.0,
         regime_decouple_router: bool = False,
+        regime_apply_after_scan: bool = False,
         device=None,
         dtype=None,
     ) -> None:
@@ -182,6 +183,10 @@ class FinMambaSequenceModel(nn.Module):
         self.dropout = nn.Dropout(dropout_p)
         self.norm_f = nn.RMSNorm(d_model, **factory)
         self.use_regime_film = bool(use_regime_film)
+        # apply_after_scan moves the FiLM gate from each block's input to its output. An input-side affine
+        # folds into the block's own Delta, B and C projections, so it is the gauge direction joint training
+        # returns to identity; gating the output past the selective scan is the non-gauge control.
+        self.apply_after_scan = bool(regime_apply_after_scan)
         if self.use_regime_film:
             self.regime_modulator = RegimeFiLMModulator(
                 hidden_dim=d_model,
@@ -222,7 +227,8 @@ class FinMambaSequenceModel(nn.Module):
         for layer_index, (norm, layer) in enumerate(zip(self.norms, self.layers)):
             residual = hidden_states
             layer_input = norm(hidden_states)
-            if self.use_regime_film:
+            if self.use_regime_film and not self.apply_after_scan:
+                # Input-side affine: the gauge direction that folds into the block's input-dependent Delta, B and C.
                 layer_input = gammas[:, :, layer_index, :] * layer_input + betas[:, :, layer_index, :]
             if inference_params is None:
                 layer_out = layer(layer_input, **mixer_kwargs)
@@ -232,6 +238,10 @@ class FinMambaSequenceModel(nn.Module):
                     inference_params=inference_params,
                     **mixer_kwargs,
                 )
+            if self.use_regime_film and self.apply_after_scan:
+                # Non-gauge control: gate the block output past the selective scan, on the residual stream,
+                # where the next block's RMSNorm cannot fold the modulation back into the host projections.
+                layer_out = gammas[:, :, layer_index, :] * layer_out + betas[:, :, layer_index, :]
             hidden_states = residual + self.dropout(layer_out)
         output = self.norm_f(hidden_states)
         if return_regime:

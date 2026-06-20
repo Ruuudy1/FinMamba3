@@ -109,6 +109,11 @@ class WorldModel(nn.Module):
         # purely by the supervision CE. Without it, an adaptive optimizer keeps the router uniform no matter
         # how the supervision weight is scaled, because the recon gradient direction on the shared params wins.
         self.regime_film_decouple_router = bool(regime_film_cfg is not None and regime_film_cfg.get('DecoupleRouterFromFiLM', False))
+        # ApplyAfterScan moves the FiLM gate from each block's input to its output, past the selective scan.
+        # The input-side affine folds losslessly into the block's own Delta, B and C projections, the gauge
+        # direction joint training returns to identity, so this flag is the non-gauge positive control: a
+        # post-scan gate sits on the residual stream and the host projections cannot absorb it the same way.
+        self.regime_film_apply_after_scan = bool(regime_film_cfg is not None and regime_film_cfg.get('ApplyAfterScan', False))
         assert not self.regime_film_condition_on_vol or self.regime_film_vol_window >= 2, (
             "Models.WorldModel.RegimeFiLM.VolWindow must be at least 2 to estimate volatility."
         )
@@ -173,6 +178,7 @@ class WorldModel(nn.Module):
                 regime_init_scale=self.regime_film_init_scale,
                 regime_dropout=self.regime_film_dropout,
                 regime_decouple_router=self.regime_film_decouple_router,
+                regime_apply_after_scan=self.regime_film_apply_after_scan,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -195,6 +201,7 @@ class WorldModel(nn.Module):
                 regime_init_scale=self.regime_film_init_scale,
                 regime_dropout=self.regime_film_dropout,
                 regime_decouple_router=self.regime_film_decouple_router,
+                regime_apply_after_scan=self.regime_film_apply_after_scan,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )
@@ -232,6 +239,7 @@ class WorldModel(nn.Module):
                 regime_init_scale=self.regime_film_init_scale,
                 regime_dropout=self.regime_film_dropout,
                 regime_decouple_router=self.regime_film_decouple_router,
+                regime_apply_after_scan=self.regime_film_apply_after_scan,
                 dtype=config.Models.WorldModel.dtype,
                 device=device,
             )

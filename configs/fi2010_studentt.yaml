@@ -153,6 +153,7 @@ Models:
       SupervisionWeight: 0.0           # Scales the router-supervision cross-entropy.
       FeedObsVol: False                # Route the obs-derived regime feature into the router input.
       DecoupleRouterFromFiLM: False    # Detach the router logits on the path into the FiLM hypernetwork.
+      ApplyAfterScan: False            # Gate the block OUTPUT past the selective scan (the non-gauge control) instead of its input (the gauge direction). The post-scan escalation sets True.
     EpisodicMemory:
       Enabled: False
       Capacity: 50000
