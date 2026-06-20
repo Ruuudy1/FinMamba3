@@ -190,7 +190,7 @@ def world_model_direction_probs(
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
@@ -238,7 +238,7 @@ def world_model_settlement_logloss(
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
@@ -288,7 +288,7 @@ def world_model_prediction_mse(
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
@@ -341,7 +341,7 @@ def world_model_prediction_nll(
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        if wm.model == "Transformer":
+        if wm.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)

@@ -73,7 +73,7 @@ def imagine_rollout(
         prefix_latent = ctx_latent
         prefix_action = action
         for step in range(horizon):
-            if world_model.model == "Transformer":
+            if world_model.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                 temporal_mask = get_subsequent_mask_with_batch_length(
                     prefix_latent.shape[1], prefix_latent.device
@@ -161,7 +161,7 @@ def _validation_metrics(
         else:
             obs_hat = decoder_out
             reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
-        if world_model.model == "Transformer":
+        if world_model.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
             temporal_mask = get_subsequent_mask_with_batch_length(
                 batch_length, flattened_sample.device

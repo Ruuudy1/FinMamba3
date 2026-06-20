@@ -108,7 +108,7 @@ Models:
       LayerNum: 1
     Transformer:
       FinalFeatureWidth: 4
-      NumLayers: 3
+      NumLayers: 2
       NumHeads: 8
     Mamba:
       n_layer: 2

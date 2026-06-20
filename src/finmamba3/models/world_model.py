@@ -625,7 +625,7 @@ class WorldModel(nn.Module):
         return imagined_out, self.action_buffer, old_logits_tensor, context_out, self.reward_hat_buffer, self.termination_hat_buffer
     def imagine_data(self, agent: ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
-        if self.model != 'Transformer':
+        if self.model not in ('Transformer', 'TransformerModern'):
             return self._imagine_data_full_prefix(
                 agent, sample_obs, sample_action,
                 imagine_batch_size, imagine_batch_length, log_video, logger, global_step

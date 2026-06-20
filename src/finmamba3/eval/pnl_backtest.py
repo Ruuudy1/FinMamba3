@@ -454,7 +454,7 @@ def world_model_yes_prob_series(wm, seq, device: torch.device, window_len: int =
             post_logits = wm.dist_head.forward_post(embedding)
             sample = wm.straight_through_gradient(post_logits, sample_mode=sample_mode)
             flattened_sample = wm.flatten_sample(sample)
-            if wm.model == "Transformer":
+            if wm.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                 mask = get_subsequent_mask_with_batch_length(window_len, flattened_sample.device)
                 dist_feat = wm.sequence_model(flattened_sample, action, mask)
@@ -493,7 +493,7 @@ def world_model_edge_ev_series(wm, seq, device: torch.device, window_len: int = 
             post_logits = wm.dist_head.forward_post(embedding)
             sample = wm.straight_through_gradient(post_logits, sample_mode=sample_mode)
             flattened_sample = wm.flatten_sample(sample)
-            if wm.model == "Transformer":
+            if wm.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                 mask_t = get_subsequent_mask_with_batch_length(window_len, flattened_sample.device)
                 dist_feat = wm.sequence_model(flattened_sample, action, mask_t)
