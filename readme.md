@@ -3,14 +3,32 @@
 [![All Contributors](https://img.shields.io/badge/all_contributors-3-orange.svg?style=flat-square)](#the-team)
 <!-- ALL-CONTRIBUTORS-BADGE:END -->
 
-This repository contains the research and code behind FinMamba3, our team's
-investigation into whether Mamba-3 MIMO state-space models can learn
-limit-order-book (LOB) dynamics offline and warm-start a reinforcement-learning
-agent for Polymarket binary-outcome markets. It began as a fork of the Drama
-world-model framework (Wang et al., ICLR 2025) but has since diverged
-completely: the Atari and MemoryMaze paths are gone, the sequence backbone is
-Mamba-3 MIMO (Lahoti et al., ICLR 2026), and the data, features, rewards, and
-evaluation are all rebuilt for financial microstructure.
+This repository contains the research and code behind FinMamba3, a Mamba-3
+world model for limit-order-book (LOB) microstructure. We built it to ask
+whether conditioning a structured state-space backbone on an *inferred* market
+regime improves behaviour under distribution shift. The campaign produced three
+outcomes (full write-up in `finmamba3-paper.tex` and `RESULTS.md`):
+
+1. **Regime conditioning is a decisive null.** Our central mechanism,
+   RegimeFiLM, collapses to identity under joint training across every objective
+   we test — on FI-2010, Polymarket, and the Kaggle crypto spot book — and we
+   explain it mechanistically: an input-side affine is a *gauge* direction that
+   folds losslessly into the block's own projections, so the optimizer returns
+   it to identity.
+2. **A spot-conditioned pipeline plus a selective-participation strategy is a
+   genuine, survivable economic edge** on held-out Polymarket BTC — but it is
+   *architecture-independent*: a logistic regression on the same features
+   reproduces and exceeds it, so the pipeline and framing, not the sequence
+   model, carry the result.
+3. **A book-relative EV head** removes a latent low-predictability failure of
+   the settlement head, lifting held-out PnL +41% and collapsing the high-vs-low
+   regime spread 12x.
+
+It began as a fork of the Drama world-model framework (Wang et al., ICLR 2025)
+but has since diverged completely: the Atari and MemoryMaze paths are gone, the
+sequence backbone is a Mamba-3 stack (Lahoti et al., ICLR 2026) with matched
+Mamba-1/2 and pre-norm Transformer baselines, and the data, features, rewards,
+and evaluation are all rebuilt for financial microstructure.
 
 ## The Team
 
@@ -62,10 +80,14 @@ pretraining:
    shipped with a loader, config, and HuggingFace mirror so the model can be
    benchmarked on a public LOB dataset whenever Polymarket data runs short.
 
-The key novelty axis vs. the upstream Drama paper is the Mamba-3 MIMO sequence
-backbone applied to LOB tick streams, plus a microstructure-aware feature
-encoder, an episodic-memory ablation switch with optional learned write policy,
-and Lopez de Prado financial data structures for tick-stream denoising.
+The system adapts Drama to LOB microstructure with a microstructure-aware
+feature encoder, an episodic-memory ablation switch with optional learned write
+policy, and Lopez de Prado financial data structures for tick-stream denoising.
+Under matched parameters no backbone (Mamba-1/2, Mamba-3 SISO, or a pre-norm
+Transformer) dominates across datasets, and the Mamba-3 MIMO configuration is
+structurally infeasible on the RTX 4080 (it exceeds the shared-memory cap) — so
+the backbone is reported as a substrate, not a claimed advantage, with the
+matched-budget MIMO run the one outstanding A100-class experiment.
 
 ## Run On Colab
 

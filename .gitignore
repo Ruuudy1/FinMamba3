@@ -20,3 +20,19 @@ data/
 *.tar
 *.tar.zip
 handoff.md
+
+# Local experiment logs and scratch (not part of the shipped repo).
+reports/
+tmp-markdown/
+tmpfindrama_*/
+
+# LaTeX build artifacts.
+*.aux
+*.log
+*.out
+*.bbl
+*.blg
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz

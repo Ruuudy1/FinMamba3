@@ -115,15 +115,9 @@ def load_orderbooks(books_dir: Path) -> pd.DataFrame:
     # (timestamp_us, market_slug, interval, the *_json ladders, and the derived
     # best-bid/ask, count, and total-size columns), so no remapping is needed.
     for path in sorted(books_dir.glob("*.parquet")):
-        try:
-            frames.append(pd.read_parquet(path))
-        except Exception:
-            pass
+        frames.append(pd.read_parquet(path))
     for path in sorted(books_dir.glob("*.csv")):
-        try:
-            frames.append(pd.read_csv(path))
-        except Exception:
-            pass
+        frames.append(pd.read_csv(path))
     # Legacy JSONL format.
     for path in sorted(books_dir.glob("*.jsonl")):
         jsonl_rows = []
@@ -192,10 +186,7 @@ def load_binance_lob(binance_dir: Path) -> pd.DataFrame:
         return pd.DataFrame()
     tables = []
     for f in parquet_files:
-        try:
-            tables.append(pq.read_table(f))
-        except Exception:
-            pass
+        tables.append(pq.read_table(f))
     if not tables:
         return pd.DataFrame()
     combined = pa.concat_tables(tables)
@@ -293,12 +284,11 @@ def parse_slug_lifecycle(slug: str) -> MarketLifecycle | None:
             hour_24 += 12
         elif ampm == "am" and hour_24 == 12:
             hour_24 = 0
-        from datetime import datetime, timezone as tz
+        from datetime import datetime
         import zoneinfo
-        try:
-            et = zoneinfo.ZoneInfo("America/New_York")
-        except Exception:
-            et = tz.utc
+        # Fail loud rather than silently falling back to UTC: an ET->UTC shift would
+        # misalign every hourly market's settlement clock by several hours.
+        et = zoneinfo.ZoneInfo("America/New_York")
         try:
             dt_et = datetime(int(year), month, int(day), hour_24, 0, 0, tzinfo=et)
         except (ValueError, OverflowError):

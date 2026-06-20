@@ -60,51 +60,37 @@
 Financial markets are non-stationary, partially observable environments
 whose latent dynamics shift across regimes.  We present
 \textbf{FinMamba3}, a Mamba-3 world model for limit order book (LOB)
-microstructure that adapts the Drama agent~\citep{wang2024drama}, and
-use it to ask whether conditioning a structured state-space backbone on
-an \emph{inferred} market regime improves behaviour under distribution
-shift.  Our central mechanism, \emph{RegimeFiLM}, applies per-block,
-channel-wise affine transforms to the Mamba input; because the
-selective-scan parameters $\Delta$,~$\mathbf{B}$, and~$\mathbf{C}$ are
-input-dependent, this propagates an inferred regime into the
-state-space dynamics through the selection mechanism itself, without
-modifying the CUDA kernel, and is zero-initialized so the modulated
-model is \emph{exactly} the unmodulated baseline at initialization.
-Across four regime-dependent forecasting objectives (volatility-scale,
-order-flow volume, direction macro-F1, binary settlement) on FI-2010 and
-Polymarket, and a simulated-trading (PnL) objective, RegimeFiLM is a
-\textbf{decisive null}: it collapses to identity under joint
-training---the $\gamma$ deviation decays toward zero and the router
-entropy sits at its uniform maximum---and cannot be forced active even
-by direct predictability supervision.  The null is dataset-, asset-, and
-resolution-independent---it replicates on the Kaggle high-frequency crypto
-spot book (BTC, ETH, ADA; 1\,s/1\,min/5\,min) under a predictability regime
-axis, where even a forced-active, directly-supervised modulation provably
-decays to identity.  The same effort yields a positive
-economic result the architecture did not.  Once the model is given the
-underlying spot path that \emph{defines} settlement, a time-to-expiry
-clock, and an honest per-tick target, its over-confident-but-directional
-settlement probability---traded by a selective-participation strategy
-that bets only in forecastable regimes---earns \textbf{+\$4{,}729} on 408
-held-out Polymarket BTC markets (deterministic), earning \textbf{6--9$\times$}
-the PnL of a fair trend-following baseline across two model seeds, and is
-survivable under a fat-tailed bootstrap (per-trade P(profit)$=1.0$,
-worst-5\% drawdown $4.5\%$; the market-block bootstrap that respects
-intra-market dependence is reported in Section~\ref{sec:results_edge}).
+microstructure adapting the Drama agent~\citep{wang2024drama}, and use it
+to ask whether conditioning a structured state-space backbone on an
+\emph{inferred} market regime improves behaviour under distribution
+shift.  Our mechanism, \emph{RegimeFiLM}, applies a zero-initialized,
+per-block channel-wise affine transform to the Mamba input, propagating
+an inferred regime into the input-dependent selective-scan parameters
+$\Delta,\mathbf{B},\mathbf{C}$ without modifying the CUDA kernel.  Across
+four regime-dependent forecasting objectives on FI-2010 and Polymarket
+and a simulated-trading (PnL) objective, RegimeFiLM is a \textbf{decisive
+null}: it collapses to identity under joint training and cannot be forced
+active even by direct supervision.  The null is dataset-, asset-, and
+resolution-independent---replicating on the Kaggle crypto spot book (BTC,
+ETH, ADA; 1\,s/1\,min/5\,min)---and we explain it mechanistically: an
+input-side affine is a \emph{gauge} direction that folds losslessly into
+the block's own projections, so joint training returns it to identity.
+The same effort yields a positive economic result the architecture did
+not.  Given the underlying spot path that \emph{defines} settlement, the
+model's over-confident-but-directional settlement probability---traded by
+a selective-participation strategy that bets only in forecastable
+regimes---earns \textbf{+\$4{,}729} on 408 held-out Polymarket BTC markets
+(a byte-reproducible deterministic-latent anchor) and beats a fair
+trend-following baseline by \textbf{6--9$\times$} across two
+stochastic-latent seeds, survivable under a fat-tailed bootstrap.
 Crucially, this edge is \emph{architecture-independent}: a logistic
-regression on the same spot-conditioned features reproduces it
-($+\$7{,}016$, exceeding the world model's own settlement head), so the
-pipeline and selective-participation framing---not the sequence model---carry
-the economic result.  We characterize
-the edge as a three-way microstructure conjunction---predictable,
-liquid-but-not-efficient, and early-in-lifecycle---and trace it to an
-over-confident-but-directional settlement head exploiting the
-oracle-repricing lag.  Broader validation (645 markets) then exposes a
-latent regime failure in the settlement head (P(profit)$=0.276$ on
-low-predictability markets); supervising the \emph{per-tick expected
-value} directly---our \textbf{BookRelativeEdgeHead}---converts the
-$-\$826$ low-predictability loss into $+\$2{,}548$, lifts total PnL to
-$+\$5{,}565$ ($+41\%$), and collapses the high-vs-low PnL spread
+regression on the same features reproduces and exceeds it ($+\$7{,}016$),
+so the spot-conditioned pipeline and selective-participation
+framing---not the sequence model---carry the economic result.  Broader
+validation (645 markets) exposes a latent low-predictability failure in
+the settlement head (P(profit)$=0.276$); supervising the \emph{per-tick
+expected value} directly---our \textbf{BookRelativeEdgeHead}---lifts total
+held-out PnL $+41\%$ and collapses the high-vs-low regime spread
 $12{\times}$.  The regime axis a FiLM router will not encode is exactly
 the one a strategy gate and a direct-EV head, together, harvest
 profitably.
@@ -1873,10 +1859,9 @@ W.~Wang et~al.
 \newblock Drama: Mamba-enabled model-based reinforcement learning is sample and parameter efficient.
 \newblock In \emph{Proc.\ ICLR}, 2025 (arXiv:2410.08893, 2024).
 
-% Draft entry added for the cross-dataset results; verify exact title/author list against arXiv:2308.01915.
 \bibitem[Prata et~al.(2023)]{prata2023lobcast}
-M.~Prata et~al.
-\newblock {LOBCAST}: A benchmark study of deep-learning models for stock price trend prediction from limit-order books.
+M.~Prata, G.~Masi, L.~Berti, V.~Arrigoni, A.~Coletta, I.~Cannistraci, S.~Vyetrenko, P.~Velardi, and N.~Bartolini.
+\newblock {LOB}-based deep learning models for stock price trend prediction: A benchmark study.
 \newblock \emph{arXiv preprint arXiv:2308.01915}, 2023.
 
 \bibitem[Zhang et~al.(2019)]{zhang2019deeplob}
