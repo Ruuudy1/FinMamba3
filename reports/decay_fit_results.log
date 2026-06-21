@@ -1,0 +1,26 @@
+=== Kaggle BTC escalation (input-side) (60 pts, 0->2950) ===
+  endpoints: 0.2500 -> 0.1436   linear slope = -3.61e-05/step
+  c-floor=-0.05 : a=0.2995 tau=6685 c=-0.0493 R2=0.9999 pinned=True
+  c-relaxed     : a=0.2995 tau=6685 c=-0.0493 R2=0.9999 pinned=False
+=== FI-2010 escalation (input-side) (60 pts, 0->2950) ===
+  endpoints: 0.2500 -> 0.1475   linear slope = -3.41e-05/step
+  c-floor=-0.05 : a=0.2992 tau=7192 c=-0.0500 R2=0.9994 pinned=True
+  c-relaxed     : a=0.3249 tau=7951 c=-0.0759 R2=0.9994 pinned=False
+=== FI-2010 post-scan escalation film_g (60 pts, 0->2950) ===
+  endpoints: 0.2500 -> 0.1465   linear slope = -3.46e-05/step
+  c-floor=-0.05 : a=0.2997 tau=7065 c=-0.0500 R2=0.9993 pinned=True
+  c-relaxed     : a=0.3698 tau=9107 c=-0.1209 R2=0.9995 pinned=False
+=== Kaggle BTC post-scan escalation film_g (60 pts, 0->2950) ===
+  endpoints: 0.2500 -> 0.1426   linear slope = -3.67e-05/step
+  c-floor=-0.05 : a=0.3007 tau=6598 c=-0.0500 R2=0.9998 pinned=True
+  c-relaxed     : a=0.3238 tau=7236 c=-0.0735 R2=0.9999 pinned=False
+=== FI-2010 post-scan escalation film_b (60 pts, 0->2950) ===
+  endpoints: 0.2559 -> 0.1504   linear slope = -3.51e-05/step
+  c-floor=-0.05 : a=0.3051 tau=7099 c=-0.0500 R2=0.9994 pinned=True
+  c-relaxed     : a=0.3173 tau=7452 c=-0.0624 R2=0.9994 pinned=False
+=== Kaggle BTC post-scan escalation film_b (60 pts, 0->2950) ===
+  endpoints: 0.2559 -> 0.1475   linear slope = -3.69e-05/step
+  c-floor=-0.05 : a=0.2995 tau=6500 c=-0.0434 R2=0.9999 pinned=False
+  c-relaxed     : a=0.2995 tau=6500 c=-0.0434 R2=0.9999 pinned=False
+
+wrote reports/decay_fit_results.json

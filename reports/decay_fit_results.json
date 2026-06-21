@@ -1,0 +1,152 @@
+[
+  {
+    "name": "Kaggle BTC escalation (input-side)",
+    "log": "reports/kaggle_escalation_s0.log",
+    "metric": "film_g",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.25,
+    "value_last": 0.1436,
+    "linear_slope_per_step": -3.6115198666296104e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.29954268827760416,
+      "tau": 6685.4386843333805,
+      "c": -0.049296025870340016,
+      "r2": 0.9998976441752694,
+      "c_pinned_at_bound": true
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.2995426480271155,
+      "tau": 6685.437557213049,
+      "c": -0.04929598499431126,
+      "r2": 0.9998976441752687,
+      "c_pinned_at_bound": false
+    }
+  },
+  {
+    "name": "FI-2010 escalation (input-side)",
+    "log": "reports/fi2010_escalation_s0.log",
+    "metric": "film_g",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.25,
+    "value_last": 0.1475,
+    "linear_slope_per_step": -3.4061461517088046e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.29924731202538873,
+      "tau": 7191.648257514499,
+      "c": -0.04999999999987672,
+      "r2": 0.9994121068273593,
+      "c_pinned_at_bound": true
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.3248557656086743,
+      "tau": 7950.8799854381205,
+      "c": -0.07592675236863396,
+      "r2": 0.9994377800273644,
+      "c_pinned_at_bound": false
+    }
+  },
+  {
+    "name": "FI-2010 post-scan escalation film_g",
+    "log": "reports/fi2010_postscan_escalation_s0.log",
+    "metric": "film_g",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.25,
+    "value_last": 0.1465,
+    "linear_slope_per_step": -3.4628118921922705e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.29970149650187006,
+      "tau": 7065.323460218008,
+      "c": -0.049999999999999996,
+      "r2": 0.9993318090397207,
+      "c_pinned_at_bound": true
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.36981043953349757,
+      "tau": 9107.478523228858,
+      "c": -0.12087804252382327,
+      "r2": 0.9994792601716304,
+      "c_pinned_at_bound": false
+    }
+  },
+  {
+    "name": "Kaggle BTC post-scan escalation film_g",
+    "log": "reports/kaggle_postscan_escalation_s0.log",
+    "metric": "film_g",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.25,
+    "value_last": 0.1426,
+    "linear_slope_per_step": -3.665234787440951e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.3006679889405841,
+      "tau": 6597.6937554150945,
+      "c": -0.04999999999999998,
+      "r2": 0.9998444100915906,
+      "c_pinned_at_bound": true
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.3237916345058268,
+      "tau": 7235.905401646151,
+      "c": -0.07346753994567584,
+      "r2": 0.9998713050087251,
+      "c_pinned_at_bound": false
+    }
+  },
+  {
+    "name": "FI-2010 post-scan escalation film_b",
+    "log": "reports/fi2010_postscan_escalation_s0.log",
+    "metric": "film_b",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.2559,
+    "value_last": 0.1504,
+    "linear_slope_per_step": -3.50794665184773e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.30507100065908166,
+      "tau": 7098.706398192992,
+      "c": -0.04999999996787189,
+      "r2": 0.9994140663505787,
+      "c_pinned_at_bound": true
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.31732644113281266,
+      "tau": 7451.798804443136,
+      "c": -0.06242052159416675,
+      "r2": 0.9994205431097067,
+      "c_pinned_at_bound": false
+    }
+  },
+  {
+    "name": "Kaggle BTC post-scan escalation film_b",
+    "log": "reports/kaggle_postscan_escalation_s0.log",
+    "metric": "film_b",
+    "n_points": 60,
+    "step_first": 0,
+    "step_last": 2950,
+    "value_first": 0.2559,
+    "value_last": 0.1475,
+    "linear_slope_per_step": -3.6923367602111645e-05,
+    "fit_c_floor_neg005": {
+      "a": 0.2995370688705032,
+      "tau": 6499.794338609287,
+      "c": -0.043354672436990725,
+      "r2": 0.9999059518006852,
+      "c_pinned_at_bound": false
+    },
+    "fit_c_relaxed_neg1": {
+      "a": 0.29953708489778336,
+      "tau": 6499.794780950159,
+      "c": -0.043354688754624185,
+      "r2": 0.9999059518006851,
+      "c_pinned_at_bound": false
+    }
+  }
+]
