@@ -321,6 +321,7 @@ src/finmamba3/
   envs/
     lob_features.py             94-dim microstructure-aware feature engineering
     fi2010_loader.py            FI-2010 NoAuction DecPre/ZScore CF reader (46-dim)
+    kaggle_lob_loader.py        Kaggle high-frequency crypto spot LOB loader (Binance-style books)
     bar_aggregation.py          Time/volume/dollar/tick-imbalance/CUSUM bars
     lob_labels.py               Triple-barrier and multi-threshold direction targets
     lob_env.py                  Gymnasium trading environment with reward variants
@@ -347,27 +348,61 @@ src/finmamba3/
   backtester/
     data_loader.py              SQLite/CSV/Parquet loader -> timeline + settlements
     strategy.py                 BaseStrategy ABC + market dataclasses
+    engine/                     Vendored DATAHACKS2026 order-matching engine (the parity oracle)
+      engine.py                 Main tick-loop orchestrator
+      execution.py              Order matching against recorded order books
+      market_manager.py         Active markets, lifecycle state, and settlements
+      portfolio.py              Cash, positions, and P&L tracking
+    engine_cpp/                 Opt-in native C++ accelerator, parity-checked against the Python engine
+      _engine.cpp               pybind11 marshal-once / run-many native source
+      build.py                  Standalone in-place build for the native engine
   eval/
-    backtest.py                 PnL/Sharpe/MaxDD harness for a frozen world model
-    run_backtest_cli.py         CLI wrapper around backtest
-    compare_direction.py        World-model vs LinearAR vs DeepLOB direction benchmark
+    pnl_backtest.py             Settlement-accurate order-matching PnL adapter (produces the paper economic tables)
+    backtest.py                 Gym-env PnL/Sharpe/MaxDD harness for a frozen world model
+    run_backtest_cli.py         CLI wrapper around the gym-env backtest
+    predictability.py           Efficiency-ratio predictability regime axis used by the PnL gate
+    simple_baseline.py          Logistic + GBT baselines on the spot features (architecture-independence control)
     competition_strategy.py     DATAHACKS BaseStrategy adapter
+    regime_split.py             Time and volatility splits for non-stationarity tests
+    compare_direction.py        World-model vs LinearAR vs DeepLOB direction benchmark
+    benchmark_fi2010.py         FI-2010 macro-F1 benchmark against the LOBCAST paper (Prata et al. 2023)
+    eval_backbone_metrics.py    Held-out recon NLL + direction macro-F1 (backbone ablation)
+    eval_regime_generalization.py         Cross-regime generalization-gap evaluator (Polymarket)
+    eval_regime_generalization_fi2010.py  FI-2010 cross-regime generalization-gap evaluator
+    make_paper_figures.py       Generate the model-free paper figures from persisted artifacts
+    diag_dirhead.py             Direction-head diagnostics
+    diag_regime_labels.py       Regime-label distribution diagnostics
+    diag_router.py              Regime-FiLM router-discrimination diagnostic
     diagnose_collapse.py        Temporal-prior collapse diagnostics
     imagination_smoke.py        Phase-B imagination smoke test
-    regime_split.py             Time and volatility splits for non-stationarity tests
 tests/
-  test_fi2010_pipeline.py       Full FI-2010 path end-to-end
-  test_lob_features.py
-  test_lob_aggregation.py
-  test_lob_labels.py
-  test_baselines.py
-  test_polymarket_lob_env.py
-  test_world_model_mamba_backbones.py
-  test_train_integration.py
-  test_compare_direction.py
-  test_competition_strategy.py
-  test_regime_modulation.py
-  test_run_backtest_cli.py
+  test_fi2010_pipeline.py             Full FI-2010 path end-to-end
+  test_lob_features.py                Feature engineering
+  test_lob_aggregation.py             Bar aggregation
+  test_lob_labels.py                  Direction / triple-barrier labels
+  test_kaggle_lob_loader.py           Kaggle crypto LOB loader
+  test_baselines.py                   DeepLOB + LinearAR baselines
+  test_polymarket_lob_env.py          Gymnasium trading environment
+  test_replay_buffer.py               Replay buffer
+  test_world_model.py                 World-model heads + update step
+  test_world_model_mamba_backbones.py Mamba-1/2/3 backbone wiring
+  test_transformer_modern.py          Pre-norm Transformer backbone
+  test_regime_modulation.py           Regime FiLM modulator
+  test_lob_heads.py                   Direction / settlement / edge heads
+  test_train_integration.py           Training loop integration
+  test_cross_interval_context.py      Cross-interval sequence context
+  test_window_volatility_split.py     Volatility-window split
+  test_predictability.py              Predictability regime axis
+  test_regime_split.py                Time / volatility non-stationarity splits
+  test_compare_direction.py           Direction benchmark
+  test_benchmark_fi2010.py            FI-2010 macro-F1 benchmark
+  test_eval_backbone_metrics.py       Backbone-ablation metrics
+  test_eval_regime_generalization.py  Cross-regime generalization (Polymarket)
+  test_eval_regime_generalization_fi2010.py  Cross-regime generalization (FI-2010)
+  test_competition_strategy.py        DATAHACKS strategy adapter
+  test_run_backtest_cli.py            Gym-env backtest CLI
+  test_pnl_backtest.py                Order-matching PnL adapter + survivability
+  test_engine_cpp_parity.py           C++/Python engine parity oracle
 ```
 
 ## Literature Alignment
