@@ -23,8 +23,8 @@ jobs:
       - name: Install CPU PyTorch
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Editable install (+ pybind11 for the native engine)
-        run: pip install -e . pybind11
+      - name: Editable install (+ pybind11 for the native engine, + pytest)
+        run: pip install -e .[cpp,test]
 
       # The native backtester is opt-in and deliberately excluded from pip install
       # (build.py:1-9). Build it here so the parity test exercises the C++ path

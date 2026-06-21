@@ -1,3 +1,7 @@
+# Non-CUDA dependency list for the Docker / Colab flows. It mirrors [project.dependencies] in
+# pyproject.toml, which is the single source of truth for the installed package; keep the two in
+# sync. The CUDA-built packages (torch, mamba_ssm, causal_conv1d) are installed separately in the
+# Dockerfile / Colab, not listed here.
 setuptools==69.5.1
 packaging>=24.0
 ninja>=1.11

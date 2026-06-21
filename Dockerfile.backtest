@@ -1,0 +1,34 @@
+# docker build -f Dockerfile.backtest -t finmamba3-backtest .
+#
+# Minimal CPU-only image to reproduce the economic results. It builds the opt-in native C++
+# backtester, proves it matches the Python oracle at build time, and runs the order-matching PnL
+# adapter as its entrypoint. This is separate from the heavyweight CUDA training image (Dockerfile)
+# on purpose: a reviewer re-running the PnL tables needs neither a GPU nor mamba_ssm.
+#
+# The Polymarket data is NOT baked in (.dockerignore excludes data/); mount or download it at
+# runtime, for example:
+#   docker run --rm -v "$PWD/data:/app/data" -v "$PWD/saved_models:/app/saved_models" \
+#     finmamba3-backtest --config configs/lob_spot.yaml --checkpoint ... --data-val data/validation ...
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# CPU PyTorch first so the editable install does not pull a CUDA wheel. torch is needed because the
+# PnL adapter (and the parity test that imports it) load the world model for signal inference.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+COPY pyproject.toml ./
+COPY src ./src
+COPY tests ./tests
+# [cpp] pulls pybind11 for the native build; [test] pulls pytest for the build-time parity proof.
+RUN pip install --no-cache-dir -e .[cpp,test]
+
+# Build the opt-in native engine and prove it reproduces the Python oracle before the image ships.
+RUN python -m finmamba3.backtester.engine_cpp.build
+RUN python -m pytest tests/test_engine_cpp_parity.py -q
+
+ENTRYPOINT ["python", "-m", "finmamba3.eval.pnl_backtest"]

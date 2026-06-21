@@ -35,6 +35,7 @@ finmamba3-backtest = "finmamba3.eval.pnl_backtest:main"
 # with no compiler (see backtester/engine_cpp/build.py).
 [project.optional-dependencies]
 cpp = ["pybind11>=2.12"]
+test = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
