@@ -30,3 +30,8 @@ finmamba3-train = "finmamba3.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Collect only the test suite; without this, pytest recurses into runs/ and
+# saved_models/ and chokes on wandb symlink directories left by training runs.
+testpaths = ["tests"]
