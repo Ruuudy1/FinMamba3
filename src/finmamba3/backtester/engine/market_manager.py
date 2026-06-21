@@ -2,6 +2,9 @@
 Market Manager — Tracks active markets, lifecycle state, and settlements.
 
 State machine per market: UPCOMING -> ACTIVE -> SETTLED
+
+Vendored from DATAHACKS2026; the house code style is not applied here, to keep a
+clean upstream diff and protect the parity oracle.
 """
 
 # region imports

@@ -2,6 +2,9 @@
 Portfolio — Cash, positions, P&L tracking.
 
 Tracks cash balance, token positions per market, and handles settlement payouts.
+
+Vendored from DATAHACKS2026; the house code style is not applied here, to keep a
+clean upstream diff and protect the parity oracle.
 """
 
 # region imports

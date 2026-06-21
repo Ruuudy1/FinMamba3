@@ -3,6 +3,9 @@ Backtest Engine — Main tick loop orchestrator.
 
 Coordinates data loading, market management, execution, and portfolio tracking
 to run a strategy over historical data.
+
+Vendored from DATAHACKS2026; the house code style is not applied here, to keep a
+clean upstream diff and protect the parity oracle.
 """
 
 # region imports

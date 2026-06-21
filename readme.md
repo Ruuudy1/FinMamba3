@@ -654,7 +654,9 @@ configs remain backward compatible.
 
 ## Project Conventions
 
-Style rules enforced across `src/` and `tests/`:
+Style rules enforced across first-party `src/` and `tests/` (the vendored
+`backtester/engine/` subpackage is exempt: it keeps the upstream DATAHACKS2026
+style to preserve a clean diff and protect the parity oracle):
 
 - Comments are full sentences, capitalized, ending with a period. No em
   dashes, no emojis.

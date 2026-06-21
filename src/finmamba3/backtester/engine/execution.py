@@ -3,6 +3,9 @@ Execution Engine — Order matching against recorded order books.
 
 Handles validation, latency simulation, staleness checks, and walk-the-book
 fill logic for realistic backtesting.
+
+Vendored from DATAHACKS2026; the house code style is not applied here, to keep a
+clean upstream diff and protect the parity oracle.
 """
 
 # region imports
