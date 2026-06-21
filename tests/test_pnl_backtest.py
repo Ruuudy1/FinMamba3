@@ -9,18 +9,18 @@ from finmamba3.backtester import BacktestData, OrderBookLevel as RepoLevel, Orde
 from finmamba3.backtester.strategy import MarketLifecycle, Settlement
 from finmamba3.backtester.strategy import Token as RepoToken
 from finmamba3.eval.pnl_backtest import (
-    CusumGate,
     NaiveLagStrategy,
     WorldModelStrategy,
     _data_for_slugs,
     bootstrap_survivability,
     bootstrap_survivability_by_market,
     delay_prob_series,
-    kelly_shares,
     per_trade_pnls,
     per_trade_pnls_by_market,
     settlement_calibration,
 )
+from finmamba3.eval.strategies import CusumGate
+from finmamba3.eval.survivability import kelly_shares
 # endregion
 _SLUG = "btc-updown-5m-0"
 
