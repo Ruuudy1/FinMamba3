@@ -358,6 +358,9 @@ src/finmamba3/
       build.py                  Standalone in-place build for the native engine
   eval/
     pnl_backtest.py             Settlement-accurate order-matching PnL adapter (produces the paper economic tables)
+    survivability.py            Kelly sizing + fat-tail bootstrap statistics (pure NumPy)
+    signals.py                  World-model probability / EV inference + causal gate series
+    strategies.py               CusumGate, WorldModelStrategy, NaiveLagStrategy
     backtest.py                 Gym-env PnL/Sharpe/MaxDD harness for a frozen world model
     run_backtest_cli.py         CLI wrapper around the gym-env backtest
     predictability.py           Efficiency-ratio predictability regime axis used by the PnL gate
