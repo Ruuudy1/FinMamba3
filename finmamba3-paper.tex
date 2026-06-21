@@ -262,7 +262,7 @@ for latent-space planning or imagination-based RL.
 
 \paragraph{Generative models of LOB dynamics.}
 A parallel line of work models LOB microstructure generatively.
-\citet{nagy2025lobs5} propose LOBS5, an autoregressive token-level
+\citet{nagy2023lobs5} propose LOBS5, an autoregressive token-level
 generative model of Level-3 message flow built on a deep state-space
 network, evaluated under the LOB-Bench
 framework~\citep{nagy2025lobbench}.
@@ -287,6 +287,26 @@ conditioning~\citep{perez2018film} has been applied in vision and
 multi-task settings to inject context into learned representations, but
 we are not aware of prior work applying FiLM to modulate state-space
 dynamics in a financial world model.
+
+\paragraph{Scale redundancy and scale-invariance.}
+That a channel-wise affine placed before a linear map is redundant with that
+map is a known theme in the normalization literature.
+\citet{vanlaarhoven2017l2} shows that weights feeding a normalization layer are
+scale-invariant, so $L_2$ regularization acts on their \emph{scale}---and thus
+the effective learning rate---rather than as a capacity control;
+\citet{hoffer2018norm} and \citet{li2020exp} build on the same scale-invariance
+to re-derive weight decay as an effective-learning-rate schedule.  Our null is
+an instance of this redundancy, but in a setting it has not been analyzed: the
+absorbed affine is not a static normalization gain but a per-regime,
+\emph{input-dependent} FiLM, and it folds into the selective scan's own
+$W_\Delta/W_B/W_C$ projections.  What is new here is therefore (i) the
+input-dependent selective-scan instantiation; (ii) the dataset- and
+architecture-invariant decay signature ($\tau\approx7000$, $R^2>0.999$) that
+attributes the collapse to the optimizer; (iii) the output-side placement
+showing the null is \emph{overdetermined} (gauge absorption plus reconstruction
+dominance); and (iv) the practical consequence that the only kernel-friendly,
+drop-in form of regime conditioning is exactly the absorbable one---so the
+redundancy is the default a practitioner reaches for, not a corner case.
 
 \paragraph{Prediction-market microstructure.}
 Polymarket is a decentralized prediction market in which binary-outcome
@@ -929,7 +949,7 @@ Mamba-3 SISO, and a Transformer backbone under matched
 parameter budgets.  For LOB direction prediction we compare against
 DeepLOB~\citep{zhang2019deeplob} and a linear autoregressive baseline,
 following the LOBFrame protocol~\citep{lobframe2024}.  The generative
-LOB models LOBS5~\citep{nagy2025lobs5} and the diffusion approach
+LOB models LOBS5~\citep{nagy2023lobs5} and the diffusion approach
 of~\citet{backhouse2025painting} target message-level simulation fidelity
 rather than a control-oriented latent, and are discussed as related
 context rather than used as direct baselines.
@@ -997,9 +1017,9 @@ The evaluation produced \textbf{three outcomes}: the regime-conditioning
 architecture is a decisive negative; the spot-conditioned pipeline plus a
 selective-participation strategy---built to test it---is a genuine,
 survivable economic positive; and direct EV supervision via the
-BookRelativeEdgeHead eliminates the settlement head's latent low-predictability
-failure, lifting total PnL $+41\%$ and collapsing regime sensitivity
-$12{\times}$.
+BookRelativeEdgeHead makes the settlement head's marginal low-predictability
+regime robust (P(profit) $0.63\!\to\!0.99$) at comparable total PnL, collapsing
+regime sensitivity $6.2{\times}$.
 
 % --------------------------------------------------------------------------
 \subsection{Regime-FiLM is a decisive null}\label{sec:results_null}
@@ -1021,17 +1041,20 @@ why the activation diagnostics are load-bearing.
 \small
 \begin{tabular}{lllrrl}
 \toprule
-Family & Objective & Dataset & Gap (sign) & $\mathrm{film}_g$ & Verdict \\
+Family & Objective & Dataset & Gap (sign, unit) & $\mathrm{film}_g$ & Verdict \\
 \midrule
-Volatility/scale & StudentT NLL    & FI-2010    & $\approx 0$ & $\approx$ ident.\ & \textsc{null} \\
-Order-flow volume & Volume NLL     & FI-2010    & $\approx 0$ & $\approx$ ident.\ & \textsc{null} \\
-Direction        & macro-F1        & FI-2010    & $+0.008$\,\dag & $0.018$ & \textsc{null} \\
-Settlement       & BCE log-loss    & Polymarket & $+0.18$\,\dag  & $0.008$ & \textsc{null} \\
-\textbf{PnL}     & simulated trade & Polymarket & $-627$\,\dag   & $0.010$ & \textsc{null} \\
+Volatility/scale & StudentT NLL    & FI-2010    & $\approx 0$ nats & $\approx$ ident.\ & \textsc{null} \\
+Order-flow volume & Volume NLL     & FI-2010    & $\approx 0$ nats & $\approx$ ident.\ & \textsc{null} \\
+Direction        & macro-F1        & FI-2010    & $+0.008$\,\dag\ F1 & $0.018$ & \textsc{null} \\
+Settlement       & BCE log-loss    & Polymarket & $+0.18$\,\dag\ nats  & $0.008$ & \textsc{null} \\
+\textbf{PnL}     & simulated trade & Polymarket & $-\$627$\,\dag   & $0.010$ & \textsc{null} \\
 \bottomrule
 \end{tabular}
 \caption{RegimeFiLM is inert across every objective.  $\mathrm{reg}_H$
-equals its uniform maximum ($\log R$) in all rows.  \dag~a non-zero gap
+equals its uniform maximum ($\log R$) in all rows.  The ``Gap'' column is in
+each objective's \emph{own} units (reconstruction NLL nats, macro-F1 points,
+BCE log-loss nats, and dollars), so its magnitude is not comparable across
+rows; only its sign and the inert $\mathrm{film}_g$ are.  \dag~a non-zero gap
 whose sign is a distributional artifact, not a FiLM effect (FiLM is
 inert, and the treatment is absolutely worse).}
 \label{tab:film_null}
@@ -1048,7 +1071,9 @@ volatility) still decays the modulation monotonically toward identity
 frozen router probes to $0.92$ agreement with the regime bucket, so the
 capacity exists; joint training will not use it.  This is the strongest
 form of the null: the optimizer drives the modulation to identity
-regardless of objective, regime axis, or forced supervision.
+regardless of objective or forced supervision, for the weakly-decodable
+predictability and volatility regimes we study---a boundary we map with a
+language-model control below.
 
 % --- Cross-dataset confirmation (alternative-data campaign) -----------------
 \paragraph{Cross-dataset confirmation (FI-2010 and Kaggle spot LOBs).}
@@ -1143,7 +1168,10 @@ $\mathbf{C}_t = W_C \tilde{x}_t$.  A constant channel-wise scale folds
 \emph{exactly} into those projections as a right-multiplied diagonal,
 $W_\bullet\,\diag(\gamma)$, and the shift folds into their biases, with no
 change to the function the block computes; the host weights can thus
-represent any constant $(\gamma,\beta)$ themselves.  Identity is therefore a
+represent any constant $(\gamma,\beta)$ themselves---a scale redundancy long
+noted for normalization gains~\citep{vanlaarhoven2017l2,hoffer2018norm}, here
+arising in the \emph{input-dependent} selective-scan projections
+(\S\ref{sec:related}).  Identity is therefore a
 \emph{gauge} direction---a flat, lossless valley the optimizer can slide
 along---so joint training folds the modulation into the host weights and
 returns $(\gamma,\beta)$ to $\mathbf{1},\mathbf{0}$, which is precisely the
@@ -1198,7 +1226,27 @@ projections---modulating $W_\Delta/W_B/W_C$ within the fused selective-scan
 kernel---which is precisely the kernel-level change outside our hardware
 envelope (\S\ref{sec:results_ablation}).  We thus delineate the boundary not as
 a parameterization that survives training, but as the location---inside the
-kernel---a surviving modulation would have to occupy.
+kernel---a surviving modulation would have to occupy.  We make this boundary
+concrete at toy scale on the pure-PyTorch \emph{reference} scan (the slow path
+\texttt{mamba\_ssm} ships, which the fused-kernel hardware limit does not touch):
+an input-affine modulation folds into the host projections to floating-point
+precision (max output deviation $1.2{\times}10^{-6}$) and \emph{decays to identity}
+under joint training with weight decay ($\mathrm{film}_g\!:0.086\!\to\!0.010$),
+while the \emph{same} modulation applied to the projected $\Delta/\mathbf{B}/
+\mathbf{C}$ inside the scan is provably non-absorbable (best-fit fold residual
+$1.3{\times}10^{-2}$, ${\sim}10^{4}{\times}$ larger) and \emph{persists} under
+identical training ($\mathrm{film}_g\!:0.093\!\to\!0.175$, seeds 0--3)---a
+modulation that lives inside the kernel and survives, demonstrated.  The same
+distinction holds on the \emph{full} model: rerunning the forced-active,
+ER-supervised escalation with weight decay removed flattens the decay---the
+exponential time-constant lengthens from $\tau\approx6685$ ($R^2=0.9999$) to
+$\tau\approx3{\times}10^{5}$ ($R^2=0.48$, i.e.\ no clean decay), with
+$\mathrm{film}_g$ left at its forced-active initialisation---and the toy
+reproduces the same flattening (input-affine $\mathrm{film}_g\!:0.086\!\to\!0.342$
+with weight decay off versus $0.086\!\to\!0.010$ with it on).  The decay along the
+gauge direction is thus driven by weight decay over a flat loss rather than by the
+objective, distinguishing gauge absorption from a modulation that merely earns
+nothing.
 
 \paragraph{The regime is decodable yet unused---and not even needed.}
 Two probes localise the failure. A post-hoc reading of the jointly-supervised router
@@ -1214,6 +1262,28 @@ next-tick direction head (a flat-majority collapse on both datasets) is de-confo
 inverse-frequency class balancing, which yields a non-degenerate macro-F1 with the gap
 still null; the single borderline gap (Kaggle spot-vol, $n{=}2$) is disproved by a
 pre-registered third seed that flips its sign.
+
+\paragraph{Language-model control: the null is bounded by regime decodability.}
+Because the collapse is optimizer-driven, the natural worry is that it is
+nonetheless specific to LOB data; a minimal language-model control maps where the
+boundary lies.  We train a 2-layer char-level Mamba LM (built directly on
+\texttt{mamba\_ssm} blocks) on a two-domain corpus---English prose versus Python
+source---with the per-position regime inferred by a context-aware router
+supervised on the domain and the \emph{same} input-affine FiLM gating the second
+block.  Here the regime is \emph{strongly} decodable: the router reaches
+${\sim}0.95$ domain accuracy, and the FiLM does \emph{not} collapse---
+$\mathrm{film}_g$ rises from $0.11$ to $0.52$ and plateaus, the opposite of the
+LOB decay.  This sharpens the mechanism rather than counters it.  Gauge
+absorption removes the \emph{constant} component of the affine unconditionally,
+while the \emph{input-dependent} component survives only when the regime is
+decodable enough to be worth encoding.  In every LOB setting the
+predictability/volatility regime is weakly decodable and the router collapses to
+uniform ($\mathrm{reg}_H=\log R$), so the modulation reduces to its
+gauge-absorbable constant part and decays; a strongly-decodable regime engages
+it.  We therefore scope the claim accordingly: the optimizer-driven collapse
+holds for \emph{weakly-decodable} regime conditioning of selective scans---the
+predictability and volatility axes a financial world model actually faces---not
+for all conditioning.
 
 \paragraph{The gap is real, and FiLM closes none of it.}
 The null is not an absence of anything to fix. Regime shift induces a genuine out-of-regime
@@ -1874,20 +1944,30 @@ N.~Hansen, H.~Su, and X.~Wang.
 \newblock {TD-MPC2}: Scalable, robust world models for continuous control.
 \newblock In \emph{Proc.\ ICLR}, 2024.
 
+\bibitem[Hoffer et~al.(2018)]{hoffer2018norm}
+E.~Hoffer, R.~Banner, I.~Golan, and D.~Soudry.
+\newblock Norm matters: Efficient and accurate normalization schemes in deep networks.
+\newblock In \emph{Proc.\ NeurIPS}, 2018 (arXiv:1803.01814).
+
 \bibitem[Lahoti et~al.(2026)]{lahoti2026mamba3}
 A.~Lahoti, K.~Y.~Li, B.~Chen, C.~Wang, A.~Bick, J.~Z.~Kolter, T.~Dao, and A.~Gu.
 \newblock Mamba-3: Improved sequence modeling using state space principles.
 \newblock In \emph{Proc.\ ICLR}, 2026 (arXiv:2603.15569).
+
+\bibitem[Li \& Arora(2020)]{li2020exp}
+Z.~Li and S.~Arora.
+\newblock An exponential learning rate schedule for deep learning.
+\newblock In \emph{Proc.\ ICLR}, 2020 (arXiv:1910.07454).
 
 \bibitem[Lim et~al.(2021)]{lim2021time}
 B.~Lim, S.~\"O. Arik, N.~Loeff, and T.~Pfister.
 \newblock Temporal fusion transformers for interpretable multi-horizon time series forecasting.
 \newblock \emph{International Journal of Forecasting}, 37(4):1748--1764, 2021.
 
-\bibitem[Nagy et~al.(2023)]{nagy2025lobs5}
+\bibitem[Nagy et~al.(2023)]{nagy2023lobs5}
 P.~Nagy, S.~Frey, S.~Sapora, K.~Li, A.~Calinescu, S.~Zohren, and J.~Foerster.
 \newblock Generative {AI} for end-to-end limit order book modelling: A token-level autoregressive generative model of message flow using a deep state space network ({LOBS5}).
-\newblock 2023.
+\newblock In \emph{Proc.\ ACM ICAIF}, 2023 (arXiv:2309.00638).
 
 \bibitem[Nagy et~al.(2025)]{nagy2025lobbench}
 P.~Nagy, S.~Frey, K.~Li, B.~Sarkar, S.~Vyetrenko, S.~Zohren, A.~Calinescu, and J.~Foerster.
@@ -1918,6 +1998,11 @@ Z.~Shi.
 J.~T.~H. Smith, A.~Warrington, and S.~W. Linderman.
 \newblock Simplified state space layers for sequence modeling.
 \newblock In \emph{Proc.\ ICLR}, 2023.
+
+\bibitem[van Laarhoven(2017)]{vanlaarhoven2017l2}
+T.~van Laarhoven.
+\newblock {L2} regularization versus batch and weight normalization.
+\newblock \emph{arXiv preprint arXiv:1706.05350}, 2017.
 
 \bibitem[Wang et~al.(2024)]{wang2024drama}
 W.~Wang et~al.

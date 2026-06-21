@@ -20,9 +20,10 @@ outcomes (full write-up in `finmamba3-paper.tex` and `RESULTS.md`):
    *architecture-independent*: a logistic regression on the same features
    reproduces and exceeds it, so the pipeline and framing, not the sequence
    model, carry the result.
-3. **A book-relative EV head** removes a latent low-predictability failure of
-   the settlement head, lifting held-out PnL +41% and collapsing the high-vs-low
-   regime spread 12x.
+3. **A book-relative EV head** makes the settlement head's marginal
+   low-predictability regime robust (P(profit) 0.63 -> 0.98 across three seeds)
+   at comparable total held-out PnL, collapsing the high-vs-low regime spread
+   6.2x.
 
 It began as a fork of the Drama world-model framework (Wang et al., ICLR 2025)
 but has since diverged completely: the Atari and MemoryMaze paths are gone, the
