@@ -104,6 +104,8 @@ class OrderBookSnapshot(NamedTuple):
         hackathon bundles. If a caller hands us unsorted JSON, the caller
         must sort first - this matches the live-feed producer contract.
         """
+        # The book JSON arrives straight from the data feed, so a malformed payload yields an
+        # empty snapshot rather than crashing the tick loop.
         try:
             raw_bids = _loads(bids_json) if bids_json else []
             raw_asks = _loads(asks_json) if asks_json else []

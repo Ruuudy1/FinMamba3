@@ -1,4 +1,9 @@
-"""Shared configuration helpers for LOB pretraining."""
+"""Shared configuration helpers for LOB pretraining.
+
+The isinstance checks in this module dispatch on the runtime types of values parsed from
+untyped YAML (dict / bool / list / torch.dtype). That runtime type inspection is intrinsic
+to a config parser, so the no-isinstance house rule is treated as exempt here.
+"""
 # region imports
 from __future__ import annotations
 import argparse

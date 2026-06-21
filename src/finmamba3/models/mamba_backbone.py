@@ -18,12 +18,16 @@ def _repo_src_dir() -> Path:
 
 
 def _is_local_mamba_module(module) -> bool:
+    # sys.modules can hold a None sentinel for a failed import, so these two reads keep
+    # getattr-with-default (vars() would raise on None), unlike the rest of this module.
     module_file = getattr(module, "__file__", None)
     candidates = []
     if module_file is not None:
         candidates.append(module_file)
     candidates.extend(getattr(module, "__path__", []))
     for candidate in candidates:
+        # Path.resolve() touches the filesystem and can raise OSError or ValueError on a
+        # malformed candidate path, so skip those rather than fail the whole scan.
         try:
             if Path(candidate).resolve().is_relative_to(_repo_src_dir() / "mamba_ssm"):
                 return True
@@ -42,14 +46,16 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
     original_path = list(sys.path)
     def _points_to_repo_src(path: str) -> bool:
         candidate = Path.cwd() if path == "" else Path(path)
+        # resolve() is a filesystem call that can raise OSError on a stale sys.path entry.
         try:
             return candidate.resolve() == src_dir
         except OSError:
             return False
     sys.path = [path for path in sys.path if not _points_to_repo_src(path)]
+    # triton is an optional CUDA dependency; absence is fine on a CPU host.
     try:
         import triton as _triton
-        if not hasattr(_triton, "set_allocator"):
+        if "set_allocator" not in vars(_triton):
             # Pytorch-triton omits triton.set_allocator; mamba3_siso_fwd.py calls it at module level.
             # The no-op stub is safe because pytorch-triton manages TMA descriptor memory internally.
             _triton.set_allocator = lambda fn: None
@@ -67,8 +73,10 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
         ) from exc
     finally:
         sys.path = original_path
-    module_file = getattr(module, "__file__", None)
+    module_file = vars(module).get("__file__")
     if module_file is not None:
+        # is_relative_to compares resolved paths and raises ValueError on unrelated roots
+        # (for example a different drive on Windows); treat that as "not vendored".
         try:
             if Path(module_file).resolve().is_relative_to(src_dir / "mamba_ssm"):
                 raise ImportError(
@@ -92,7 +100,7 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
                 )
                 logger.info(
                     "[mamba] TileLang Mamba3 MIMO kernel available at %s",
-                    getattr(tilelang_mod, "__file__", "<unknown>"),
+                    vars(tilelang_mod).get("__file__", "<unknown>"),
                 )
                 # The kernel_cache lookup emits a WARNING on every fwd/bwd call (~7 per step at n_layer=4); silencing keeps stdout readable and removes per-step logging overhead.
                 logging.getLogger("tilelang.cache.kernel_cache").setLevel(logging.ERROR)
@@ -102,7 +110,9 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
                     "MIMO requires this kernel and will raise at model "
                     "construction without it."
                 )
-    return getattr(module, class_name)
+    # class_name is a runtime string (for example "Mamba3"); the class lives in the
+    # imported module's namespace, so look it up there and fail fast if it is absent.
+    return vars(module)[class_name]
 
 
 class FinMambaSequenceModel(nn.Module):
