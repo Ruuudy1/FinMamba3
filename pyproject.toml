@@ -27,6 +27,14 @@ dependencies = [
 
 [project.scripts]
 finmamba3-train = "finmamba3.train:main"
+finmamba3-backtest = "finmamba3.eval.pnl_backtest:main"
+
+# The native C++ backtester is opt-in. Install the build dependency with
+# `pip install -e .[cpp]`, then build it once: `python -m finmamba3.backtester.engine_cpp.build`.
+# The build is intentionally kept out of `pip install` so the package installs
+# with no compiler (see backtester/engine_cpp/build.py).
+[project.optional-dependencies]
+cpp = ["pybind11>=2.12"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
