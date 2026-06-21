@@ -599,6 +599,18 @@ python -m finmamba3.eval.compare_direction \
     --out reports/direction_comparison.md
 ```
 
+### Two evaluation paths
+
+The repo keeps two backtest stacks, deliberately:
+
+- **Order-matching engine** (`finmamba3.eval.pnl_backtest` over `backtester/engine` plus the
+  opt-in `engine_cpp` accelerator) is the settlement-accurate path that produces the paper's
+  economic / PnL tables. Run it with `finmamba3-backtest` (or `python -m finmamba3.eval.pnl_backtest`).
+- **Gym-env harness** (`finmamba3.eval.backtest` via `run_backtest_cli`, below) is a lighter
+  Sharpe / PnL / drawdown sketch over `PolymarketLOBEnv`, handy as a quick standalone check.
+
+Both are live and test-covered; use the order-matching path for any reported economic number.
+
 ### Run a backtest with a frozen world model
 
 `src/finmamba3/eval/run_backtest_cli.py` wraps the GreedyDirectionPolicy around a frozen

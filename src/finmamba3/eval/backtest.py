@@ -1,10 +1,11 @@
-"""Held-out PnL backtest harness for a frozen world model.
+"""Gym-env PnL backtest harness for a frozen world model (one of two evaluation paths).
 
 Provides a deterministic policy that consumes the world-model latent and
-emits a discrete action. Used to report PnL, Sharpe, and max drawdown on
-held-out markets. Intended to be invoked after Phase A pretraining as a
-standalone evaluator; the result is the headline real-world metric the
-paper reports alongside reconstruction MSE and direction accuracy.
+emits a discrete action, reporting PnL, Sharpe, and max drawdown over
+PolymarketLOBEnv. This is the lightweight gym-env sketch, useful as a quick
+standalone check after Phase A pretraining. The settlement-accurate economic
+tables in the paper come from the other path, the order-matching engine in
+``finmamba3.eval.pnl_backtest``.
 
 Example
 -------

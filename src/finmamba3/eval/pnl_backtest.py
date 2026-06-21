@@ -6,7 +6,8 @@ frozen model's spot-conditioned settlement YES probability is precomputed with t
 training feature pipeline, so the probability the strategy trades on is the one the model was trained
 to produce (no train/serve skew). A thin WorldModelStrategy turns a divergence from the book's implied
 probability into an order, which the engine matches T+1 and settles for the headline PnL / Sharpe per
-spot-volatility regime.
+spot-volatility regime. This is the settlement-accurate, order-matching evaluation path that produces
+the paper's economic tables; ``finmamba3.eval.backtest`` is the lighter gym-env sketch alternative.
 """
 # region imports
 from __future__ import annotations
