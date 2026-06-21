@@ -10,7 +10,7 @@ The dense (T, M) grid is ~99% empty (markets are short-lived) and its ask-ladder
 hundreds of levels, which is infeasible at headline scale; the sparse CSR lists only the active cells
 and truncates each ladder at the reachable depth, so marshalling is O(present cells) in both time and
 memory. It is also timeline-only (independent of strategy/params), so a threshold sweep marshals once
-and re-runs the native engine per value — that amortised re-run is the largest speedup.
+and re-runs the native engine per value; that amortised re-run is the largest speedup.
 
 The native engine covers the full WorldModelStrategy / NaiveLagStrategy surface: fixed or quarter-Kelly
 sizing, the optional CUSUM gate, the tte / 500-share position gates, the predictability gate (live spot
@@ -86,8 +86,8 @@ class CppBacktestResult:
 class AlignedSignals:
     """Per-run (slug, ts) signals aligned onto the marshalled cell order, plus the flags they imply.
 
-    gate_er / gate_dir depend only on the gate window and ev only on the model — none on the swept
-    threshold — so a constant-window sweep aligns these once and reuses them across every value, which
+    gate_er / gate_dir depend only on the gate window and ev only on the model (none on the swept
+    threshold), so a constant-window sweep aligns these once and reuses them across every value, which
     is what lifts the gated-sweep speedup (the per-value alignment was the residual O(present cells) cost).
     """
     gate_er_cells: np.ndarray
@@ -150,7 +150,7 @@ def marshal_timeline(bt, slugs: list, prob_by_slug_ts: dict, include_depth: bool
     the result for every strategy / parameter value. bt is pnl_backtest._data_for_slugs's per-regime scope;
     slugs gives the market order; prob_by_slug_ts supplies the model's per-tick settlement YES probability.
     Only the present (tick, market) cells are emitted, grouped per tick by tick_offset, with the ask ladders
-    truncated at the reachable depth — so this is O(present cells), not O(ticks * markets). include_depth adds
+    truncated at the reachable depth, so this is O(present cells), not O(ticks * markets). include_depth adds
     the full two-sided YES depth per cell (a full-ladder sum, so computed only when the depth band is used).
     """
     timeline = bt.timeline

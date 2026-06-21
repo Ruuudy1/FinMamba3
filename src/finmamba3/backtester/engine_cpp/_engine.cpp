@@ -212,7 +212,7 @@ py::dict run_backtest(
     std::vector<PendingOrder> pending;
     // Per-market current (forward-filled) state, refreshed from each tick's CSR cells. Once a market's
     // first cell arrives cur_present stays 1 for its active life (the timeline forward-fills a cell every
-    // active tick); after expiry the status guard, not present, excludes it — matching the dense engine.
+    // active tick); after expiry the status guard, not present, excludes it, matching the dense engine.
     std::vector<signed char> cur_present(num_markets, 0);
     std::vector<long long> cur_book_ts(num_markets, 0);
     std::vector<double> cur_yes_mid(num_markets, 0.0);
@@ -240,7 +240,7 @@ py::dict run_backtest(
     bool have_prev_spot = false;
     double prev_spot = 0.0;
     // The tick loop and final mark-to-market touch only C++ state and the raw (.unchecked) array
-    // accessors above — no Python objects — so drop the GIL across the whole compute. This lets the
+    // accessors above (no Python objects), so drop the GIL across the whole compute. This lets the
     // PnL adapter run independent backtests (sweep values, both arms) concurrently on real cores; it
     // is re-acquired below before the result dict is built. Single-run output is byte-identical.
     py::gil_scoped_release nogil;
