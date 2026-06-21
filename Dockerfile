@@ -1,5 +1,5 @@
-# docker build -f Dockerfile -t drama .
-# Use the official PyTorch image as a base for GPU support
+# docker build -f Dockerfile -t finmamba3 .
+# CUDA devel base so Mamba-3 (causal-conv1d + mamba_ssm) builds from source against the GPU PyTorch wheel.
 FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04
  
 # Set the working directory
@@ -58,8 +58,16 @@ RUN pip install -r requirements.txt
 # Add your code to the container
 COPY . .
 
-# Source code lives in src/; run train_lob.py from the repository root or src/.
-WORKDIR /app/src
+# Editable install so the finmamba3 package and the `finmamba3-train` console
+# script (pyproject [project.scripts]) resolve without a working-directory trick.
+RUN pip install -e .
+
+# This is the GPU training image. Entrypoint:
+#   python -m finmamba3.train --config configs/lob.yaml ...   (equivalently: finmamba3-train ...)
+# It deliberately does NOT build the native C++ backtester. For CPU-only
+# reproduction of the economic results use Dockerfile.backtest, which builds
+# engine_cpp and runs the parity test at build time.
+WORKDIR /app
 
 # Expose ports (if needed, for example for tensorboard)
 EXPOSE 6006
