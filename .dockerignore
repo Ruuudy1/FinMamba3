@@ -12,6 +12,17 @@ data/
 *.pt
 *.safetensors
 
+# Compiled native-engine artifacts; rebuilt inside the image. A stale host copy (Windows .pyd, or a
+# .so for a different Python ABI) makes the in-image `python -m engine_cpp.build` fail: the package
+# __init__ globs _engine*.{pyd,so}, finds the stale file, and `from . import _engine` errors before
+# build.py runs. Keep the source _engine.cpp (patterns below match only the build products).
+**/engine_cpp/_engine*.pyd
+**/engine_cpp/_engine*.so
+**/engine_cpp/_engine*.obj
+**/engine_cpp/_engine*.lib
+**/engine_cpp/_engine*.exp
+**/engine_cpp/_build_tmp/
+
 # VCS, caches, editor/agent state.
 .git/
 **/__pycache__/
