@@ -2,9 +2,8 @@
 % =============================================================================
 % Scientific Understanding of Foundation Models (SUFM) workshop @ COLM 2026.
 %   Long track (<=9 pp main text, references unlimited), double-blind, non-archival.
-% Anonymized: the colm2026_conference "submission" option auto-replaces the author
-%   block with "Anonymous authors / Paper under double-blind review" and turns on
-%   line numbers.  Body carries no author / repository / handle strings.
+% Body = author's edited draft (diff.tex) re-wrapped in the official COLM template;
+%   the colm2026_conference "submission" option auto-anonymizes + adds line numbers.
 % =============================================================================
 \usepackage[submission]{colm2026_conference}
 
@@ -17,6 +16,8 @@
 \usepackage{bm}
 \usepackage{graphicx}
 \usepackage{enumitem}
+\usepackage{newunicodechar}
+\newunicodechar{≈}{\approx}
 \usepackage{lineno}
 
 \definecolor{darkblue}{rgb}{0, 0, 0.5}
@@ -25,10 +26,16 @@
 % ---- notation ---------------------------------------------------------------
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\dg}{\textsuperscript{$\dagger$}}
+\newcommand{\filmG}{\mathrm{film}_g}
+\newcommand{\filmB}{\mathrm{film}_b}
+\newcommand{\regH}{\mathrm{reg}_H}
+\DeclareMathOperator{\softmax}{softmax}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\RMSNorm}{RMSNorm}
 
 \title{The Optimizer Undoes It: Input-Affine Conditioning of a
-Selective Scan Is Gauge-Absorbable\\
-\large A Training-Dynamics Null with a Mechanistic Explanation}
+Selective Scan Is Gauge-Absorbable\
+\large \newline A Training-Dynamics Null with a Mechanistic Explanation}
 
 \author{Anonymous Authors}
 
@@ -40,569 +47,158 @@ Selective Scan Is Gauge-Absorbable\\
 \fi
 
 \begin{abstract}
-Selective state-space models (Mamba) have reshaped long-context sequence
-modeling, yet \emph{which} forms of conditioning survive their training
-dynamics is poorly understood. We study FiLM-style regime conditioning of a
-Mamba backbone---a per-block, channel-wise affine on each block's input, meant
-to steer the input-dependent selective-scan parameters
-$\Delta, \mathbf{B}, \mathbf{C}$---and find it a \textbf{decisive null}: under
-joint training the modulation collapses to identity and cannot be forced active
-even by direct supervision. We explain this mechanistically. An input-side
-affine is a \emph{gauge} direction that folds losslessly into the block's own
-$\Delta/\mathbf{B}/\mathbf{C}$ projections, so the optimizer slides it back to
-identity. The signature is dataset- and architecture-invariant: forced-active,
-efficiency-ratio-supervised escalations decay to identity with a shared time
-constant ($\tau \approx 7000$ steps, $R^2 > 0.999$) across three very different
-distributions---FI-2010 equities, Kaggle crypto spot books, and Polymarket
-prediction markets---implicating the optimizer, not the data. We then sharpen
-the mechanism with an output-side placement that gates each block's output
-instead of its input: its multiplicative scale merely folds into the block's
-\emph{other} (bias-free output) projection and decays with the same constant,
-while the one genuinely non-absorbable component---an additive shift---decays in
-lockstep. The null is thus \textbf{overdetermined}: gauge absorption removes
-every direction the host weights can represent, and reconstruction dominance
-removes the one they cannot. Escaping both would require modulating the scan
-parameters \emph{inside} the fused kernel, which our hardware cannot run. We
-demonstrate this boundary at toy scale on the reference scan---an in-kernel
-modulation is non-absorbable and survives the training that drives the
-input-affine form to identity---and bound the null with a language-model control:
-a Mamba char-LM on a strongly-decodable regime (code vs.\ prose) \emph{does}
-engage the modulation, so the collapse is specifically the fate of
-\emph{weakly-decodable}, drop-in regime conditioning. The financial datasets are
-a demonstration substrate; consistent with a result about how selective scans
-\emph{train} rather than which is best, a matched-parameter ablation shows no
-backbone dominates, and the one economic signal we find is reproduced by a
-logistic regression on the same features---architecture-independent, as the null
-predicts.
+Selective state-space models such as Mamba have reshaped long-context sequence modeling, yet it remains unclear which forms of conditioning actually persist under their training dynamics. We study FiLM-style regime conditioning of a Mamba backbone: a per-block channel-wise affine, which is the kernel-friendly, drop-in way to inject a regime signal. We find a decisive null. Under joint training the modulation collapses to identity, and it cannot be forced active even by direct supervision. We explain this mechanistically. The input affine's scale is a \emph{gauge direction} that folds losslessly into that block's own $\Delta/\mathbf{B}/\mathbf{C}$ projections, so the optimizer slides the modulation back to identity. The decay shares a time constant ($\tau\approx7000$ steps, $R^2>0.999$) across equities and crypto spot books, two structurally different markets. The null is separately confirmed on prediction markets. An output-side placement makes the null \emph{overdetermined}. There the scale folds into the block's bias-free output projection, while the lone non-absorbable shift decays in lockstep under reconstruction dominance. Escaping both would require modulating the scan parameters inside the fused kernel. A toy reference scan confirms that such an in-kernel modulation survives training, as does a char-level Mamba language model on a strongly decodable regime, which scopes the collapse to weakly-decodable drop-in conditioning. The mechanism is architecture-general by the algebra of the fold, though the training collapse is demonstrated only at our scale. The financial data is a demonstration substrate: under a matched-parameter ablation no backbone wins, and the one robust economic signal is matched by a logistic regression on the same features.
 \end{abstract}
 
-\section{Introduction}\label{sec:intro}
 
-A practitioner who wants a sequence model to behave differently in different
-regimes will reach for the most natural tool available: condition the model on
-an inferred regime. For a Mamba backbone the most kernel-friendly way to do this
-is a FiLM-style affine on each block's input, because the selective scan's
-parameters $\Delta_t, \mathbf{B}_t, \mathbf{C}_t$ are themselves input-dependent
-(\S\ref{sec:background})---so an affine on the input propagates a regime signal
-\emph{into} the dynamics without touching the fused CUDA kernel. It is the
-drop-in form of the idea. \textbf{We find that it does not survive training, and
-we explain why.}
+\section{Introduction}
+    We wanted a sequence model to behave differently in different regimes, so we looked for tools to condition the model on an inferred regime. For a Mamba backbone, the most kernel-friendly way to do this is a FiLM-style affine on each block's input. The selective scan's parameters $\Delta_t,\mathbf{B}_t,\mathbf{C}_t$ are themselves input-dependent (Section~\ref{sec:background}), so modifying the input alone lets regime information propagate into the scan without rewriting the fused CUDA kernel. We find that this implementation does not survive training. We create a zero-initialized FiLM modulator consisting of a regime router and a hypernetwork that emits per-block $\gamma$ and $\beta$. The modulator is attached to a Mamba-3 world model and trained jointly with the host objective. The FiLM parameters are initialized to the identity transformation, making the modulated and unmodulated models bit-identical at initialization. To encourage the use of the modulation, we apply activation pressure through forced-active initialization and direct supervision of the router on a regime axis. Despite this, the modulation decays monotonically back to identity on every objective and dataset we test. The failure arises from training dynamics, not from a lack of expressive capability. 
+    On volatility-based regimes on FI-2010, a separately trained frozen router achieves 0.92 agreement with the regime buckets, demonstrating that meaningful regime information is present in the data. Yet, the FiLM parameters still converge back to identity during joint training.
 
-We attach an exactly zero-initialized FiLM modulator (a regime router plus a
-hypernetwork emitting per-block $\gamma, \beta$) to a Mamba-3 world model and
-train it jointly with the host objective. Despite the cleanest possible
-control---at initialization the modulated backbone is \emph{bit-identical} to
-the unmodulated one---and despite the strongest activation pressure we can apply
-(forced-active initialization plus direct supervision of the router on a regime
-axis), the modulation \textbf{decays monotonically back to identity} on every
-objective and dataset we test. This is the paper's spine, and it is a statement
-about \emph{training dynamics}, not about expressivity: a \emph{frozen} router
-probes to $0.92$ agreement with the regime bucket, so the capacity exists; joint
-training will not use it.
+The explanation is a gauge symmetry of the block parameterization. An input-side channel-wise scale folds into the block's input projections as a right-multiplied diagonal $W_\bullet\diag(\gamma)$, with no change to the function the block computes. These projections are bias-free up to a lone $dt$ bias that can absorb only the shift's $\Delta$-component, so the shift as a whole cannot fold into the host and instead decays as an unrewarded direction (Section~\ref{sec:mechanism}). Identity is therefore a gauge direction: the optimizer slides along it, returning $(\gamma,\beta)$ to $(\mathbf{1},\mathbf{0})$. This matches our observation that the decay signature is a property of the block, not the data. A forced-active escalation decays at the same rate ($\tau\approx7000$ steps, $R^2>0.999$) on FI-2010 and Kaggle crypto, two different markets trained with the same optimizer.
 
-The explanation is a \textbf{gauge symmetry of the block parameterization}. An
-input-side channel-wise scale folds \emph{exactly} into the block's input
-projections as a right-multiplied diagonal $W_\bullet\,\mathrm{diag}(\gamma)$,
-and the shift folds into their biases, with no change to the function the block
-computes. Identity is therefore a flat, lossless valley---a gauge
-direction---and the optimizer slides along it, returning $(\gamma, \beta)$ to
-$(\mathbf{1}, \mathbf{0})$. This predicts, and we observe, a decay signature
-that is a property of the \emph{block}, not the data: a forced-active escalation
-decays with the \textbf{same time constant $\tau \approx 7000$ steps
-($R^2 > 0.999$)} on FI-2010 equities and Kaggle crypto---two markets with
-nothing in common but the optimizer that trains them.
+We then run the logical follow-up to the gauge argument: an output-side placement that gates the block's output. It does not escape absorption either. Each Mamba-3 block ends with a bias-free output projection, so the output scale is gauge-absorbed there with the same decay constant. The remaining additive shift decays in lockstep under reconstruction dominance. This leaves the in-kernel modulation as the only escape from the null.
 
-We then run the test the gauge argument names: an \textbf{output-side} placement
-that gates the block's output. It does not escape absorption either---each Mamba-3
-block ends in a \emph{bias-free} output projection, so the output scale folds into
-\emph{that} (the same gauge move on the block's other face, same $\tau$), while the
-non-absorbable shift $\beta$ decays in lockstep, killed by reconstruction dominance.
-The null is therefore \textbf{overdetermined}, leaving the only escape route
-\emph{inside} the fused selective-scan kernel---the kernel-level change our hardware
-cannot run.
-
-\paragraph{Why this is a foundation-model question.}
-Although we instantiate the study on a financial world model, the object of study
-is a property of the Mamba block itself. Gauge absorption is an \emph{algebraic}
-property of the block's parameterization---a channel-wise affine on the input
-folds into the same $W_\Delta/W_B/W_C$ projections whether the block sits in a
-world model, a language model, or any other selective-scan foundation
-model---so the mechanism, and the design consequence that follows, are
-\textbf{architecture-universal and scale-free} by construction, not specific to
-finance. The char-level Mamba \emph{language}-model control (\S\ref{sec:mechanism})
-plays a narrower role: it maps \emph{where} the boundary lies by exhibiting a
-strongly-decodable regime on which the modulation engages. It is a boundary-mapping
-probe, not the bridge the universality argument rests on---that bridge is the algebra.
+\paragraph{Why this is a foundation-model question.} Although we instantiate the study on a financial world model, the object of study is the Mamba block itself: gauge absorption is an algebraic property of the block's parameterization. A channel-wise affine on the input folds into the same $W_\Delta/W_B/W_C$ projections whether the block sits in a world model, a language model, or any other selective-scan foundation model. The mechanism and its design consequence are therefore architecture-general by construction: algebraic and scale-free in principle. The training collapse it predicts, however, is demonstrated only at our scale, not yet at FM scale. The char-level Mamba language model control (Section~\ref{sec:mechanism}) plays a narrow role: locating the boundary where FiLM starts working. The universality claim itself rests on the algebraic gauge argument.
 
 \paragraph{Contributions.}
-\begin{enumerate}[nosep,leftmargin=1.4em]
-\item A \textbf{decisive, mechanistically explained null} for input-affine FiLM
-  conditioning of a selective scan: the modulation collapses to identity under
-  joint training and cannot be forced active, across five objectives and three
-  LOB distributions (\S\ref{sec:null}).
-\item The mechanism---\textbf{gauge absorption}---with its dataset-invariant
-  signature ($\tau \approx 7000$, $R^2 > 0.999$) and an \textbf{output-side
-  placement that makes the null overdetermined}, locating the boundary
-  \emph{inside the kernel}; \textbf{demonstrated}, not just argued, by a toy
-  reference-scan experiment and a no-weight-decay ablation showing the decay is
-  \textbf{weight-decay-driven over a flat loss} (\S\ref{sec:mechanism}).
-\item A \textbf{boundary at regime decodability}: a Mamba LM control (prose vs.\
-  code) shows a \emph{strongly}-decodable regime engages the modulation, scoping
-  the collapse to \emph{weakly}-decodable conditioning (\S\ref{sec:mechanism}).
-\item A \textbf{load-bearing-diagnostic hazard} (the gap reads positive while the
-  mechanism is inert) and a \textbf{demonstration substrate} with an
-  architecture-agnosticism check and a deflated, architecture-independent
-  economic coda (\S\ref{sec:substrate}).
+\begin{enumerate}[leftmargin=*]
+\item A decisive, mechanistically explained null for input-affine FiLM conditioning of a selective scan. We claim the modulation collapses to identity under joint training and cannot be forced active, across five objectives and three LOB distributions (Section~\ref{sec:null}).
+\item The mechanism behind the null: \emph{gauge absorption}, distilled into a structural \emph{absorbability criterion} (Section~\ref{sec:mechanism}) that predicts which placements survive optimization. It carries a dataset-invariant signature ($\tau\approx7000$, $R^2>0.999$), and an output-side placement makes the null overdetermined, locating the boundary inside the kernel. We demonstrate this rather than merely argue it, via a toy reference-scan experiment and a no-weight-decay ablation that shows the decay is weight-decay-driven over a flat loss (Section~\ref{sec:mechanism}).
+\item A boundary at regime decodability: a Mamba LM control (prose vs. code) shows a strongly-decodable regime engages the modulation, scoping the collapse to weakly-decodable conditioning (Section~\ref{sec:mechanism}).
+\item A load-bearing-diagnostic hazard (the gap reads positive while the mechanism is inert) and a demonstration substrate with an architecture-agnosticism check and a deflated, architecture-independent economic coda (Section~\ref{sec:substrate}).
 \end{enumerate}
+The financial machinery (a Mamba-3 world model in the DreamerV3/Drama lineage) is the stress-substrate that let us probe the mechanism on genuinely different data. We describe it only to the depth the null requires.
 
-The financial machinery (a Mamba-3 world model in the DreamerV3/Drama lineage) is
-the stress-substrate that let us probe the mechanism on genuinely different data;
-it is described only to the depth the null requires.
+\section{Related Work}
+\paragraph{Selective state-space models and Mamba.} S4, S5, and Mamba give $O(n)$-complexity alternatives to attention \citep{gu2022efficiently,smith2023simplified,gu2024mamba}. Mamba \citep{gu2024mamba} introduced selective state spaces in which $\Delta$ and $\mathbf{B}$ are input-dependent, enabling content-aware filtering; Mamba-2 \citep{dao2024transformers} cast this as structured masked attention; Mamba-3 \citep{lahoti2026mamba3} adds MIMO state transitions. (Although we used Mamba-3, we were unable to take advantage of MIMO due to hardware constraints.) Our object of study is not a new SSM but how a selective scan trains under an added affine. The very input-dependence which makes the modulation seem natural is what makes it gauge-absorbable.
 
-\section{Related Work}\label{sec:related}
+\paragraph{FiLM and conditioning.} Feature-wise linear modulation \citep{perez2018film} injects context efficiently via per-channel affine parameters. It is a default conditioning primitive across vision and multi-task learning. We are not aware of prior work that asks whether a FiLM affine persists under joint training of a selective scan, or that identifies its absorption into the host projections as a gauge direction.
 
-\paragraph{Selective state-space models and Mamba.}
-S4, S5, and Mamba give $O(n)$-complexity alternatives to attention
-\citep{gu2022efficiently, smith2023s5, gu2024mamba}. Mamba \citep{gu2024mamba}
-introduced \emph{selective} state spaces in which $\Delta$ and $\mathbf{B}$ are
-input-dependent, enabling content-aware filtering; Mamba-2
-\citep{dao2024mamba2} cast this as structured masked attention; Mamba-3
-\citep{lahoti2026mamba3} adds MIMO state transitions. Our object of study is not
-a new SSM but \emph{how a selective scan trains under an added affine}---that the
-very input-dependence which makes the modulation seem natural is what makes it
-gauge-absorbable.
+\paragraph{Scale redundancy and scale-invariance.} It is a known theme in normalization literature that a channel-wise affine placed before a linear map is redundant. \citet{vanlaarhoven2017l2} shows that weights feeding a normalization layer are scale-invariant. Thus L2 regularization acts on their scale, and transitively on the effective learning rate, rather than as a magnitude control. As \citet{hoffer2018norm} illustrates, $BN(\|w\|_2 \hat{w} x) = BN(\hat{w} x)$, where $BN(\cdot)$ denotes Batch Normalization, $w$ is the weight vector, $\|w\|_2$ its Euclidean norm, $\hat{w}=w/\|w\|_2$ the normalized weight direction, and $x$ the layer input.
 
-\paragraph{FiLM and conditioning.}
-Feature-wise linear modulation \citep{perez2018film} injects context via
-per-channel affine parameters and is a default conditioning primitive across
-vision and multi-task learning. We are not aware of prior work that asks whether
-a FiLM affine \emph{persists} under joint training of a selective scan, or that
-identifies its absorption into the host projections as a gauge direction.
+Our null extends this invariance and redundancy to selective state-space models, where the absorbed affine transformation is not a static normalization gain but an input-dependent FiLM modulation acting through the scan projections. What is new is threefold: the input-dependent selective-scan instantiation; the dataset-invariant decay signature that attributes the collapse to the optimizer; and the output-side placement showing the null is overdetermined.
 
-\paragraph{Scale redundancy and scale-invariance.}
-That a channel-wise affine placed before a linear map is redundant with that map
-is a known theme in the normalization literature.
-\citet{vanlaarhoven2017l2} shows that weights feeding a normalization layer are
-scale-invariant, so $L_2$ regularization acts on their \emph{scale}---and thus
-the effective learning rate---rather than as a capacity control;
-\citet{hoffer2018norm} and \citet{li2020exp} build on the same scale-invariance
-to re-derive weight decay as an effective-learning-rate schedule. Our null is an
-instance of this redundancy in a setting it has not been analyzed: the absorbed
-affine is not a static normalization gain but a per-regime,
-\emph{input-dependent} FiLM folding into the selective scan's own
-$W_\Delta/W_B/W_C$ projections. What is new is the input-dependent
-selective-scan instantiation, the dataset-invariant decay signature that
-attributes the collapse to the optimizer, the output-side placement showing the
-null is \emph{overdetermined}, and the practical consequence that the only
-kernel-friendly, drop-in form is exactly the absorbable one---the default a
-practitioner reaches for, not a corner case.
+\paragraph{World models and the LOB substrate.} DreamerV3 \citep{hafner2023dreamerv3} established the categorical-latent RSSM template, and Drama \citep{wang2025drama} replaced its recurrence with a Mamba-2 selective scan. We instantiate this lineage with a Mamba-3 backbone purely as a substrate: no spine result depends on the world-model framing beyond a reconstruction objective and three distinct distributions. The rest is substrate context. DeepLOB \citep{zhang2019deeplob} and the FI-2010 benchmark \citep{ntakaris2018benchmark} anchor LOB direction prediction; the LOBCAST benchmark \citep{prata2023lobcast} documents the in-distribution macro-F1 range, confirming our data carries signal; and classical regime-switching \citep{hamilton1989new} and changepoint detection \citep{adams2007bayesian} motivate a regime axis. We use the Kaufman efficiency-ratio predictability axis as the most defensible regime signal in the study.
 
-\paragraph{World models and the LOB substrate.}
-DreamerV3 \citep{hafner2023dreamerv3} established the categorical-latent RSSM
-template and Drama \citep{wang2024drama} replaced its recurrence with a Mamba-2
-selective scan; we instantiate this lineage with a Mamba-3 backbone purely as a
-substrate (no spine result depends on the world-model framing beyond a
-reconstruction objective and three distinct distributions). For substrate
-context, DeepLOB \citep{zhang2019deeplob} and the FI-2010 benchmark
-\citep{ntakaris2018benchmark} anchor LOB direction prediction, the LOBCAST
-benchmark \citep{prata2023lobcast} documents the in-distribution macro-F1 range
-confirming our data carries signal, and classical regime-switching
-\citep{hamilton1989new} and changepoint detection \citep{adams2007bayesian}
-motivate a regime axis; we use the Kaufman \emph{efficiency-ratio} predictability
-axis as the most defensible regime signal in the study.
+\section{Background}\label{sec:background}
+\paragraph{Limit order books, for a non-finance reader.} A \emph{limit order book} (LOB) is the live ledger an exchange keeps for an asset. At each instant it records how much volume rests on the buy and sell sides at every price near the current mid-price, and it updates many times a second as orders arrive, cancel, and execute. The task is to forecast the next short-horizon move, price direction, volatility, or order flow, from the evolving shape of this ladder. We deliberately span three kinds of book that pose \emph{structurally different} learning problems, so that a single shared null across them is informative rather than a quirk of one dataset. \textbf{FI-2010} is regulated equities (Nasdaq Nordic): a centralized, fixed-hours, discrete-tick event stream with mature, comparatively stationary microstructure. \textbf{Crypto} spot books (BTC/ETH/ADA) trade 24/7 with no circuit breakers across fragmented venues, which gives heavier tails, sharper volatility clustering, and thinner, faster-moving books. We sample them at three resolutions ($1\,$s/$1\,$min/$5\,$min), each a different signal-to-noise regime. \textbf{Polymarket} is not a continuous price at all but a binary prediction market. Each contract settles to $0$ or $1$ at a known expiry, so its price lives in $[0,1]$ as a probability. That probability is driven by a time-to-expiry clock and the reference move since open, and the terminal label is near-deterministic. Equity microstructure, crypto volatility, and a bounded settling probability are about as far apart as sequence-forecasting distributions get. That is why the same conditioning collapsing identically on all three is what the null rests on.
 
-\section{Background: the selective scan and the FiLM modulator}\label{sec:background}
-
-\paragraph{Selective state-space model.}
-A discretized SSM maps $x_t$ to $y_t$ through a latent state,
-$h_t = \bar{\mathbf{A}} h_{t-1} + \bar{\mathbf{B}} x_t$, $y_t = \mathbf{C} h_t$.
-Mamba makes the scan parameters \textbf{input-dependent} via learned linear
-projections of the block input $x_t$:
-\begin{equation}\label{eq:selection}
-\Delta_t = \sigma(W_\Delta\,x_t), \qquad
-\mathbf{B}_t = W_B\,x_t, \qquad
-\mathbf{C}_t = W_C\,x_t.
-\end{equation}
-This selection mechanism is exactly the property a regime-conditioner would
-exploit: \emph{any} affine transformation of $x_t$ propagates into all three
-scan parameters. It is also, as \S\ref{sec:mechanism} shows, exactly the
-property that makes an input affine absorbable.
-
-\paragraph{RegimeFiLM modulator.}
-A regime head infers a soft categorical distribution over $R$ regimes (the
-regime count: $R = 4$ on the FI-2010/Kaggle spot books, $R = 8$ on Polymarket)
-from the stem output and reads out a low-dimensional regime embedding $r_t$; a
-hypernetwork maps $r_t$ to per-block FiLM parameters, bounded for bf16
-stability:
+\paragraph{Selective state-space model.} A discretized SSM maps an input $x_t$ to an output $y_t$ through a latent state $h_t$, $h_t = \bar{\mathbf{A}}h_{t-1} + \bar{\mathbf{B}}x_t$, $y_t = \mathbf{C}h_t$, where $\bar{\mathbf{A}}$ and $\bar{\mathbf{B}}$ are the discretized state-transition and input matrices and $\mathbf{C}$ is the output matrix. Mamba makes the scan parameters input-dependent via learned linear projections of the block input $x_t$:
 \begin{equation}
-\bm{\alpha}_t = \mathrm{softmax}(W_r\,x_t^{(0)}) \in \R^R, \quad
-r_t = \bm{\alpha}_t^\top E, \quad
-\gamma^{(\ell)} = 1 + \tanh(\tilde\gamma^{(\ell)}),\ \
-\beta^{(\ell)} = \tanh(\tilde\beta^{(\ell)}).
+\Delta_t = \sigma(W_\Delta x_t), \qquad \mathbf{B}_t = W_B x_t, \qquad \mathbf{C}_t = W_C x_t,
 \end{equation}
-The hypernetwork is initialized to zero, so $\gamma^{(\ell)} = \mathbf{1}$ and
-$\beta^{(\ell)} = \mathbf{0}$ at step 0---the modulated backbone is
-\textbf{exactly the unmodulated baseline at initialization}, an exact paired
-control. A Switch-Transformer-style load-balance term
-\citep{fedus2022switch} maximizes the entropy of the \emph{batch-averaged}
-router distribution,
-$\mathcal{L}_{\text{regime}} = \lambda_{\text{ent}}(\log R - H[\bar{\bm\alpha}])$,
-regularizing marginal regime usage while leaving per-step assignments free to be
-peaky. (We ablate this term away in the strongest-null test, below, so the
-observed router uniformity is not attributable to it.)
+where $W_\Delta, W_B, W_C$ are learned projection matrices, $\sigma$ is the softplus nonlinearity, $\Delta_t$ is the per-step discretization size, and $\mathbf{B}_t, \mathbf{C}_t$ are the now input-dependent scan parameters. This selection mechanism is the property a regime-conditioner would exploit: any affine transformation of $x_t$ propagates into all three scan parameters. It is also, as Section~\ref{sec:mechanism} shows, the property that makes an input affine absorbable.
 
-\paragraph{Two application sites.}
-The \textbf{input-side} placement routes the regime into
-$\Delta_t, \mathbf{B}_t, \mathbf{C}_t$ through the selection mechanism:
-\begin{equation}\label{eq:input}
-x_t^{(\ell)} = x_t^{(\ell-1)} + \mathrm{Mamba3}\!\left(\gamma^{(\ell)} \odot
-\mathrm{RMSNorm}(x_t^{(\ell-1)}) + \beta^{(\ell)}\right). \tag{input-side}
+\paragraph{RegimeFiLM modulator.} The modulator works in two stages. A regime head reads the stem output and infers a soft categorical distribution over $R$ regimes, from which it reads out a low-dimensional regime embedding $r_t$ ($R=4$ on the FI-2010/Kaggle spot books, $R=8$ on Polymarket). A hypernetwork then maps $r_t$ to per-block FiLM parameters, bounded for bf16 stability:
+\begin{equation}
+\bm{\alpha}_t = \softmax(W_r x_t^{(0)}) \in \R^R, \quad r_t = \bm{\alpha}_t^\top E, \quad \gamma^{(\ell)} = 1 + \tanh(\tilde{\gamma}^{(\ell)}), \quad \beta^{(\ell)} = \tanh(\tilde{\beta}^{(\ell)}),
 \end{equation}
-As a control we also expose a \textbf{post-scan} site that gates the block
-\emph{output}, sharing the identical modulator and differing only in where the
-affine lands:
-\begin{equation}\label{eq:postscan}
-x_t^{(\ell)} = x_t^{(\ell-1)} + \gamma^{(\ell)} \odot
-\mathrm{Mamba3}\!\left(\mathrm{RMSNorm}(x_t^{(\ell-1)})\right) + \beta^{(\ell)}.
-\tag{post-scan}
-\end{equation}
-The input-side scale folds into $W_\Delta/W_B/W_C$; the post-scan scale folds
-into the bias-free output projection $W_{\text{out}}$; only the post-scan
-additive shift is non-absorbable (\S\ref{sec:mechanism}).
+where $\bm{\alpha}_t$ is the soft regime distribution the router weights $W_r$ produce from the stem output $x_t^{(0)}$, $E$ is a learned regime-embedding table (its rows the per-regime embeddings), $r_t$ is the resulting soft-averaged regime embedding, $\ell$ indexes the block, $\gamma^{(\ell)}$ and $\beta^{(\ell)}$ are that block's FiLM scale and shift, and $\tilde{\gamma}^{(\ell)}, \tilde{\beta}^{(\ell)}$ are the hypernetwork's raw (pre-$\tanh$) outputs. The $\tanh$ bounds $\gamma^{(\ell)} \in (0,2)$ and $\beta^{(\ell)} \in (-1,1)$. The hypernetwork is initialized to zero, so $\gamma^{(\ell)}=\mathbf{1}$ and $\beta^{(\ell)}=\mathbf{0}$ at step 0. At initialization the modulated backbone is therefore identical to the unmodulated baseline, giving an exact paired control. A Switch-Transformer-style load-balance term \citep{fedus2022switch} maximizes the entropy of the batch-averaged router distribution, $\mathcal{L}_{\mathrm{regime}}=\lambda_{\mathrm{ent}}(\log R-H[\bar{\bm\alpha}])$, where $\lambda_{\mathrm{ent}}$ is its weight, $H[\cdot]$ the entropy, and $\bar{\bm\alpha}$ the batch-averaged router distribution. This term regularizes marginal regime usage while leaving per-step assignments free to be peaky. We ablate this term away in the strongest-null test, so the observed router uniformity is not attributable to it.
 
-\paragraph{Diagnostics.}
-We gate every claim on activation diagnostics:
-$\mathrm{film}_g = \mathrm{mean}\,|\gamma - 1|$ (deviation of the multiplicative
-gate from identity, zero at identity), its additive counterpart
-$\mathrm{film}_b = \mathrm{mean}\,|\beta|$ (which we report for the output-side
-shift in \S\ref{sec:mechanism}), and the router entropy $\mathrm{reg}_H$ (whose
-uniform maximum is $\log R$). A positive generalization gap with an inert FiLM is
-an artifact, not a regime-conditioning effect.
+\paragraph{Two application sites.} The input-side placement routes the regime into $\Delta_t,\mathbf{B}_t,\mathbf{C}_t$ through the selection mechanism:
+\begin{equation}
+ x_t^{(\ell)} = x_t^{(\ell-1)} + \mathrm{Mamba3}\!\left(\gamma^{(\ell)} \odot \RMSNorm(x_t^{(\ell-1)}) + \beta^{(\ell)}\right), \tag{input-side}
+\end{equation}
+where $x_t^{(\ell)}$ is the output of block $\ell$ at step $t$ (and $x_t^{(\ell-1)}$ its input, the previous block's output), $\odot$ is the element-wise product, $\RMSNorm$ is RMS normalization, and $\mathrm{Mamba3}(\cdot)$ is the selective-scan block above. As a control we also expose a post-scan site that gates the block output, sharing the identical modulator and differing only in where the affine lands:
+\begin{equation}
+ x_t^{(\ell)} = x_t^{(\ell-1)} + \gamma^{(\ell)} \odot \mathrm{Mamba3}\!\left(\RMSNorm(x_t^{(\ell-1)})\right) + \beta^{(\ell)}. \tag{post-scan}
+\end{equation}
+The input-side scale folds into $W_\Delta/W_B/W_C$; the post-scan scale folds into the bias-free output projection $W_{\mathrm{out}}$; only the post-scan additive shift is non-absorbable (Section~\ref{sec:mechanism}).
+
+\paragraph{Diagnostics.} We gate every claim on activation diagnostics: $\filmG=\mathrm{mean}\,|\gamma-1|$ (deviation of the multiplicative gate from identity, zero at identity), its additive counterpart $\filmB=\mathrm{mean}\,|\beta|$ (which we report for the output-side shift in Section~\ref{sec:mechanism}), and the router entropy $\regH$ (whose uniform maximum is $\log R$). A positive generalization gap with an inert FiLM is an artifact, not a regime-conditioning effect.
 
 \section{RegimeFiLM is a decisive null}\label{sec:null}
-
-\paragraph{The result.}
-Across five objectives---Student-$t$ NLL (volatility/scale), volume
-NLL\footnote{The volume-NLL row re-evaluates the Student-$t$ checkpoints on the
-order-flow channel---a fifth \emph{objective}, not an independently trained run.}
-(order-flow), direction macro-F1, Polymarket settlement BCE, and a
-simulated-trading PnL objective---FiLM collapses to identity under joint
-training. In every family, on both datasets and on a money objective,
-$\mathrm{film}_g$ decays toward zero and the router entropy $\mathrm{reg}_H$ sits
-at its uniform maximum ($\log R$: $\log 4$ on FI-2010, $\log 8$ on Polymarket).
-Where a generalization gap reads positive (direction $+0.008$, settlement
-$+0.18$, by sign), FiLM is provably inert, the treatment is \emph{absolutely
-worse} in both regimes, and the gap is a high$-$low distributional artifact whose
-sign flips with head calibration---which is exactly why the activation
-diagnostics are load-bearing.
+\paragraph{The result.} Across five objectives (Student-$t$ NLL (volatility/scale), volume NLL\footnote{The volume-NLL row re-evaluates the Student-$t$ checkpoints on the order-flow channel---a fifth objective, not an independently trained run.} (order-flow), direction macro-F1, Polymarket settlement BCE, and a simulated-trading PnL objective) the FiLM parameters collapse to identity under joint training. In every family, on both datasets and on a money objective, $\filmG$ decays toward zero while the router entropy $\regH$ stays at its maximum ($\log R$: $\log 4$ on FI-2010, $\log 8$ on Polymarket). The router is therefore choosing regimes at random rather than learning meaningful assignments. Even when the test metrics look slightly better (direction $+0.008$, settlement $+0.18$, by sign), FiLM is inactive. The treated model is worse in both high and low regimes, and the apparent "gain" is an artifact of how the high--low split and head interact, not real regime conditioning.
 
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{lllrrl}
+\begin{tabular}{llllll}
 \toprule
-Family & Objective & Dataset & Gap (sign, unit) & $\mathrm{film}_g$ & Verdict \\
+Family & Objective & Dataset & Gap (sign, unit) & $\filmG$ & Verdict \\
 \midrule
-Volatility/scale & Student-$t$ NLL & FI-2010    & $\approx 0$ nats & $\approx$ ident.\ & \textsc{null} \\
-Order-flow volume & Volume NLL     & FI-2010    & $\approx 0$ nats & $\approx$ ident.\ & \textsc{null} \\
-Direction        & macro-F1        & FI-2010    & $+0.008$\dg\ F1 & $0.018$ & \textsc{null} \\
-Settlement       & BCE log-loss    & Polymarket & $+0.18$\dg\ nats  & $0.008$ & \textsc{null} \\
-\textbf{PnL}     & simulated trade & Polymarket & $-\$627$\dg   & $0.010$ & \textsc{null} \\
+Volatility/scale & Student-$t$ NLL & FI-2010 & $\approx 0$ nats & $\approx$ ident. & NULL \\
+Order-flow volume & Volume NLL & FI-2010 & $\approx 0$ nats & $\approx$ ident. & NULL \\
+Direction & macro-F1 & FI-2010 & $+0.008^{\dagger}$ F1 & $0.018$ & NULL \\
+Settlement & BCE log-loss & Polymarket & $+0.18^{\dagger}$ nats & $0.008$ & NULL \\
+PnL & simulated trade & Polymarket & $-\$627^{\dagger}$ & $0.010$ & NULL \\
 \bottomrule
 \end{tabular}
-\caption{RegimeFiLM is inert across every objective. $\mathrm{reg}_H$ equals its
-uniform maximum ($\log R$) in all rows. The ``Gap'' column is in each
-objective's \emph{own} units (reconstruction NLL nats, macro-F1 points, BCE
-log-loss nats, dollars), so its magnitude is not comparable across rows; only
-its sign and the inert $\mathrm{film}_g$ are.
-\textsuperscript{$\dagger$}\,a non-zero gap whose sign is a distributional
-artifact, not a FiLM effect (FiLM is inert, and the treatment is absolutely
-worse). The PnL row's $-\$627$ is the FiLM A/B gap on the PnL \emph{objective}
-(treatment$-$control), \emph{not} an economic total (cf.\ the $+\$5{,}147$
-settlement total in \S\ref{sec:substrate}).}
-\label{tab:film_null}
+\caption{RegimeFiLM is inert across every objective. $\regH$ equals its uniform maximum ($\log R$) in all rows. The ``Gap'' column is in each objective's own units, so its magnitude is not comparable across rows; only its sign and the inert $\filmG$ are. $^\dagger$ denotes a non-zero gap whose sign is a distributional artifact, not a FiLM effect. The PnL row's $-\$627$ is the FiLM A/B gap on the PnL objective (treatment--control), not an economic total. The direction row's $\filmG=0.018$ is the endpoint of the \emph{supervised} escalation on that head; the joint-trained value is $\approx0.004$ (Table~\ref{tab:crossdataset}), while the settlement ($0.008$) and PnL ($0.010$) rows are joint-trained.}
+\label{tab:objectives}
 \end{table}
 
-\paragraph{Strongest-null escalation.}
-We force FiLM active (raising the init so $\mathrm{film}_g = 0.150$ at step 0)
-and supervise the router \emph{directly} on the spot efficiency-ratio axis with
-the strongest settings (LR multiplier 50, supervision weight 30, decoupled
-router/FiLM, fed observation volatility). The modulation still decays
-monotonically toward identity---$\mathrm{film}_g: 0.150 \to 0.119 \to 0.100 \to
-0.074 \to 0.056 \to 0.043$, still falling---with $\mathrm{reg}_H = \log 8$
-throughout. The capacity to use the regime is present but goes unused: a frozen
-router probes to $0.92$ agreement on the \emph{volatility} bucket---the axis the
-representation encodes best---yet even there the modulation collapses, while on
-the \emph{predictability} axis this escalation actually supervises the regime
-decodes only weakly ($\approx 0.25$--$0.36$). The capacity that exists is thus
-not even the one joint training declines to use. This is the strongest
-form of the null: the optimizer drives the modulation to identity regardless of
-objective or forced supervision, for the weakly-decodable predictability and
-volatility regimes we study---a language-model control in \S\ref{sec:mechanism}
-maps where this boundary lies. (This forced-active run starts the gate at
-$\mathrm{film}_g = 0.150$; the cross-dataset escalation below uses a stronger
-$0.250$ initialization---a \emph{different} run, not a continuation.)
+\paragraph{Strongest-null escalation.} We force FiLM active (raising the init so $\filmG=0.150$ at step 0) and supervise the router directly on the spot efficiency-ratio axis with the strongest settings (LR multiplier 50, supervision weight 30, decoupled router/FiLM, fed observation volatility). The modulation still decays monotonically toward identity, $\filmG:0.150\to0.119\to0.100\to0.074\to0.056\to0.043$, and is still falling at the last step, with $\regH=\log 8$ throughout. The model has the capacity to use the regime but does not. On FI-2010, a router head trained alone on the volatility bucket reaches 0.92 agreement, a capacity check (a linear probe on the frozen features is weaker, Section~\ref{sec:mechanism}), yet the FiLM gate on that axis collapses back to identity. On the predictability axis the supervision is weaker ($\approx 0.25–0.36$ agreement), but the same collapse holds there too, reinforcing that the null is optimizer-driven rather than a consequence of missing regime information.
 
-\paragraph{Cross-dataset confirmation and the $\tau$-invariant signature.}
-We take the finding to two further LOB settings---the Kaggle high-frequency
-crypto spot book and FI-2010 re-examined under a \emph{predictability}-primary
-regime axis (efficiency-ratio window split; realized volatility
-secondary)---judged by forecasting metrics alone. Across FI-2010 and the Kaggle
-book (BTC, ETH, ADA at $1\,$s/$1\,$min/$5\,$min), the zero-initialized modulation
-never leaves identity: $\mathrm{film}_g \approx 0.004$ and $\mathrm{reg}_H =
-\log 4$ in every setting (Table~\ref{tab:film_null_xdata}), and with FiLM an exact
-paired control every held-out gap is statistically indistinguishable from zero
-(all 95\% CIs include 0). The split is non-degenerate---reference windows carry
-more structure on all three predictability measures (efficiency ratio,
-permutation entropy, Hurst), and DeepLOB attains $0.628$ macro-F1 on the FI-2010
-horizon-10 labels---so the null is a negative on forecastable data, not a
-no-signal artifact.
+\paragraph{Cross-dataset confirmation and the $\tau$-invariant signature.} We take the finding to two further LOB settings: the Kaggle high-frequency crypto spot book, and FI-2010 re-examined under a predictability-primary regime axis (efficiency-ratio window split, realized volatility secondary). Both are judged by forecasting metrics alone. Across FI-2010 and the Kaggle book (BTC, ETH, ADA at $1\,$s/$1\,$min/$5\,$min), the zero-initialized modulation never leaves identity: $\filmG\approx0.004$ and $\regH=\log4$ in every setting (per-asset values in Table~\ref{tab:crossdataset}, appendix). Because FiLM is an exact paired control, every held-out gap is statistically indistinguishable from zero (all 95\% CIs include 0). The split is informative, not trivial. The reference windows contain richer structure on all three predictability measures (efficiency ratio, permutation entropy, Hurst), and DeepLOB reaches 0.628 macro-F1 on FI-2010 horizon-10 labels. This shows our null result occurs on genuinely forecastable data rather than being a by-product of a no-signal setting.
 
-\begin{table}[t]
-\centering
-\small
-\begin{tabular}{llrrl}
-\toprule
-Dataset & Asset / resolution & Gap (pred / vol) & $\mathrm{film}_g$ & Verdict \\
-\midrule
-FI-2010      & event stream          & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
-Kaggle BTC   & $1\,$min      & $\approx 0$ / $\approx 0$ & $0.004$ & \textsc{null} \\
-Kaggle ETH   & $1\,$min      & $\approx 0$               & $0.005$ & \textsc{null} \\
-Kaggle ADA   & $1\,$min      & $\approx 0$               & $0.005$ & \textsc{null} \\
-Kaggle BTC   & $5\,$min      & $\approx 0$               & $0.005$ & \textsc{null} \\
-Kaggle BTC   & $1\,$s (slice)& $\approx 0$               & $0.005$ & \textsc{null} \\
-\bottomrule
-\end{tabular}
-\caption{Cross-dataset confirmation of the regime-FiLM null.
-$\mathrm{reg}_H = \log 4$ (uniform router) in every row. The null is dataset-,
-asset-, and resolution-independent.}
-\label{tab:film_null_xdata}
-\end{table}
+\paragraph{The collapse is optimizer-driven, not data-specific.} We run this as a forced-active, ER-supervised escalation, starting at $\filmG=0.250$. The modulation decays monotonically at every recorded step on both datasets ($0.250\to0.144$ Kaggle, $0.250\to0.147$ FI-2010), with $\regH\approx\log4$ throughout. The load-balance term is disabled here, so the uniform router is not a load-balance artifact. An exponential fit $a e^{-t/\tau}+c$ matches both trajectories with $R^2>0.999$ and near-identical parameters ($a\approx0.30$, $\tau\approx7000$ steps): a negative slope sustained to the last logged step, and a fitted asymptote at or below identity ($c\lesssim-0.05$). The modulation extrapolates toward identity, not to a positive plateau. Both markets show almost the same decay rate, which indicates the collapse is driven by the optimizer rather than by any particular dataset (Figure~\ref{fig:film_decay}). Repeating this escalation on the \emph{best-decoded} volatility bucket instead, the axis a frozen-router head fits to 0.92 on FI-2010, gives the same decay to 0.144 on both datasets ($\tau\approx6700$/$6610$, $R^2=0.9999$, $\regH\approx\log4$). Supervising the best-encoded axis does not rescue the modulation, so the collapse is gauge absorption, not an undecodable supervised target.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.68\linewidth]{figures/film_g_across_settings.pdf}
-\caption{\textbf{RegimeFiLM is inert across every A/B setting.} The
-jointly-trained treatment $\mathrm{film}_g = \mathrm{mean}\,|\gamma - 1|$ (bars)
-sits near $0.004$--$0.010$ on every dataset, asset, and resolution---FI-2010,
-Kaggle BTC/ETH/ADA at three bar widths, and the two Polymarket
-objectives---while a forced-active initialization starts at $0.150$ and the
-strongest-null escalation at $0.250$ (dashed lines). The router entropy sits at
-its uniform maximum $\log R$ throughout. The modulation never grows from its
-exact identity initialization.}
-\label{fig:film_across}
+\includegraphics[width=0.50\linewidth]{figures/film_g_across_settings.pdf}
+\caption{RegimeFiLM is inert across every A/B setting. The jointly-trained treatment $\filmG=\mathrm{mean}\,|\gamma-1|$ sits near 0.004--0.010 on every dataset, asset, and resolution, while a forced-active initialization starts at 0.150 and the strongest-null escalation at 0.250. The router entropy sits at its uniform maximum $\log R$ throughout.}
+\label{fig:film_bars}
 \end{figure}
-
-\paragraph{The collapse is optimizer-driven, not data-specific.}
-Run as a forced-active, ER-supervised escalation (starting at
-$\mathrm{film}_g = 0.250$), the modulation decays monotonically at every logged
-step on \emph{both} datasets ($0.250 \to 0.144$ Kaggle, $0.250 \to 0.147$
-FI-2010), with $\mathrm{reg}_H \approx \log 4$ throughout \textbf{even though the
-load-balance term is disabled}---so the uniform router is not a load-balance
-artifact. An exponential fit $a\,e^{-t/\tau} + c$ matches both trajectories at
-$R^2 > 0.999$ with near-identical parameters ($a \approx 0.30$,
-$\tau \approx 7000$ steps). The decay is monotone with a negative slope sustained
-to the last logged step---where $\mathrm{film}_g$ is still $\approx 0.15$ and
-falling---and the fitted asymptote lies at or below identity ($c \lesssim -0.05$,
-growing \emph{more} negative when the lower bound on $c$ is relaxed), so the
-modulation extrapolates toward identity rather than to a positive plateau---we rest
-the claim on the observed monotone decay, with exact identity as the extrapolated
-limit. That the decay rate is
-essentially \textbf{identical} across two very different markets points to the
-optimizer, not the data, as the driver (Figure~\ref{fig:escalation_decay}).
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.55\linewidth]{figures/film_g_escalation_decay.pdf}
-\caption{\textbf{Strongest-null test and its placement-invariance.} Forcing the
-modulation active ($\mathrm{film}_g = 0.250$ at step 0) and supervising the
-router directly on the efficiency-ratio bucket still decays $\mathrm{film}_g$
-monotonically toward identity on both datasets (top, solid), with
-$\mathrm{reg}_H$ pinned at its uniform maximum $\log 4$ throughout (bottom). The
-exponential fit gives $R^2 > 0.999$ with a dataset-invariant time constant
-$\tau \approx 7000$ and a negative fitted asymptote, so the modulation
-extrapolates toward identity rather than to a positive plateau. The
-\textbf{post-scan} (output-side) gate
-(top, dotted) decays along the same trajectory---its scale folds into the
-bias-free output projection just as the input-side scale folds into
-$W_\Delta/W_B/W_C$---so the null is invariant to where the affine is applied
-(\S\ref{sec:mechanism}).}
-\label{fig:escalation_decay}
+\includegraphics[width=0.48\linewidth]{figures/film_g_escalation_decay.pdf}
+\caption{Strongest-null test and its placement-invariance. Forcing the modulation active ($\filmG=0.250$ at step 0) and supervising the router directly on the efficiency-ratio bucket still decays $\filmG$ monotonically toward identity on both datasets, with $\regH$ pinned at its uniform maximum $\log4$ throughout. The post-scan gate decays along the same trajectory.}
+\label{fig:film_decay}
 \end{figure}
 
-\section{Mechanism: gauge absorption, and an overdetermined null}\label{sec:mechanism}
+\section{Mechanism: an overdetermined null}\label{sec:mechanism}
 
-\paragraph{Why identity is a free direction.}
-The decay has a simple mechanistic explanation that also \emph{bounds} the
-claim. The input-side modulation $\tilde{x} = \gamma \odot \hat{x} + \beta$ is
-applied to a block input that the very next operations re-project:
-$\Delta_t = \sigma(W_\Delta \tilde{x}_t)$, $\mathbf{B}_t = W_B \tilde{x}_t$,
-$\mathbf{C}_t = W_C \tilde{x}_t$. A constant channel-wise scale folds
-\textbf{exactly} into those projections as a right-multiplied diagonal
-$W_\bullet\,\mathrm{diag}(\gamma)$, and the shift folds into their biases, with
-\textbf{no change to the function the block computes}; the host weights can thus
-represent any constant $(\gamma, \beta)$ themselves. Identity is therefore a
-\textbf{gauge} direction---a flat, lossless valley the optimizer can slide
-along---so joint training folds the modulation into the host weights and returns
-$(\gamma, \beta)$ to $(\mathbf{1}, \mathbf{0})$, which is precisely the monotone
-decay we observe. Among the equivalent points on this flat orbit, weight decay on
-the bounded modulator selects the minimum-norm one ($\gamma{=}\mathbf{1}$,
-$\beta{=}\mathbf{0}$, its zero-init) while the host weights absorb the scale at no
-loss cost---so the descent to identity is driven by weight decay on the modulator,
-not by the objective, a prediction the weight-decay control below confirms.
-The folding identity is exact for the \emph{constant} part of
-the affine, whereas the trained modulator emits an \emph{input-dependent}
-$(\gamma,\beta)$; the causal order that closes the argument is therefore that on
-a weakly-decodable regime the supervised router collapses to uniform
-($\mathrm{reg}_H = \log R$), the modulation reduces to its constant part, and
-weight decay folds \emph{that} part to identity. The live, input-dependent
-mechanism reduces to the gauge one precisely when the regime is hard to
-decode---which the language-model control below confirms by exhibiting the
-opposite outcome when it is not.
+\paragraph{Why identity is a free direction.} The input-side modulation
+$\tilde{x}_t = \gamma \odot \hat{x}_t + \beta$ is applied immediately before the
+scan projections $\Delta_t = \sigma(W_\Delta \tilde{x}_t)$,
+$B_t = W_B \tilde{x}_t$, $C_t = W_C \tilde{x}_t$. Equivalently, substituting the FiLM transformation into the scan gives
+$\Delta_t=\sigma\!\left(W_\Delta(\gamma\odot\hat{x}_t+\beta)\right)$,
+with analogous expressions for \(B_t\) and \(C_t\). Thus the
+conditioning acts directly through the scan projections themselves.
+Because these projections are linear, a constant channel-wise affine transformation can be absorbed into their parameters. For any scan projection \(W\),
 
-This sharpens the result two ways. First, it explains the \textbf{dataset-invariant
-decay constant} (Figure~\ref{fig:escalation_decay}): the absorption direction is
-a property of the block parameterization, not of the data. Second, it
-\textbf{scopes} the null: the claim is that \emph{input-affine} conditioning of a
-selective scan is gauge-absorbable and will not persist under joint
-training---not that regime conditioning is impossible in principle. Mechanisms
-outside this gauge---modulating $W_\Delta/W_B/W_C$ directly \emph{inside} the
-kernel, or conditioning a quantity inserted \emph{between} the block's bounding
-projections---are not trivially absorbable and are the natural next test. Our
-contribution is the negative that matters in practice: the most kernel-friendly,
-drop-in form of the idea, the one that needs no change to the fused CUDA kernel,
-is exactly the form the optimizer can and does undo.
+\begin{equation}
+W\tilde{x}_t
+=
+W(\gamma \odot \hat{x}_t + \beta)
+=
+W\,\mathrm{diag}(\gamma)\,\hat{x}_t + W\beta
+=
+W'\hat{x}_t + b',
+\end{equation}
 
-\paragraph{An output-side placement: the null is overdetermined.}
-The gauge argument names an obvious next test---gating \emph{after} the
-scan---so we run it, under the \emph{identical} forced-active, ER-supervised
-escalation, changing only where the learned $(\gamma, \beta)$ are applied.
-Instead of the input-side $\tilde{x} = \gamma \odot \hat{x} + \beta$, we gate the
-block output $y' = \gamma \odot y + \beta$. This placement does \textbf{not}
-escape absorption, and the reason is instructive. Each Mamba-3 block ends in a
-\textbf{bias-free} linear output projection $y = W_{\text{out}}\,h$, so a
-channel-wise output scale folds exactly into it,
-$\gamma \odot (W_{\text{out}} h) = (\mathrm{diag}(\gamma)\,W_{\text{out}})\,h$---the
-same gauge move as the input side, now on the block's \emph{other} face. The
-additive shift $\beta$ is different: with no output bias to absorb it and a
-nonlinear RMSNorm separating it from the next block's projections, $\beta$ is
-genuinely \textbf{non-absorbable}.
+where $W' = W\,\mathrm{diag}(\gamma)$ and $b' = W\beta$.
+Thus the scale $W'$ folds exactly into the downstream projection parameters, and the same argument applies to \(W_\Delta\), \(W_B\), and \(W_C\). The shift term $b'=W\beta$ can be absorbed only into a trainable bias. In the Mamba3 blocks used here, the $\Delta$-path alone carries one: a trainable $dt$ bias inside the softplus (omitted from the simplified projections above), which absorbs the shift's $\Delta$-component exactly. The $\mathbf{B}/\mathbf{C}$ components are blocked by per-state RMSNorms interposed between the projections and the kernel (a post-norm bias cannot absorb a pre-norm offset), and the gate and scan-input paths carry no bias at all. The shift as a whole is therefore not absorbed; it decays as an unrewarded direction under reconstruction dominance, exactly as the output-side shift does below. Multiple FiLM parameterizations correspond to identical scan dynamics, so the host projections can represent the same constant transformation, which makes identity an optimization-invariant direction. During joint training the projections take over the transformation the modulator previously carried. This lets \((\gamma,\beta)\) move toward \((1,0)\) without materially changing the function the block computes, which is the monotone decay we observe: weight decay drives the modulator toward its identity initialization while the host weights absorb the transformation at negligible loss cost. The descent is therefore driven by regularization on the modulator rather than the task objective, a prediction the weight-decay control below confirms.
+The absorption is exact only for the constant component of the affine. On a weakly decodable regime the supervised router collapses toward a uniform distribution \((\regH\to\log R)\), which makes the modulation increasingly constant. In that limit the conditioning is progressively absorbed into the scan projections, and weight decay drives the remainder to identity.
 
-The escalation resolves both at once. Under forced activation and direct ER
-supervision, $\mathrm{film}_g$ \emph{and} $\mathrm{film}_b$ decay monotonically
-and in lockstep on both datasets ($\mathrm{film}_g: 0.250 \to 0.147$ FI-2010,
-$0.250 \to 0.143$ Kaggle; $\mathrm{film}_b$ tracks it within $0.005$), with
-$\mathrm{reg}_H \approx \log 4$ throughout. The exponential fit gives the
-\textbf{same} dataset-invariant signature as the input-side gate---$a \approx
-0.30$, $\tau \approx 7065$ (FI-2010) / $6598$ (Kaggle), a negative fitted
-asymptote ($c \lesssim -0.05$, likewise below identity with the bound relaxed),
-$R^2 > 0.999$---so the same monotone decay toward identity holds here too.
+This is the theory behind the dataset-invariant decay constant. The absorption direction is a property of the block parameterization, not of the data. This does not mean, however, that regime conditioning is impossible in principle. Mechanisms outside this gauge may not be trivially absorbable: modulating $W_\Delta/W_B/W_C$ directly inside the kernel, for instance, or conditioning a quantity inserted between the block's bounding projections. We examine this boundary empirically later in the section.
 
-The null is therefore \textbf{overdetermined}: no component is left with a
-surviving direction, by two routes that share a single driver---weight decay
-acting on a loss that rewards neither.
-\begin{itemize}[nosep,leftmargin=1.4em]
-\item \textbf{Gauge absorption} disposes of every direction the host weights can
-  represent---the multiplicative scale on \emph{either} face of the
-  block---which is why the decay constant is invariant to placement.
-\item \textbf{Reconstruction dominance} disposes of the one direction they
-  cannot: the non-absorbable shift $\beta$, returned to identity at the same rate
-  purely because it earns nothing under the reconstruction objective.
-\end{itemize}
-The two are thus not independent causes so much as two faces of the same
-unrewarded-direction-under-weight-decay mechanism---an absorbable scale and a
-non-absorbable but unrewarded shift---which is why $\beta$ decays in lockstep
-with $\gamma$ at a shared rate rather than on its own schedule.
-A modulation escaping both would have to act \emph{between} the block's bounding
-projections---modulating $W_\Delta/W_B/W_C$ within the fused selective-scan
-kernel---which is precisely the kernel-level change outside our hardware envelope
-(\S\ref{sec:substrate}). We thus delineate the boundary not as a parameterization
-that survives training, but as the location---inside the kernel---a surviving
-modulation would have to occupy.
+\paragraph{An output-side placement: the null is overdetermined.} The gauge argument names an obvious next test, gating after the scan. We implement it under the identical forced-active, ER-supervised escalation, changing only where the learned $(\gamma,\beta)$ are applied. Instead of the input-side $\tilde{x}=\gamma\odot\hat{x}+\beta$, we gate the block output $y'=\gamma\odot y+\beta$. This placement does not escape absorption, just as the criterion predicts. Each Mamba-3 block ends in a bias-free output projection $y=W_{\mathrm{out}}h$, so the output scale folds into it: $\gamma\odot(W_{\mathrm{out}}h)=(\diag(\gamma)W_{\mathrm{out}})h$. This is the same gauge move, now on the block's other face. The shift $\beta$ is different: with no output bias and a nonlinear RMSNorm before the next block's projections, $\beta$ is genuinely non-absorbable.
 
-\paragraph{The boundary, demonstrated.}
-We make this concrete at toy scale on the pure-PyTorch \emph{reference} scan (the
-slow path \texttt{mamba\_ssm} ships, which the fused-kernel hardware limit does
-not touch). An input-affine modulation folds into the host projections to
-floating-point precision (max output deviation $1.2\times10^{-6}$) and
-\textbf{decays to identity} under joint training with weight decay
-($\mathrm{film}_g: 0.086 \to 0.010$), while the \emph{same} modulation applied to
-the projected $\Delta/\mathbf{B}/\mathbf{C}$ inside the scan is provably
-non-absorbable (best-fit fold residual $1.3\times10^{-2}$, $\sim 10^4\times$
-larger) and \textbf{persists} ($\mathrm{film}_g: 0.093 \to 0.175$, seeds 0--3).
-A weight-decay control isolates the driver: with weight decay removed the
-full-model escalation no longer decays---the time constant blows up from
-$\tau \approx 6685$ ($R^2 = 0.9999$) to $\tau \approx 3\times10^5$
-($R^2 = 0.48$, no clean decay)---and the toy reproduces the same flattening
-(input-affine $0.086 \to 0.342$ with weight decay off vs.\ $0.086 \to 0.010$
-with it on). The gauge-direction decay is therefore \textbf{driven by weight
-decay over a flat loss}, not by the objective. The boundary is thus demonstrated,
-not asserted: the in-kernel placement is non-absorbable and survives the very
-training that drives the affine form to identity.
+The escalation resolves both at once. Under forced activation and direct ER supervision, $\filmG$ and $\filmB$ decay monotonically and in lockstep on both datasets ($\filmG:0.250\to0.146$ FI-2010, $0.250\to0.143$ Kaggle; $\filmB$ tracks it within 0.005), with $\regH\approx\log4$ throughout. The exponential fit gives the same dataset-invariant signature as the input-side gate---$a\approx0.30$, $\tau\approx7065$ (FI-2010) / $6598$ (Kaggle), a negative fitted asymptote ($c\lesssim-0.05$), $R^2>0.999$---so the same monotone decay toward identity holds here too.
 
-\paragraph{The regime is decodable yet unused.}
-Two probes localize the failure. The jointly-supervised router is uniform
-\emph{per step} (per-sample entropy $\approx \log 4$, near-chance ER agreement
-$0.25$--$0.31$): supervision does not even make it regime-discriminative. A frozen
-linear probe decodes the predictability bucket only weakly ($0.33$--$0.36$ vs.\
-$0.25$) and volatility better ($0.43$--$0.47$)---yet the volatility-axis gap is
-\emph{also} null. So even on the best-encoded axis, and even with the regime
-supplied by supervision, the in-scan modulation collapses to identity.
+The null is therefore overdetermined: no component keeps a surviving direction. Two routes rule them out, and both share a single driver: weight decay acting on a loss that rewards neither. Gauge absorption removes every direction the host weights can represent, namely the multiplicative scale on either face of the block. This is why the decay constant is invariant to placement. Reconstruction dominance removes the one direction the host weights cannot, the non-absorbable shift $\beta$. Because $\beta$ earns nothing under the objective, it returns to identity at the same rate, decaying in lockstep with $\gamma$. Escaping both would require a modulation that acts between the block's bounding projections: one that modulates $W_\Delta/W_B/W_C$ within the fused selective-scan kernel. That is the kernel-level change beyond our hardware envelope.
 
-\paragraph{Language-model control: the null is bounded by regime decodability.}
-Because the collapse is optimizer-driven, the natural worry is that it is
-nonetheless specific to LOB data; a minimal language-model control maps where the
-boundary lies. We train a 2-layer char-level Mamba LM (built directly on
-\texttt{mamba\_ssm} blocks) on a two-domain corpus---English prose vs.\ Python
-source---with the per-position regime inferred by a context-aware router
-supervised on the domain and the \emph{same} input-affine FiLM gating the second
-block. Here the regime is \emph{strongly} decodable: the router reaches
-$\sim 0.95$ domain accuracy, and the FiLM does \textbf{not} collapse---$\mathrm{film}_g$
-rises from $0.11$ to $0.52$ and plateaus, the opposite of the LOB decay. This
-sharpens the mechanism rather than counters it. Gauge absorption removes the
-\emph{constant} component of the affine unconditionally (the folding test above);
-the \emph{input-dependent} component survives only when the regime is decodable
-enough to be worth encoding. In every LOB setting the predictability/volatility
-regime is weakly decodable and the router collapses to uniform
-($\mathrm{reg}_H = \log R$), so the modulation reduces to its gauge-absorbable
-constant part and decays; a strongly-decodable regime engages it. We therefore
-scope the claim accordingly: the optimizer-driven collapse holds for
-\textbf{weakly-decodable} regime conditioning of selective scans---the
-predictability and volatility axes a financial world model actually faces---not
-for all conditioning. (Single-seed toy; the router$\Rightarrow$persistence
-outcome is clear, the plateau value is not load-bearing.)
+\paragraph{The boundary, demonstrated.} We make this concrete at toy scale on the pure-PyTorch reference scan (the slow path \texttt{mamba\_ssm} ships, which the fused-kernel hardware limit does not touch). An input-affine modulation folds into the host projections to floating-point precision (max output deviation $1.2\times10^{-6}$) and decays to identity under joint training with weight decay ($\filmG:0.086\to0.010$). The same modulation applied to the projected $\Delta/\mathbf{B}/\mathbf{C}$ inside the scan is provably non-absorbable (best-fit fold residual $1.3\times10^{-2}$, $\sim10^4\times$ larger) and persists ($\filmG:0.093\to0.175$, seeds 0--3). A weight-decay control isolates the driver. With weight decay removed, the full-model escalation no longer decays: the time constant blows up from $\tau\approx6685$ ($R^2=0.9999$) to $\tau\approx3\times10^5$ ($R^2=0.48$, no clean decay), and the toy reproduces the same flattening (input-affine $0.086\to0.342$ with weight decay off vs. $0.086\to0.010$ with it on). The gauge-direction decay is therefore driven by weight decay over a flat loss, not by the objective.
 
-\paragraph{The gap is real, and FiLM closes none of it.}
-The null is not an absence of anything to fix: on the Kaggle book reconstruction
-NLL is $+0.105$ worse on high- than low-volatility windows in \emph{both} arms, yet
-RegimeFiLM narrows the degradation by only $\sim0.001$ ($\sim1\%$) while
-$\mathrm{film}_g$ is inert---it fails to engage a gap that is plainly present.
+\paragraph{The regime is decodable yet unused.} Two probes localize the failure. The jointly-supervised router is uniform per step (per-sample entropy $\approx\log4$, near-chance ER agreement 0.25--0.31): supervision does not even make it regime-discriminative. A frozen linear probe decodes the predictability bucket only weakly (0.33--0.36 vs. 0.25) and volatility better (0.43--0.47)---yet the volatility-axis gap is also null. So even on the best-encoded axis, and even with the regime supplied by supervision, the in-scan modulation collapses to identity.
+
+\paragraph{Language-model control: the null is bounded by regime decodability.} Because the collapse is optimizer-driven, the natural worry is that it is nonetheless specific to LOB data. A minimal language-model control maps where the boundary lies. We train a 2-layer char-level Mamba LM (built directly on \texttt{mamba\_ssm} blocks) on a two-domain corpus of English prose versus Python source. A context-aware router, supervised on the domain, infers the per-position regime, and the same input-affine FiLM gates the second block. Here the regime is strongly decodable: the router reaches $\ge0.9$ domain accuracy ($0.98$ at peak, $0.91$ at the last logged step), and the FiLM does not collapse. Instead $\filmG$ rises from 0.11 to 0.52 and plateaus, the opposite of the LOB decay. This sharpens the mechanism rather than counters it. Gauge absorption removes the constant component of the affine unconditionally, while the input-dependent component survives only when the regime is decodable enough to be worth encoding. We therefore scope the claim accordingly: the optimizer-driven collapse holds for weakly-decodable regime conditioning of selective scans (the predictability and volatility axes a financial world model actually faces), not for all conditioning. This is a single-seed toy; the router-to-persistence outcome is clear, but the plateau value is not load-bearing.
+
+\paragraph{The criterion, distilled.} The mechanism reduces to one structural test.
+\begin{center}
+\fbox{\parbox{\dimexpr\linewidth-2\fboxsep-2\fboxrule\relax}{\small
+\textbf{Proposition (absorbability criterion).} Let a channel-wise affine $(\gamma,\beta)$ act on an activation immediately consumed by a learned linear map $A$ (optional bias $b$). The \emph{scale} is always gauge, $A(\gamma\odot x)=(A\diag(\gamma))\,x$, absorbed into $A$ with or without a bias; the \emph{shift} is gauge only when $A$ carries a trainable bias and no nonlinearity intervenes, $A(x+\beta)+b=Ax+(b+A\beta)$. A mechanism that instead modifies the in-kernel scan parameters $W_\Delta,W_B,W_C$---or any quantity strictly between a block's bounding projections---is \emph{not} gauge-absorbable. \textit{Corollary:} in the Mamba3 configuration used here, input- and output-side FiLM share the same split: the scale is gauge ($W_{\{\Delta,B,C\}}\diag(\gamma)$ or $\diag(\gamma)W_{\mathrm{out}}$), while the shift is non-absorbable as a whole (only its $\Delta$-component can fold, into the trainable $dt$ bias) and decays because reconstruction dominance removes any direction the loss does not reward.%
+}}
+\end{center}
 
 \section{Demonstration substrate and architecture-agnosticism}\label{sec:substrate}
+The mechanism above is the subject. The financial machinery is the substrate that let us probe it on the three genuinely different distributions of Section~\ref{sec:background}. We compress it here to what the null and its agnosticism check require.
 
-The mechanism above is the subject; the financial machinery is the \textbf{substrate}
-that let us probe it on three genuinely different distributions, compressed to what
-the null and its agnosticism check require.
-
-\paragraph{Substrate.}
-We build a Mamba-3 world model for LOB microstructure in the DreamerV3/Drama
-lineage: a Transformer-over-depth encoder feeds a stack of Mamba-3 SISO blocks
-driving a categorical-latent dynamics prior under a reconstruction objective,
-with only the settlement and book-relative-EV heads bearing on any result below
-(the rest of the machinery is off the spine). For Polymarket we expose the
-\textbf{spot path} that \emph{defines} settlement (the underlying Chainlink close
-vs.\ open reference) plus a time-to-expiry clock and TTE-weighted target---the
-causal signal of which the settlement label is a function.
-
-\paragraph{Backbone ablation (no backbone dominates).}
-Under matched parameter budgets ($\sim 10.3$M; actuals in
-Table~\ref{tab:backbone}), seed 0, 3000 steps, on FI-2010 and the Kaggle BTC spot
-book, we report held-out Student-$t$ reconstruction NLL. The result is a genuine
-ambiguity, not a clean win: \textbf{no backbone leads on both datasets}, and a
-pre-norm Transformer matched to the Mamba-3 block ($9.61$M) is likewise competitive
-but non-dominant ($-0.5041$ / $0.0224$)---not an artifact of an under-tuned
-post-norm baseline. This is exactly what a result about how selective scans
-\emph{train}, rather than which one is best, should predict.
+\paragraph{Substrate.} We build a Mamba-3 world model for LOB microstructure in the DreamerV3/Drama lineage: a Transformer-over-depth encoder, a stack of Mamba-3 SISO blocks, and a categorical-latent dynamics prior under a reconstruction objective. Of these, only the settlement and book-relative-EV heads bear on any result below. For Polymarket we expose the spot path that defines settlement (Chainlink close vs.\ open), plus a time-to-expiry clock and TTE-weighted target.
 
 \begin{table}[t]
 \centering
@@ -611,152 +207,71 @@ post-norm baseline. This is exactly what a result about how selective scans
 \toprule
 Backbone & Params & FI-2010 recon NLL & Kaggle recon NLL \\
 \midrule
-Mamba-1                 & $11.45$M & $\mathbf{-0.5403}$ & $0.0241$ \\
-Mamba-2                 & $10.20$M & $-0.5309$ & $\mathbf{-0.0213}$ \\
-Mamba-3 SISO            & $10.30$M & $-0.5346$ & $0.0207$ \\
-Transformer (post-norm) & $9.90$M  & $-0.5175$ & $0.0191$ \\
-Transformer (pre-norm)  & $9.61$M  & $-0.5041$ & $0.0224$ \\
+Mamba-1 & 11.45M & $-0.5403$ & 0.0241 \\
+Mamba-2 & 10.20M & $-0.5309$ & $-0.0213$ \\
+Mamba-3 SISO & 10.30M & $-0.5346$ & 0.0207 \\
+Transformer (post-norm) & 9.90M & $-0.5175$ & 0.0191 \\
+Transformer (pre-norm) & 9.61M & $-0.5041$ & 0.0224 \\
 \bottomrule
 \end{tabular}
-\caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower
-is better). No backbone wins both datasets---Mamba-1 leads on FI-2010, Mamba-2
-on Kaggle---so the choice of sequence model is not the operative variable.}
-\label{tab:backbone}
+\caption{Matched-parameter backbone ablation (held-out reconstruction NLL, lower is better). No backbone wins both datasets---Mamba-1 leads on FI-2010, Mamba-2 on Kaggle---so the choice of sequence model is not the operative variable.}
+\label{tab:backbones}
 \end{table}
 
-We run Mamba-3 SISO throughout: the MIMO kernel's dynamic shared-memory footprint
-exceeds our GPU cap at every warp-valid (rank, chunk) configuration, so MIMO is
-outside our hardware envelope---the same kernel-level region the null's escape
-route would occupy (\S\ref{sec:mechanism}).
+\paragraph{Backbone ablation.} Under matched budgets ($\sim10.3$M, Table~\ref{tab:backbones}), seed 0, 3000 steps on FI-2010 and the Kaggle BTC book, the held-out Student-$t$ reconstruction NLL is a genuine ambiguity. No backbone leads on both datasets, and a pre-norm Transformer matched to the Mamba-3 block is competitive but non-dominant, not an under-tuned-baseline artifact. This is exactly what a result about how selective scans train, rather than which one is best, should predict.
 
-\paragraph{The economic coda is architecture-independent (deflated).}
-Given the spot path, the model's directional settlement probability---traded by a
-selective-participation strategy that bets only when a train-frozen predictability
-(efficiency-ratio) gate fires, summarized by a \textbf{market-block} bootstrap
-(whole markets resampled, so correlated trades count once)---is a survivable edge
-in the regime the gate targets ($\mathrm{P(profit)} \approx 1.0$, 95\% CI
-$[+\$2{,}445,\,+\$7{,}747]$ over $127$ markets). Crucially the edge is
-\textbf{architecture-independent}: a logistic regression on the \emph{same}
-spot-conditioned features reproduces and exceeds it ($+\$6{,}914$ vs.\ the
-settlement head's $+\$5{,}147$). Binary settlement is near-deterministic in the spot
-move since open, so a linear readout captures it as cleanly as the sequence
-model---the operative variable is the features and the gate, \textbf{not} the
-backbone, confirming the null's lesson from the other side. Only the predictability gate is confirmatory (threshold frozen before
-held-out evaluation); the depth-band/early-market cuts, the direct tradeable-EV
-head that makes the marginal low-predictability regime robust, and the
-recorded-vintage reliability diagnostic are deferred to the long-form version.
+We run Mamba-3 SISO throughout. The MIMO kernel exceeds our GPU's shared-memory cap at every warp-valid (rank, chunk) configuration, which is the same kernel-level region the null's escape route would occupy.
 
-\paragraph{Limitations.}
-The \emph{null} is multi-setting and multi-seed; the \emph{constructive} claims that
-bound it are smaller. The optimizer attribution rests on a $\tau$ matched across two
-datasets plus a within-model weight-decay ablation; the escalation fits are seed-0
-(the seeds-0--3 in-kernel toy supplies the multi-seed check); the language-model
-control is a single-seed 2-layer toy; the in-kernel ``survives'' result is at toy
-scale; and the substrate is finance-only, so the gauge argument's
-architecture-universality is algebraic, not demonstrated at FM scale. None of these
-bears on the null.
+\paragraph{The economic coda is architecture-independent.} Given the spot path, the model emits a directional settlement probability, traded only when a train-frozen efficiency-ratio gate fires. We summarize it with a market-block bootstrap (whole markets resampled, so correlated trades count once). Where the gate targets, this is a survivable edge ($\mathrm{P(profit)}\approx1.0$, 95\% CI [$+\$2{,}445$, $+\$7{,}747$] over its 127 traded markets). The edge is architecture-independent. On the identical 645-market held-out set, a logistic regression on the same spot-conditioned features matches and exceeds it ($+\$6{,}914$ vs.\ the settlement head's $+\$5{,}147$), because binary settlement is near-deterministic in the spot move since open. The operative variable is therefore the features and the gate, not the backbone. Depth-band cuts, the tradeable-EV head, and the reliability diagnostic are deferred to the long-form version.
 
-\section{Conclusion}\label{sec:conclusion}
+\paragraph{Limitations.} The null is multi-setting and multi-seed; the constructive claims that bound it are smaller. The optimizer attribution rests on a $\tau$ matched across two datasets plus a within-model weight-decay ablation. The escalation fits are seed-0, with the seeds-0--3 in-kernel toy supplying the multi-seed check. The language-model control and the in-kernel ``survives'' result are single-seed and at toy scale. The substrate is finance-only, so the gauge argument's architecture-universality is algebraic, not demonstrated at FM scale. None of this bears on the null itself.
 
-We studied the most natural, kernel-friendly way to make a Mamba backbone
-regime-aware---an input-affine FiLM on each block---and found a \textbf{decisive
-training-dynamics null}: the modulation collapses to identity under joint training
-and cannot be forced active even by direct supervision. The cause is a \textbf{gauge
-symmetry}---the affine folds losslessly into the block's own $W_\Delta/W_B/W_C$
-projections, so the optimizer slides it back to identity ($\tau \approx 7000$,
-$R^2 > 0.999$); an \textbf{output-side placement makes the null overdetermined},
-leaving the only escape route \emph{inside} the fused kernel. The upshot is
-architecture-universal: only a placement \emph{between} a block's bounding
-projections---inside the kernel---can persist.
+\section{Conclusion}
+The most natural, kernel-friendly way to make a Mamba backbone regime-aware is an input-affine FiLM on each block. It is a decisive training-dynamics null: the modulation collapses to identity under joint training and cannot be forced active even by direct supervision. The cause is a gauge symmetry. The affine folds losslessly into the block's own $W_\Delta/W_B/W_C$ projections, so the optimizer slides it back to identity ($\tau\approx7000$, $R^2>0.999$), and an output-side placement makes the null overdetermined. The upshot is architecture-general by the algebra of the fold: only a placement between a block's bounding projections, inside the fused kernel, can persist.
+
+\section*{Use of Large Language Models}
+In keeping with the COLM 2026 policy on disclosure of LLM use, we report that a large language model was used while preparing this paper. It assisted in drafting and editing the prose, including the phrasing of the reference list, and was used to assist with evaluation.
 
 \bibliographystyle{colm2026_conference}
 \begin{thebibliography}{99}
-
-\bibitem[Adams \& MacKay(2007)]{adams2007bayesian}
-R.~P. Adams and D.~J.~C. MacKay.
-\newblock Bayesian online changepoint detection.
-\newblock \emph{arXiv preprint arXiv:0710.3742}, 2007.
-
-\bibitem[Dao \& Gu(2024)]{dao2024mamba2}
-T.~Dao and A.~Gu.
-\newblock Transformers are {SSMs}: Generalized models and efficient algorithms through structured state space duality.
-\newblock In \emph{Proc.\ ICML}, 2024.
-
-\bibitem[Fedus et~al.(2022)]{fedus2022switch}
-W.~Fedus, B.~Zoph, and N.~Shazeer.
-\newblock Switch {T}ransformers: Scaling to trillion parameter models with simple and efficient sparsity.
-\newblock \emph{JMLR}, 23:1--39, 2022.
-
-\bibitem[Gu et~al.(2022)]{gu2022efficiently}
-A.~Gu, K.~Goel, and C.~R\'e.
-\newblock Efficiently modeling long sequences with structured state spaces.
-\newblock In \emph{Proc.\ ICLR}, 2022.
-
-\bibitem[Gu \& Dao(2024)]{gu2024mamba}
-A.~Gu and T.~Dao.
-\newblock Mamba: Linear-time sequence modeling with selective state spaces.
-\newblock In \emph{Proc.\ COLM}, 2024.
-
-\bibitem[Hafner et~al.(2023)]{hafner2023dreamerv3}
-D.~Hafner, J.~Pasukonis, J.~Ba, and T.~Lillicrap.
-\newblock Mastering diverse domains through world models.
-\newblock \emph{arXiv preprint arXiv:2301.04104}, 2023.
-
-\bibitem[Hamilton(1989)]{hamilton1989new}
-J.~D. Hamilton.
-\newblock A new approach to the economic analysis of nonstationary time series and the business cycle.
-\newblock \emph{Econometrica}, 57(2):357--384, 1989.
-
-\bibitem[Hoffer et~al.(2018)]{hoffer2018norm}
-E.~Hoffer, R.~Banner, I.~Golan, and D.~Soudry.
-\newblock Norm matters: Efficient and accurate normalization schemes in deep networks.
-\newblock In \emph{Proc.\ NeurIPS}, 2018 (arXiv:1803.01814).
-
-\bibitem[Lahoti et~al.(2026)]{lahoti2026mamba3}
-A.~Lahoti, K.~Y.~Li, B.~Chen, C.~Wang, A.~Bick, J.~Z.~Kolter, T.~Dao, and A.~Gu.
-\newblock Mamba-3: Improved sequence modeling using state space principles.
-\newblock In \emph{Proc.\ ICLR}, 2026 (arXiv:2603.15569).
-
-\bibitem[Li \& Arora(2020)]{li2020exp}
-Z.~Li and S.~Arora.
-\newblock An exponential learning rate schedule for deep learning.
-\newblock In \emph{Proc.\ ICLR}, 2020 (arXiv:1910.07454).
-
-\bibitem[Ntakaris et~al.(2018)]{ntakaris2018benchmark}
-A.~Ntakaris, M.~Magris, J.~Kanniainen, and M.~Gabbouj.
-\newblock Benchmark dataset for mid-price forecasting of limit order book data with machine learning methods.
-\newblock \emph{Journal of Forecasting}, 37(8):852--866, 2018.
-
-\bibitem[Perez et~al.(2018)]{perez2018film}
-E.~Perez, F.~Strub, H.~de~Vries, V.~Dumoulin, and A.~Courville.
-\newblock {FiLM}: Visual reasoning with a general conditioning layer.
-\newblock In \emph{Proc.\ AAAI}, 2018.
-
-\bibitem[Prata et~al.(2023)]{prata2023lobcast}
-M.~Prata, G.~Masi, L.~Berti, V.~Arrigoni, A.~Coletta, I.~Cannistraci, S.~Vyetrenko, P.~Velardi, and N.~Bartolini.
-\newblock {LOB}-based deep learning models for stock price trend prediction: A benchmark study.
-\newblock \emph{arXiv preprint arXiv:2308.01915}, 2023.
-
-\bibitem[Smith et~al.(2023)]{smith2023s5}
-J.~T.~H. Smith, A.~Warrington, and S.~W. Linderman.
-\newblock Simplified state space layers for sequence modeling.
-\newblock In \emph{Proc.\ ICLR}, 2023.
-
-\bibitem[van Laarhoven(2017)]{vanlaarhoven2017l2}
-T.~van Laarhoven.
-\newblock {L2} regularization versus batch and weight normalization.
-\newblock \emph{arXiv preprint arXiv:1706.05350}, 2017.
-
-\bibitem[Wang et~al.(2024)]{wang2024drama}
-W.~Wang et~al.
-\newblock Drama: Mamba-enabled model-based reinforcement learning is sample and parameter efficient.
-\newblock In \emph{Proc.\ ICLR}, 2025 (arXiv:2410.08893, 2024).
-
-\bibitem[Zhang et~al.(2019)]{zhang2019deeplob}
-Z.~Zhang, S.~Zohren, and S.~Roberts.
-\newblock {DeepLOB}: Deep convolutional neural networks for limit order books.
-\newblock \emph{IEEE Transactions on Signal Processing}, 67(11):3001--3012, 2019.
-
+\bibitem[Adams and MacKay(2007)]{adams2007bayesian} R. P. Adams and D. J. C. MacKay. Bayesian online changepoint detection. \emph{arXiv preprint arXiv:0710.3742}, 2007.
+\bibitem[Dao and Gu(2024)]{dao2024transformers} T. Dao and A. Gu. Transformers are SSMs: Generalized models and efficient algorithms through structured state space duality. In \emph{Proc. ICML}, 2024.
+\bibitem[Fedus et al.(2022)]{fedus2022switch} W. Fedus, B. Zoph, and N. Shazeer. Switch Transformers: Scaling to trillion parameter models with simple and efficient sparsity. \emph{JMLR}, 23:1--39, 2022.
+\bibitem[Gu et al.(2022)]{gu2022efficiently} A. Gu, K. Goel, and C. Re. Efficiently modeling long sequences with structured state spaces. In \emph{Proc. ICLR}, 2022.
+\bibitem[Gu and Dao(2024)]{gu2024mamba} A. Gu and T. Dao. Mamba: Linear-time sequence modeling with selective state spaces. In \emph{Proc. COLM}, 2024.
+\bibitem[Hafner et al.(2023)]{hafner2023dreamerv3} D. Hafner, J. Pasukonis, J. Ba, and T. Lillicrap. Mastering diverse domains through world models. \emph{arXiv preprint arXiv:2301.04104}, 2023.
+\bibitem[Hamilton(1989)]{hamilton1989new} J. D. Hamilton. A new approach to the economic analysis of nonstationary time series and the business cycle. \emph{Econometrica}, 57(2):357--384, 1989.
+\bibitem[Hoffer et al.(2018)]{hoffer2018norm} E. Hoffer, R. Banner, I. Golan, and D. Soudry. Norm matters: Efficient and accurate normalization schemes in deep networks. In \emph{Proc. NeurIPS}, 2018.
+\bibitem[Lahoti et al.(2026)]{lahoti2026mamba3} A. Lahoti, K. Y. Li, B. Chen, C. Wang, A. Bick, J. Z. Kolter, T. Dao, and A. Gu. Mamba-3: Improved sequence modeling using state space principles. In \emph{Proc. ICLR}, 2026.
+\bibitem[Li and Arora(2020)]{li2020exponential} Z. Li and S. Arora. An exponential learning rate schedule for deep learning. In \emph{Proc. ICLR}, 2020.
+\bibitem[Ntakaris et al.(2018)]{ntakaris2018benchmark} A. Ntakaris, M. Magris, J. Kanniainen, and M. Gabbouj. Benchmark dataset for mid-price forecasting of limit order book data with machine learning methods. \emph{Journal of Forecasting}, 37(8):852--866, 2018.
+\bibitem[Perez et al.(2018)]{perez2018film} E. Perez, F. Strub, H. de Vries, V. Dumoulin, and A. Courville. FiLM: Visual reasoning with a general conditioning layer. In \emph{Proc. AAAI}, 2018.
+\bibitem[Prata et al.(2023)]{prata2023lobcast} M. Prata, G. Masi, L. Berti, V. Arrigoni, A. Coletta, I. Cannistraci, S. Vyetrenko, P. Velardi, and N. Bartolini. LOB-based deep learning models for stock price trend prediction: A benchmark study. \emph{arXiv preprint arXiv:2308.01915}, 2023.
+\bibitem[Smith et al.(2023)]{smith2023simplified} J. T. H. Smith, A. Warrington, and S. W. Linderman. Simplified state space layers for sequence modeling. In \emph{Proc. ICLR}, 2023.
+\bibitem[van Laarhoven(2017)]{vanlaarhoven2017l2} T. van Laarhoven. L2 regularization versus batch and weight normalization. \emph{arXiv preprint arXiv:1706.05350}, 2017.
+\bibitem[Wang et al.(2025)]{wang2025drama} W. Wang et al. Drama: Mamba-enabled model-based reinforcement learning is sample and parameter efficient. In \emph{Proc. ICLR}, 2025.
+\bibitem[Zhang et al.(2019)]{zhang2019deeplob} Z. Zhang, S. Zohren, and S. Roberts. DeepLOB: Deep convolutional neural networks for limit order books. \emph{IEEE Transactions on Signal Processing}, 67(11):3001--3012, 2019.
 \end{thebibliography}
+
+\appendix
+\section{Cross-dataset detail}\label{app:cross}
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lllll}
+\toprule
+Dataset & Asset / resolution & Gap (pred / vol) & $\filmG$ & Verdict \\
+\midrule
+FI-2010 & event stream & $\approx0$ / $\approx0$ & 0.004 & NULL \\
+Kaggle BTC & $1\,$min & $\approx0$ / $\approx0$ & 0.004 & NULL \\
+Kaggle ETH & $1\,$min & $\approx0$ & 0.005 & NULL \\
+Kaggle ADA & $1\,$min & $\approx0$ & 0.005 & NULL \\
+Kaggle BTC & $5\,$min & $\approx0$ & 0.005 & NULL \\
+Kaggle BTC & $1\,$s (slice) & $\approx0$ & 0.005 & NULL \\
+\bottomrule
+\end{tabular}
+\caption{Cross-dataset confirmation of the regime-FiLM null (per-asset breakdown of the summary in Section~\ref{sec:null}). $\regH=\log4$ (uniform router) in every row. The null is dataset-, asset-, and resolution-independent.}
+\label{tab:crossdataset}
+\end{table}
 
 \end{document}

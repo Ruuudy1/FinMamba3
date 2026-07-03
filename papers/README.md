@@ -20,6 +20,15 @@ gauge-absorbable and decays to identity under joint training), three venue-speci
 framings: understanding (SUFM), practitioner prescriptions (Actionable), and a
 small-scale methods package (MOSS).
 
-Note: typeset against the COLM-2026 template as the closest available proxy; drop
-the body into a venue's own style file for camera-ready if it differs. Do not link
-this folder to any author-identifying repository until after the review decisions.
+Template status (confirmed against each CFP, 2026-06-22):
+- `sufm.tex` — SUFM mandates the **default COLM template** (science-ai-2026.github.io);
+  the current typesetting is correct as-is. Double-blind, OpenReview group `.../Workshop/SUFM`.
+- `actionable-interpretability.tex` — Actionable Interpretability mandates the **COLM
+  template** (actionable-interpretability.github.io/cfp); correct as-is. Double-blind,
+  OpenReview group `.../Workshop/AIW`.
+- `moss-paper.tex` — MOSS distributes **its own style files** (not COLM); the body must be
+  dropped into the MOSS template and the 4-page body re-verified there before submission.
+  CFP: sites.google.com/view/moss-colm-2026/call-for-papers. Double-blind, OpenReview group
+  `colmweb.org/COLM/2026/Workshop/MOSS`.
+
+Do not link this folder to any author-identifying repository until after the review decisions.

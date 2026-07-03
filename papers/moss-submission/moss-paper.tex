@@ -1,32 +1,24 @@
 \documentclass{article}
 % =============================================================================
-% MOSS -- Methods and Opportunities at Small Scale -- workshop @ COLM 2026.
-%   Confirmed COLM-2026 workshop. CFP: 4 pages MAIN BODY + unlimited
-%   supplementary material; double-blind (anonymized); deadline Jun 30 2026 AoE;
-%   non-archival.  Main body is kept to ~4 pp; all detailed tables and the
-%   detailed mechanism/coda derivations are in the (unlimited) supplementary
-%   appendix.  References are not counted against the 4-page body.
-% NOTE: the MOSS CFP distributes its own style files; we typeset against the
-%   COLM-2026 conference template as the closest available proxy (auto-anonymized
-%   via the "submission" option).  Drop the body into the MOSS style file for the
-%   camera-ready if it differs.
-% Anonymized: no author / repository / handle strings anywhere.
+% MOSS @ COLM 2026 submission build, on the workshop's OWN template (ICML-2025
+% one-column style: icml2025.sty for blind review / MOSS_camera_ready.sty for
+% camera-ready).  Body identical to the COLM-proxy papers/moss-paper.tex.
 % =============================================================================
-\usepackage[submission]{colm2026_conference}
-
 \usepackage{microtype}
-\usepackage{hyperref}
-\usepackage{url}
+\usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{amsmath,amssymb,amsfonts}
 \usepackage{mathtools}
 \usepackage{bm}
-\usepackage{graphicx}
 \usepackage{enumitem}
-\usepackage{lineno}
+\usepackage{hyperref}
+\usepackage{icml2025}
 
-\definecolor{darkblue}{rgb}{0, 0, 0.5}
-\hypersetup{colorlinks=true, citecolor=darkblue, linkcolor=darkblue, urlcolor=darkblue}
+% MOSS-specific blind notice (overrides the icml2025.sty default "...by ICML").
+\makeatletter
+\renewcommand{\Notice@String}{Under review for the Workshop on Methods and
+Opportunities at Small Scale (MOSS), COLM~2026. Do not distribute.}
+\makeatother
 
 \newcommand{\R}{\mathbb{R}}
 \DeclareMathOperator{\softmaxop}{softmax}
@@ -36,18 +28,22 @@
 \DeclareMathOperator{\RMSNorm}{RMSNorm}
 \newcommand{\dg}{\textsuperscript{$\dagger$}}
 
-\title{Gauge Absorption: Why Input-Affine FiLM Conditioning of a Mamba
-Selective Scan Decays to Identity on Weakly-Decodable Axes\\
-\large A Small-Scale Mechanistic Null on a Single RTX 4080}
-
-\author{Anonymous Authors}
+\icmltitlerunning{Gauge Absorption in Input-Affine FiLM Conditioning of a Mamba Scan}
 
 \begin{document}
-\maketitle
+\onecolumn
+\icmltitle{Gauge Absorption: Why Input-Affine FiLM Conditioning of a Mamba
+Selective Scan Decays to Identity on Weakly-Decodable Axes\\
+{\large A Small-Scale Mechanistic Null on a Single RTX 4080}}
 
-\ifcolmsubmission
-\linenumbers
-\fi
+\begin{icmlauthorlist}
+\icmlauthor{Anonymous Authors}{anon}
+\end{icmlauthorlist}
+\icmlaffiliation{anon}{Anonymous Institution}
+\icmlcorrespondingauthor{Anonymous Authors}{anon@example.com}
+\icmlkeywords{state-space models, Mamba, FiLM conditioning, gauge symmetry, negative results, small-scale}
+\vskip 0.3in
+\printAffiliationsAndNotice{}
 
 \begin{abstract}
 On a single RTX~4080 Laptop GPU, we pin down a training pathology in FiLM-style
