@@ -124,8 +124,7 @@ def exact_fold_residual(model, x):
         folded.placement = "none"
         gamma = (1.0 + model.g_input).detach()
         beta = model.beta_input.detach()
-        # The input-affine scale folds into each projection as a right-multiplied diagonal and the shift into
-        # the bias, the lossless gauge move the paper describes; applying it must leave the output unchanged.
+        # The input-affine scale folds into each projection as a right-multiplied diagonal and the shift into the bias, the lossless gauge move the paper describes; applying it must leave the output unchanged.
         with torch.no_grad():
             folded.w_delta.weight.copy_(model.w_delta.weight * gamma.unsqueeze(0))
             folded.w_delta.bias.copy_(model.w_delta.bias + model.w_delta.weight @ beta)
@@ -206,10 +205,7 @@ def main():
             print(f"  {label:8s} {placement:14s} film_g {start:.4f} -> {end:.4f}  (end/start = {ratio:.3f})")
     fold_in = result_by_key["in_kernel_fold_residual"]
     fold_aff = result_by_key["input_affine_fold_residual"]
-    # The boundary the paper asserts rests on an absorbability asymmetry: the input-affine form is a gauge
-    # direction of the bounding projections and the in-kernel form is not. The folding test demonstrates
-    # exactly that asymmetry deterministically, so the verdict keys on it; the training trajectories are
-    # reported as context that also confirms the B1 reading (the gauge decay is driven by weight decay).
+    # The boundary the paper asserts rests on an absorbability asymmetry: the input-affine form is a gauge direction of the bounding projections and the in-kernel form is not. The folding test demonstrates exactly that asymmetry deterministically, so the verdict keys on it; the training trajectories are reported as context that also confirms the B1 reading (the gauge decay is driven by weight decay).
     supports = fold_aff < 1e-4 and fold_in > 1.0e-2
     result_by_key["verdict"] = "SUPPORTS" if supports else "CONTRADICTS"
     print(f"\nVerdict (boundary mechanism): {result_by_key['verdict']}")

@@ -38,10 +38,8 @@ class SettlementLossTest(unittest.TestCase):
         spot = torch.tensor([0.01, float("nan"), -0.01])
         loss = SettlementHead.spot_sign_bce(logits, spot)
         self.assertAlmostEqual(float(loss), 0.6931, places=3)
-        # tte_frac weights the aux toward the start: a frac-0 (late) tick is fully down-weighted.
-        early_only = SettlementHead.spot_sign_bce(
-            torch.tensor([0.0, 0.0]), torch.tensor([0.01, -0.01]), torch.tensor([1.0, 0.0])
-        )
+        # `tte_frac` weights the aux toward the start: a frac-0 (late) tick is fully down-weighted.
+        early_only = SettlementHead.spot_sign_bce(torch.tensor([0.0, 0.0]), torch.tensor([0.01, -0.01]), torch.tensor([1.0, 0.0]))
         self.assertAlmostEqual(float(early_only), 0.6931 / 2.0, places=3)
 
 
@@ -101,7 +99,7 @@ class BookRelativeEdgeHeadTest(unittest.TestCase):
         self.assertFalse(bool(mask[0, 3]))
 
     def test_action_labels_sit_buy_yes_buy_no(self):
-        # ev_yes=0.10, ev_no=-0.10 gives BUY_YES; ev_yes=-0.10, ev_no=0.10 gives BUY_NO; both below threshold gives SIT.
+        # `ev_yes`=0.10, ev_no=-0.10 gives BUY_YES; ev_yes=-0.10, ev_no=0.10 gives BUY_NO; both below threshold gives SIT.
         ev_yes = torch.tensor([[0.10, -0.10, 0.02]])
         ev_no = torch.tensor([[-0.10, 0.10, 0.01]])
         labels = BookRelativeEdgeHead.action_labels(ev_yes, ev_no, threshold=0.03)

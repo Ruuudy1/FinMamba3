@@ -19,12 +19,7 @@ from finmamba3.envs.kaggle_lob_loader import (
     load_kaggle_lob,
     max_rows_for_hours,
 )
-from finmamba3.envs.lob_features import (
-    apply_normalization,
-    fit_normalization,
-    LEVEL_FEATURE_NAMES,
-    TICK_FEATURE_NAMES,
-)
+from finmamba3.envs.lob_features import apply_normalization, fit_normalization, LEVEL_FEATURE_NAMES, TICK_FEATURE_NAMES
 # endregion
 
 # A controlled midprice path so direction labels can be hand-verified.
@@ -168,7 +163,7 @@ def test_level_index_channel_is_symmetric(kaggle_csv):
 # Direction labels.
 def test_direction_labels_match_hand_computed(kaggle_csv):
     bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min", flat_threshold=0.0)
-    # mid = [100, 101, 100.5, 100.5, 102, 101.5, 103] -> up, down, flat, up, down, up, flat-filled.
+    # `mid` = [100, 101, 100.5, 100.5, 102, 101.5, 103] -> up, down, flat, up, down, up, flat-filled.
     expected = np.array([2, 0, 1, 2, 0, 2, 1], dtype=np.int64)
     np.testing.assert_array_equal(bundle.direction_labels, expected)
 
@@ -279,7 +274,7 @@ def test_e2e_normalization_within_clip(tmp_path):
     assert float(np.abs(flat).max()) <= 8.0 + 1e-4
 
 
-# build_kaggle_sequences chronological train/val split.
+# `build_kaggle_sequences` chronological train/val split.
 def _write_kaggle_data_dir(tmp_path, num_rows: int = 300) -> Path:
     mid = 100.0 + np.cumsum(np.random.default_rng(3).normal(0.0, 0.4, num_rows))
     mid = np.clip(mid, 1.0, None)

@@ -7,17 +7,8 @@ filter that keeps the high-vol tail for the regime-shift A/B.
 # region imports
 from __future__ import annotations
 from finmamba3.backtester.data_loader import BacktestData, TickData
-from finmamba3.backtester.strategy import (
-    MarketLifecycle,
-    OrderBookLevel,
-    OrderBookSnapshot,
-    StoredBook,
-)
-from finmamba3.eval.regime_split import (
-    realized_vol_from_timeline,
-    spot_realized_vol_from_timeline,
-    volatility_split,
-)
+from finmamba3.backtester.strategy import MarketLifecycle, OrderBookLevel, OrderBookSnapshot, StoredBook
+from finmamba3.eval.regime_split import realized_vol_from_timeline, spot_realized_vol_from_timeline, volatility_split
 from finmamba3.eval.run_backtest_cli import _filter_backtest_data
 # endregion
 _CALM = "btc-updown-5m-0"
@@ -27,10 +18,7 @@ _WILD_MIDS = [0.50, 0.70, 0.40, 0.80, 0.30]
 
 
 def _book(mid):
-    return OrderBookSnapshot(
-        bids=(OrderBookLevel(mid - 0.01, 100.0),),
-        asks=(OrderBookLevel(mid + 0.01, 100.0),),
-    )
+    return OrderBookSnapshot(bids=(OrderBookLevel(mid - 0.01, 100.0),), asks=(OrderBookLevel(mid + 0.01, 100.0),))
 
 
 def _stored(mid, book_ts):

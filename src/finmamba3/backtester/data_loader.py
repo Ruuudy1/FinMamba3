@@ -361,9 +361,7 @@ class BacktestData:
     end_ts: int
 
 
-def _synthesize_book(
-    bid: float, ask: float, base_size: float = 50.0, n_levels: int = 5,
-) -> OrderBookSnapshot:
+def _synthesize_book(bid: float, ask: float, base_size: float = 50.0, n_levels: int = 5) -> OrderBookSnapshot:
     """Build a synthetic order book from top-of-book bid/ask prices."""
     if bid <= 0 and ask <= 0:
         return OrderBookSnapshot()
@@ -591,10 +589,7 @@ def build_timeline(
     with_book_by_slug = {slug: True for slug in books_by_slug.keys()}
     slugs_need_synthetic = [slug for slug in all_slugs if slug not in with_book_by_slug]
     if slugs_need_synthetic:
-        logger.info(
-            f"Synthesizing order books for {len(slugs_need_synthetic)} markets "
-            f"(no JSONL data; using SQLite bid/ask)"
-        )
+        logger.info(f"Synthesizing order books for {len(slugs_need_synthetic)} markets (no JSONL data; using SQLite bid/ask)")
     # Build timeline tick by tick.
     total_secs = global_end - global_start + 1
     logger.info(f"Building timeline: {total_secs} seconds, {len(lifecycles)} markets")
@@ -650,11 +645,7 @@ def build_timeline(
                 no_bid = float(pdict.get("no_bid", 0))
                 no_ask = float(pdict.get("no_ask", 0))
                 if yes_bid > 0 or yes_ask > 0:
-                    snap = StoredBook(
-                        yes_book=_synthesize_book(yes_bid, yes_ask),
-                        no_book=_synthesize_book(no_bid, no_ask),
-                        book_ts=ts,
-                    )
+                    snap = StoredBook(yes_book=_synthesize_book(yes_bid, yes_ask), no_book=_synthesize_book(no_bid, no_ask), book_ts=ts)
                     last_books[slug] = snap
                     tick.order_books[slug] = snap
                     tick.book_timestamps[slug] = ts

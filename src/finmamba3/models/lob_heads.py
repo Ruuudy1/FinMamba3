@@ -114,13 +114,7 @@ class EpisodicMemory:
     the regime catalog from a sliding window of recent states.
     """
 
-    def __init__(
-        self,
-        key_dim: int,
-        value_dim: int,
-        capacity: int = 50_000,
-        novelty_threshold: float = 0.0,
-    ) -> None:
+    def __init__(self, key_dim: int, value_dim: int, capacity: int = 50_000, novelty_threshold: float = 0.0) -> None:
         self.key_dim = int(key_dim)
         self.value_dim = int(value_dim)
         self.capacity = int(capacity)
@@ -174,12 +168,7 @@ class HawkesIntensityHead(nn.Module):
     an auxiliary self-supervised signal alongside the existing direction head.
     """
 
-    def __init__(
-        self,
-        hidden_dim: int,
-        dtype: torch.dtype | None = None,
-        device: torch.device | str | None = None,
-    ) -> None:
+    def __init__(self, hidden_dim: int, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> None:
         super().__init__()
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
@@ -209,12 +198,7 @@ class SettlementHead(nn.Module):
     rather than just locally reconstructive features.
     """
 
-    def __init__(
-        self,
-        hidden_dim: int,
-        dtype: torch.dtype | None = None,
-        device: torch.device | str | None = None,
-    ) -> None:
+    def __init__(self, hidden_dim: int, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> None:
         super().__init__()
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
@@ -239,7 +223,7 @@ class SettlementHead(nn.Module):
         When all outcomes are finite the result equals the unmasked mean.
         """
         outcome = outcome.to(logits.dtype)
-        # mask.sum() drives a single device-side reduction per step; the cost is amortized over the rest of the loss compute.
+        # Calling mask.sum() drives a single device-side reduction per step; the cost is amortized over the rest of the loss compute.
         mask = torch.isfinite(outcome).to(logits.dtype)
         safe_outcome = torch.where(torch.isnan(outcome), torch.zeros_like(outcome), outcome)
         per = F.binary_cross_entropy_with_logits(logits, safe_outcome, reduction="none")
@@ -286,12 +270,7 @@ class BookRelativeEdgeHead(nn.Module):
     the other side; SIT (0) otherwise.
     """
 
-    def __init__(
-        self,
-        hidden_dim: int,
-        dtype: torch.dtype | None = None,
-        device: torch.device | str | None = None,
-    ) -> None:
+    def __init__(self, hidden_dim: int, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> None:
         super().__init__()
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)

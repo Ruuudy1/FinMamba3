@@ -88,13 +88,11 @@ def parse_args() -> argparse.Namespace:
                         "non-degenerate); direction_macro_f1 = 3-class direction (collapses on Polymarket).")
     p.add_argument("--label-mode", choices=("next_tick", "triple_barrier"), default="triple_barrier",
                    help="Direction labelling for the direction_macro_f1 metric; triple_barrier is the denoised target.")
-    p.add_argument("--threshold", type=float, default=0.01,
-                   help="Profit/stop barrier (triple_barrier) or next-tick threshold.")
+    p.add_argument("--threshold", type=float, default=0.01, help="Profit/stop barrier (triple_barrier) or next-tick threshold.")
     p.add_argument("--tb-horizon", type=int, default=32, help="Forward horizon in ticks for triple-barrier labelling.")
     p.add_argument("--windows-per-market", type=int, default=256,
                    help="Random windows scored per market; higher trims the per-regime macro-F1 noise.")
-    p.add_argument("--is-mimo", action="store_true",
-                   help="Rebuild both arms as MIMO to match an H100 MIMO A/B; default SISO.")
+    p.add_argument("--is-mimo", action="store_true", help="Rebuild both arms as MIMO to match an H100 MIMO A/B; default SISO.")
     p.add_argument("--n-layer", type=int, default=None,
                    help="Override Mamba3.n_layer to match a non-default-depth training run.")
     p.add_argument("--out", type=Path, default=Path("reports/regime_generalization.md"))

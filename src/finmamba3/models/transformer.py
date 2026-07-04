@@ -103,11 +103,7 @@ class StochasticTransformerModern(nn.Module):
         factory = {"device": device, "dtype": dtype}
         stem_in = stoch_dim + action_dim if self.use_action_input else stoch_dim
         # Simple stem matching Mamba-3: Linear + RMSNorm + SiLU.
-        self.stem = nn.Sequential(
-            nn.Linear(stem_in, feat_dim, bias=True, **factory),
-            nn.RMSNorm(feat_dim, **factory),
-            nn.SiLU(),
-        )
+        self.stem = nn.Sequential(nn.Linear(stem_in, feat_dim, bias=True, **factory), nn.RMSNorm(feat_dim, **factory), nn.SiLU())
         self.position_encoding = PositionalEncoding1D(max_length=max_length, embed_dim=feat_dim)
         # Pre-norm layers with 4x feed-forward expansion, the modern transformer standard.
         self.layer_stack = nn.ModuleList([
@@ -139,11 +135,7 @@ class StochasticTransformerModernKVCache(nn.Module):
         factory = {"device": device, "dtype": dtype}
         stem_in = stoch_dim + action_dim if self.use_action_input else stoch_dim
         # Simple stem matching Mamba-3: Linear + RMSNorm + SiLU.
-        self.stem = nn.Sequential(
-            nn.Linear(stem_in, feat_dim, bias=True, **factory),
-            nn.RMSNorm(feat_dim, **factory),
-            nn.SiLU(),
-        )
+        self.stem = nn.Sequential(nn.Linear(stem_in, feat_dim, bias=True, **factory), nn.RMSNorm(feat_dim, **factory), nn.SiLU())
         self.position_encoding = PositionalEncoding1D(max_length=max_length, embed_dim=feat_dim)
         # Pre-norm layers with 4x feed-forward expansion and KV-cache support.
         self.layer_stack = nn.ModuleList([

@@ -103,7 +103,7 @@ def _imagine_and_log(
     decoded = imagine_rollout(world_model, val_seq, context_len, horizon)
     if decoded is None:
         return
-    # midprice_index points at the start of the per-tick block; offsets 0/1/3 are mid / spread / imbalance under both the Polymarket and FI-2010 schemas.
+    # The midprice_index attribute points at the start of the per-tick block; offsets 0/1/3 are mid / spread / imbalance under both the Polymarket and FI-2010 schemas.
     level_flat = world_model.midprice_index
     mid_norm = decoded[:, level_flat + 0]
     spread_norm = decoded[:, level_flat + 1]
@@ -542,7 +542,7 @@ def main() -> None:
     early_stopping_patience = config.JointTrainAgent.get('EarlyStoppingPatience', 0)
     early_stop_metric = config.JointTrainAgent.get('EarlyStopMetric', 'Val/reconstruction_loss')
     save_best_only = config.JointTrainAgent.get('SaveBestOnly', False)
-    # best_val_loss seeds from the resumed checkpoint so a warm restart only saves on genuine improvement.
+    # The best_val_loss tracker seeds from the resumed checkpoint so a warm restart only saves on genuine improvement.
     best_val_loss = resume_best_val_loss
     patience_counter = 0
     best_step = 0

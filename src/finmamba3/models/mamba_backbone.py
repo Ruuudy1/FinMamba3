@@ -18,7 +18,7 @@ def _repo_src_dir() -> Path:
 
 
 def _is_local_mamba_module(module) -> bool:
-    # sys.modules can hold a None sentinel for a failed import, so these two reads keep getattr-with-default (vars() would raise on None), unlike the rest of this module.
+    # `sys.modules` can hold a None sentinel for a failed import, so these two reads keep getattr-with-default (vars() would raise on None), unlike the rest of this module.
     module_file = getattr(module, "__file__", None)
     candidates = []
     if module_file is not None:

@@ -37,14 +37,12 @@ def main():
     series_by_slug = {}
     for (slug, ts), prob in prob_by_slug_ts.items():
         series_by_slug.setdefault(slug, {})[ts] = prob
-    # Patch the two model touch-points so run_threshold_sweep needs no torch model: _eval_sequence
-    # forwards the slug, and the prob series becomes that slug's precomputed synthetic series.
+    # Patch the two model touch-points so run_threshold_sweep needs no torch model: _eval_sequence forwards the slug, and the prob series becomes that slug's precomputed synthetic series.
     pb._eval_sequence = lambda bt, slug, *a, **k: slug
     pb.world_model_yes_prob_series = lambda wm, seq, device, sample_mode=None, **k: series_by_slug.get(seq, {})
     print(f"timeline: T={len(bt.timeline)} markets={len(slugs)} probs={len(prob_by_slug_ts)} cpu={os.cpu_count()}")
     values = [round(0.2 + 0.08 * i, 4) for i in range(N_VALUES)]
-    # Time the sweep's distinct phases once so the Amdahl floor (marshal-once + per-value bootstrap) is
-    # visible next to the parallelizable per-run C++ loop.
+    # Time the sweep's distinct phases once so the Amdahl floor (marshal-once + per-value bootstrap) is visible next to the parallelizable per-run C++ loop.
     engine_data = _data_for_slugs(bt, slugs)
     start = time.perf_counter()
     marshalled = marshal_timeline(engine_data, slugs, prob_by_slug_ts, include_depth=False)

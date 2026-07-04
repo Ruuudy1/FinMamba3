@@ -78,7 +78,7 @@ class LinearAR:
         preds = self.predict(features)
         T = features.shape[0]
         actual_diff = np.diff(features[L:T, mid_idx])
-        # preds are predicted next-tick mid returns (already centered), so they are the directional signal directly, with no level differencing that a bias could swamp.
+        # `preds` are predicted next-tick mid returns (already centered), so they are the directional signal directly, with no level differencing that a bias could swamp.
         pred_diff = preds[: T - L - 1]
         actual = np.full_like(actual_diff, 1, dtype=np.int64)
         actual[actual_diff > thr] = 2

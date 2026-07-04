@@ -49,23 +49,11 @@ class PPOAgent(nn.Module):
             act()
         ]
         for i in range(num_layers - 1):
-            actor.extend([
-                layer_init(nn.Linear(actor_hidden_dim, actor_hidden_dim, bias=True)),
-                RMSNorm(actor_hidden_dim),
-                act()
-            ])
+            actor.extend([layer_init(nn.Linear(actor_hidden_dim, actor_hidden_dim, bias=True)), RMSNorm(actor_hidden_dim), act()])
         self.actor = nn.Sequential(*actor, layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)).to(device)
-        critic = [
-            layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
-            RMSNorm(critic_hidden_dim),
-            act()
-        ]
+        critic = [layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)), RMSNorm(critic_hidden_dim), act()]
         for i in range(num_layers - 1):
-            critic.extend([
-                layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
-                RMSNorm(critic_hidden_dim),
-                act()
-            ])
+            critic.extend([layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)), RMSNorm(critic_hidden_dim), act()])
         self.critic = nn.Sequential(*critic, layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)).to(device)
         self.slow_critic = copy.deepcopy(self.critic)
         self.lowerbound_ema = EMAScalar(decay=0.99)

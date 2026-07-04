@@ -45,10 +45,7 @@ class _Inception(nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
-        self.branch_1x1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
-            nn.LeakyReLU(0.01),
-        )
+        self.branch_1x1 = nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)), nn.LeakyReLU(0.01))
         self.branch_3 = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
             nn.LeakyReLU(0.01),

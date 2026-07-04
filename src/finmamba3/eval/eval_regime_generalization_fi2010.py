@@ -73,7 +73,7 @@ _METRIC_SPEC = {
     "prediction_mse": {"needs_studentt": False, "higher_is_better": False, "mask": None},
     "studentt_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "price_scale"},
     "volume_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "volume"},
-    # recon_nll is the schema-agnostic G1 diagnostic; price_scale/volume are FI-2010 refinements kept for reproduction.
+    # `recon_nll` is the schema-agnostic G1 diagnostic; price_scale/volume are FI-2010 refinements kept for reproduction.
     "recon_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "all"},
     "direction_macro_f1": {"needs_studentt": False, "higher_is_better": True, "mask": None},
 }
@@ -175,9 +175,7 @@ def _regime_prediction_nll(wm, seqs: list, feature_indices: torch.Tensor,
     total_nll = 0.0
     total_count = 0
     for seq in seqs:
-        sum_nll, count = world_model_prediction_nll(
-            wm, seq, device, feature_indices, windows_per_market=windows_per_segment
-        )
+        sum_nll, count = world_model_prediction_nll(wm, seq, device, feature_indices, windows_per_market=windows_per_segment)
         total_nll += sum_nll
         total_count += count
     assert total_count > 0, "no windows scored for this regime; segments are shorter than the window length."

@@ -164,9 +164,7 @@ class RegimeSupervisionTest(unittest.TestCase):
         # Head-to-head: a supervised router reading the external obs-vol feature must reach a strictly lower per-sample entropy than the same router restricted to its latent-speed proxy, since the external feature is the very axis the supervision label buckets; the proxy router stays near the uniform ceiling (the live failure mode) while the fed router commits to regimes.
         def _train(use_external):
             torch.manual_seed(0)
-            mod = RegimeFiLMModulator(
-                16, 2, num_regimes=4, embed_dim=8, condition_on_vol=True, vol_window=4, init_scale=0.03,
-            )
+            mod = RegimeFiLMModulator(16, 2, num_regimes=4, embed_dim=8, condition_on_vol=True, vol_window=4, init_scale=0.03)
             opt = torch.optim.Adam(mod.parameters(), lr=1e-2)
             gen = torch.Generator().manual_seed(1)
             for _ in range(300):
@@ -214,9 +212,7 @@ class RegimeSupervisionTest(unittest.TestCase):
         for i in range(4):
             confident[0, i, i] = 12.0
         uniform = torch.zeros(1, 4, 4)
-        self.assertAlmostEqual(
-            float(regime_assignment_entropy(confident)), float(regime_assignment_entropy(uniform)), places=3
-        )
+        self.assertAlmostEqual(float(regime_assignment_entropy(confident)), float(regime_assignment_entropy(uniform)), places=3)
         self.assertLess(float(regime_per_sample_entropy(confident)), 0.1)
         self.assertGreater(float(regime_per_sample_entropy(uniform)), 1.3)
 if __name__ == "__main__":

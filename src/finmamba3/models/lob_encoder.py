@@ -62,11 +62,7 @@ class LOBEncoder(nn.Module):
         nn.init.normal_(self.level_pos, std=0.02)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model, **factory))
         nn.init.normal_(self.cls_token, std=0.02)
-        self.tick_proj = nn.Sequential(
-            nn.Linear(f_tick, d_model, **factory),
-            nn.SiLU(),
-            nn.Linear(d_model, d_model, **factory),
-        )
+        self.tick_proj = nn.Sequential(nn.Linear(f_tick, d_model, **factory), nn.SiLU(), nn.Linear(d_model, d_model, **factory))
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=num_heads,
@@ -77,7 +73,7 @@ class LOBEncoder(nn.Module):
             norm_first=True,
             **factory,
         )
-        # norm_first makes the nested-tensor fast path a no-op anyway; disable it to silence the startup warning.
+        # `norm_first` makes the nested-tensor fast path a no-op anyway; disable it to silence the startup warning.
         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.norm = RMSNorm(d_model, **factory)
         self.out_proj = nn.Linear(d_model, output_flatten_dim, **factory)
