@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 
 class _NS(SimpleNamespace):
+
     def get(self, key, default=None):
         return getattr(self, key, default)
 

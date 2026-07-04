@@ -105,5 +105,7 @@ def main() -> int:
         )
     logger.info(f"phase B: {args.steps} imagination updates complete")
     return 0
+
+
 if __name__ == "__main__":
     sys.exit(main())

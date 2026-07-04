@@ -18,14 +18,17 @@ def symexp(x):
 
 
 class SymLogLoss(nn.Module):
+
     def __init__(self):
         super().__init__()
+
     def forward(self, output, target):
         target = symlog(target)
         return 0.5*F.mse_loss(output, target)
 
 
 class SymLogTwoHotLoss(nn.Module):
+
     def __init__(self, num_classes, lower_bound, upper_bound):
         super().__init__()
         self.num_classes = num_classes
@@ -34,13 +37,14 @@ class SymLogTwoHotLoss(nn.Module):
         self.bin_length = (upper_bound - lower_bound) / (num_classes-1)
         # Use register_buffer so bins move automatically with .cuda().
         self.bins: torch.Tensor
-        self.register_buffer(
-            'bins', torch.linspace(-20, 20, num_classes), persistent=False)
+        self.register_buffer('bins', torch.linspace(-20, 20, num_classes), persistent=False)
+
     def forward(self, output, target):
         target = symlog(target)
         assert target.min() >= self.lower_bound and target.max() <= self.upper_bound
         index = torch.bucketize(target, self.bins)
-        diff = target - self.bins[index-1]  # Offset by 1 to get the lower bin boundary.
+        # Offset by 1 to get the lower bin boundary.
+        diff = target - self.bins[index-1]
         weight = diff / self.bin_length
         weight = torch.clamp(weight, 0, 1)
         weight = weight.unsqueeze(-1)
@@ -48,6 +52,7 @@ class SymLogTwoHotLoss(nn.Module):
         loss = -target_prob * F.log_softmax(output, dim=-1)
         loss = loss.sum(dim=-1)
         return loss.mean()
+
     def decode(self, output):
         return symexp(F.softmax(output, dim=-1) @ self.bins)
 
@@ -56,9 +61,11 @@ class CategoricalKLDivLossWithFreeBits(nn.Module):
     """KL with a per-step free-bits floor. DreamerV3 uses 1.0 nat (Hafner et al. 2023);
     the floor prevents degenerate posterior=prior solutions where the latent carries no
     information about the input."""
+
     def __init__(self, free_bits) -> None:
         super().__init__()
         self.free_bits = free_bits
+
     def forward(self, p_logits, q_logits):
         p_dist = OneHotCategorical(logits=p_logits)
         q_dist = OneHotCategorical(logits=q_logits)

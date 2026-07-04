@@ -5,8 +5,8 @@ import torch
 
 
 class LaProp(Optimizer):
-    def __init__(self, params, lr=4e-4, betas=(0.9, 0.999), eps=1e-15,
-                 weight_decay=0, amsgrad=False, centered=False):
+
+    def __init__(self, params, lr=4e-4, betas=(0.9, 0.999), eps=1e-15, weight_decay=0, amsgrad=False, centered=False):
         self.steps_before_using_centered = 10
         if not 0.0 <= lr:
             raise ValueError("Invalid learning rate: {}".format(lr))
@@ -16,9 +16,9 @@ class LaProp(Optimizer):
             raise ValueError("Invalid beta parameter at index 0: {}".format(betas[0]))
         if not 0.0 <= betas[1] < 1.0:
             raise ValueError("Invalid beta parameter at index 1: {}".format(betas[1]))
-        defaults = dict(lr=lr, betas=betas, eps=eps,
-                        weight_decay=weight_decay, amsgrad=amsgrad, centered=centered)
+        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, amsgrad=amsgrad, centered=centered)
         super(LaProp, self).__init__(params, defaults)
+
     def step(self, closure=None):
         """Performs a single optimization step.
 
@@ -45,7 +45,8 @@ class LaProp(Optimizer):
                     # Exponential moving average of gradient values.
                     state['exp_avg'] = torch.zeros_like(p.data)
                     # Exponential moving average of learning rates.
-                    state['exp_avg_lr_1'] = 0.; state['exp_avg_lr_2'] = 0.
+                    state['exp_avg_lr_1'] = 0.
+                    state['exp_avg_lr_2'] = 0.
                     # Exponential moving average of squared gradient values.
                     state['exp_avg_sq'] = torch.zeros_like(p.data)
                     if centered:
@@ -65,7 +66,8 @@ class LaProp(Optimizer):
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
                 state['exp_avg_lr_1'] = state['exp_avg_lr_1'] * beta1 + (1 - beta1) * group['lr']
                 state['exp_avg_lr_2'] = state['exp_avg_lr_2'] * beta2 + (1 - beta2)
-                bias_correction1 = state['exp_avg_lr_1'] / group['lr'] if group['lr'] != 0. else 1.  # Equivalent to 1 - beta1 ** step.
+                # Equivalent to 1 - beta1 ** step.
+                bias_correction1 = state['exp_avg_lr_1'] / group['lr'] if group['lr'] != 0. else 1.
                 step_size = 1 / bias_correction1
                 bias_correction2 = state['exp_avg_lr_2']
                 denom = exp_avg_sq

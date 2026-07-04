@@ -10,6 +10,7 @@ RMSNorm = nn.RMSNorm
 
 class DistHead(nn.Module):
     """Distribution head for posterior and prior categorical logits."""
+
     def __init__(self, image_feat_dim, hidden_state_dim, categorical_dim, class_dim, unimix_ratio=0.01, dtype=None, device=None) -> None:
         super().__init__()
         self.stoch_dim = categorical_dim
@@ -18,6 +19,7 @@ class DistHead(nn.Module):
         self.unimix_ratio = unimix_ratio
         self.dtype=dtype
         self.device=device
+
     def unimix(self, logits, mixing_ratio=0.01):
         # Mix logits with uniform noise for uniform-prior regularization.
         if mixing_ratio > 0:
@@ -25,11 +27,13 @@ class DistHead(nn.Module):
             mixed_probs = mixing_ratio * torch.ones_like(probs, dtype=self.dtype, device=self.device) / self.stoch_dim + (1-mixing_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
+
     def forward_post(self, x):
         logits = self.post_head(x)
         logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
         logits = self.unimix(logits, self.unimix_ratio)
         return logits
+
     def forward_prior(self, x):
         logits = self.prior_head(x)
         logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
@@ -38,6 +42,7 @@ class DistHead(nn.Module):
 
 
 class RewardHead(nn.Module):
+
     def __init__(self, num_classes, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
         super().__init__()
         act = ACTIVATION_BY_NAME[act]
@@ -48,6 +53,7 @@ class RewardHead(nn.Module):
             layers.append(act())
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(hidden_units, num_classes, dtype=dtype, device=device)
+
     def forward(self, feat):
         feat = self.backbone(feat)
         reward = self.head(feat)
@@ -55,6 +61,7 @@ class RewardHead(nn.Module):
 
 
 class TerminationHead(nn.Module):
+
     def __init__(self, inp_dim, hidden_units, act, layer_num, dtype=None, device=None) -> None:
         super().__init__()
         act = ACTIVATION_BY_NAME[act]
@@ -65,8 +72,10 @@ class TerminationHead(nn.Module):
             layers.append(act())
         self.backbone = nn.Sequential(*layers)
         self.head = nn.Linear(hidden_units, 1, dtype=dtype, device=device)
+
     def forward(self, feat):
         feat = self.backbone(feat)
         termination = self.head(feat)
-        termination = termination.squeeze(-1)  # Remove the trailing singleton dimension.
+        # Remove the trailing singleton dimension.
+        termination = termination.squeeze(-1)
         return termination

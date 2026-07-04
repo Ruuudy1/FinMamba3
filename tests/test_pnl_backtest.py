@@ -227,7 +227,7 @@ def test_per_trade_pnls_by_market_groups_fills_by_slug():
     result = BacktestEngine(_data_for_slugs(bt, [_SLUG, other]), strat, starting_cash=10_000.0, snapshot_interval=1).run()
     by_market = per_trade_pnls_by_market(result)
     # Both markets traded; the winning-YES market's fills are positive, the NO-settling market's negative.
-    assert set(by_market.keys()) == {_SLUG, other}
+    assert sorted(by_market.keys()) == sorted([_SLUG, other])
     assert all(pnl > 0.0 for pnl in by_market[_SLUG])
     assert all(pnl < 0.0 for pnl in by_market[other])
     # The flattened by-market PnLs match the ungrouped per-trade list.
@@ -308,8 +308,7 @@ def test_calibration_temperature_softens_overconfident_probability():
     assert calibrated.on_tick(_state(0.40)) == []
 
 
-# ---- Edge mode (--prob-source edge) tests ----
-
+# Edge mode (--prob-source edge) tests.
 def test_edge_mode_buys_yes_when_ev_yes_clears_threshold_and_dominates():
     # ev_yes_hat=0.10 > threshold=0.05 AND ev_yes > ev_no → BUY_YES.
     ev = {(_SLUG, 100): (0.10, -0.05)}

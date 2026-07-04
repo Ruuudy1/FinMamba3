@@ -31,13 +31,13 @@ class DirectionHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, num_classes, **factory)
+
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(self.dropout(hidden)))
         return self.head(h)
+
     @staticmethod
-    def make_targets(
-        mid_norm: torch.Tensor, threshold: float = 1.0e-2
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def make_targets(mid_norm: torch.Tensor, threshold: float = 1.0e-2) -> tuple[torch.Tensor, torch.Tensor]:
         """Three-class targets from the normalized midprice tensor.
 
         mid_norm shape: (B, L). Returns (targets, mask) both (B, L-1). The
@@ -69,6 +69,7 @@ class RegimeHead(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.logits = nn.Linear(hidden_dim, num_regimes, **factory)
         self.embedding = nn.Embedding(num_regimes, embed_dim, **factory)
+
     def forward(self, hidden: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         logits = self.logits(hidden)
         probs = torch.softmax(logits, dim=-1)
@@ -90,6 +91,7 @@ class RegimeConditioner(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim + regime_dim, hidden_dim, **factory)
         self.gate = nn.Linear(hidden_dim + regime_dim, hidden_dim, **factory)
+
     def forward(self, hidden: torch.Tensor, regime_emb: torch.Tensor) -> torch.Tensor:
         x = torch.cat([hidden, regime_emb], dim=-1)
         gate = torch.sigmoid(self.gate(x))
@@ -125,14 +127,11 @@ class EpisodicMemory:
         self.novelty_threshold = float(novelty_threshold)
         self.keys = torch.empty((0, self.key_dim), dtype=torch.float32)
         self.values = torch.empty((0, self.value_dim), dtype=torch.float32)
+
     def __len__(self) -> int:
         return int(self.keys.shape[0])
-    def add(
-        self,
-        keys: torch.Tensor,
-        values: torch.Tensor,
-        novelty: torch.Tensor | None = None,
-    ) -> int:
+
+    def add(self, keys: torch.Tensor, values: torch.Tensor, novelty: torch.Tensor | None = None) -> int:
         """Append entries, optionally filtered by per-entry novelty score.
 
         Returns the number of entries actually written.
@@ -148,6 +147,7 @@ class EpisodicMemory:
         self.keys = torch.cat([self.keys, keys_cpu], dim=0)[-self.capacity :]
         self.values = torch.cat([self.values, values_cpu], dim=0)[-self.capacity :]
         return int(keys_cpu.shape[0])
+
     def retrieve(self, query: torch.Tensor, k: int = 4) -> MemoryBatch | None:
         if self.keys.numel() == 0:
             return None
@@ -185,14 +185,13 @@ class HawkesIntensityHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, 2, **factory)
+
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(hidden))
         return self.head(h)
+
     @staticmethod
-    def poisson_nll(
-        log_intensity: torch.Tensor,
-        counts: torch.Tensor,
-    ) -> torch.Tensor:
+    def poisson_nll(log_intensity: torch.Tensor, counts: torch.Tensor) -> torch.Tensor:
         """Per-step Poisson negative log-likelihood, masked and mean-reduced."""
         mask = torch.isfinite(counts).to(log_intensity.dtype)
         safe_counts = torch.where(torch.isfinite(counts), counts, torch.zeros_like(counts))
@@ -221,15 +220,13 @@ class SettlementHead(nn.Module):
         self.proj = nn.Linear(hidden_dim, hidden_dim // 2, **factory)
         self.act = nn.SiLU()
         self.head = nn.Linear(hidden_dim // 2, 1, **factory)
+
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
         h = self.act(self.proj(hidden))
         return self.head(h).squeeze(-1)
+
     @staticmethod
-    def bce(
-        logits: torch.Tensor,
-        outcome: torch.Tensor,
-        time_to_expiry_frac: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    def bce(logits: torch.Tensor, outcome: torch.Tensor, time_to_expiry_frac: torch.Tensor | None = None) -> torch.Tensor:
         """Binary cross-entropy, optionally weighted by closeness to expiry.
 
         time_to_expiry_frac in [0, 1]: 1 at start, 0 at expiry. Weighting by
@@ -250,6 +247,7 @@ class SettlementHead(nn.Module):
             return (per * mask).sum() / mask.sum().clamp(min=1.0)
         weight = (1.0 - time_to_expiry_frac.clamp(min=0.0, max=1.0)).to(logits.dtype)
         return (per * weight * mask).sum() / mask.sum().clamp(min=1.0)
+
     @staticmethod
     def spot_sign_bce(
         logits: torch.Tensor,
@@ -305,11 +303,7 @@ class BookRelativeEdgeHead(nn.Module):
         return self.head(h)
 
     @staticmethod
-    def ev_targets(
-        outcome: torch.Tensor,
-        yes_ask: torch.Tensor,
-        no_ask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def ev_targets(outcome: torch.Tensor, yes_ask: torch.Tensor, no_ask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """EV targets from ground-truth outcome and ask prices. All (B, L)."""
         ev_yes = outcome - yes_ask
         ev_no = (1.0 - outcome) - no_ask
@@ -324,19 +318,15 @@ class BookRelativeEdgeHead(nn.Module):
     ) -> torch.Tensor:
         """Boolean (B, L) mask: True where all supervision inputs are finite and depth > 0."""
         return (
-            torch.isfinite(outcome)
-            & torch.isfinite(yes_ask)
-            & torch.isfinite(no_ask)
-            & torch.isfinite(book_depth)
-            & (book_depth > 0.0)
+            torch.isfinite(outcome) &
+            torch.isfinite(yes_ask) &
+            torch.isfinite(no_ask) &
+            torch.isfinite(book_depth) &
+            (book_depth > 0.0)
         )
 
     @staticmethod
-    def action_labels(
-        ev_yes: torch.Tensor,
-        ev_no: torch.Tensor,
-        threshold: float = 0.03,
-    ) -> torch.Tensor:
+    def action_labels(ev_yes: torch.Tensor, ev_no: torch.Tensor, threshold: float = 0.03) -> torch.Tensor:
         """Action class labels: 0=SIT, 1=BUY_YES, 2=BUY_NO."""
         buy_yes = (ev_yes >= threshold) & (ev_yes > ev_no)
         buy_no = (ev_no >= threshold) & (ev_no > ev_yes)
@@ -346,12 +336,7 @@ class BookRelativeEdgeHead(nn.Module):
         return labels
 
     @staticmethod
-    def huber_ev_loss(
-        ev_hat: torch.Tensor,
-        ev_yes: torch.Tensor,
-        ev_no: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> torch.Tensor:
+    def huber_ev_loss(ev_hat: torch.Tensor, ev_yes: torch.Tensor, ev_no: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Huber loss on [ev_yes, ev_no] targets, masked. ev_hat shape (B, L, 2).
 
         NaN targets at masked positions are replaced with 0 before the loss call so they
@@ -406,6 +391,7 @@ class EpisodicMemoryFuser(nn.Module):
         factory = {"dtype": dtype, "device": device}
         self.proj = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
         self.gate = nn.Linear(hidden_dim + memory_dim, hidden_dim, **factory)
+
     def forward(self, hidden: torch.Tensor, memory_value: torch.Tensor) -> torch.Tensor:
         x = torch.cat([hidden, memory_value], dim=-1)
         gate = torch.sigmoid(self.gate(x))

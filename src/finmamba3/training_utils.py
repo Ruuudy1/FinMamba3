@@ -40,6 +40,7 @@ class WandbLogger():
         self.run = wandb.init(project=project, config=config, mode=mode, name=_run_name(config))
         self.run.name = f"{self.run.name}_{self.run.id}"
         self.tag_step = {}
+
     def log(self, tag, value, global_step):
         import wandb
         if "video" in tag:
@@ -51,9 +52,11 @@ class WandbLogger():
             wandb.log({tag: wandb.Histogram(value)}, step=global_step)
         else:
             wandb.log({tag: value}, step=global_step)
+
     def update_config(self, update_dict):
         import wandb
         wandb.config.update(update_dict)
+
     def close(self):
         import wandb
         wandb.finish()
@@ -65,10 +68,13 @@ class NoOpLogger():
     def __init__(self, config, project=None, mode='online'):
         self.run = _NoOpRun(_run_name(config))
         self.tag_step = {}
+
     def log(self, tag, value, global_step):
         return
+
     def update_config(self, update_dict):
         return
+
     def close(self):
         return
 
@@ -80,13 +86,17 @@ def make_logger(config, project=None, mode='online'):
 
 
 class EMAScalar():
+
     def __init__(self, decay) -> None:
         self.scalar = 0.0
         self.decay = decay
+
     def __call__(self, value):
         self.update(value)
         return self.get()
+
     def update(self, value):
         self.scalar = self.scalar * self.decay + value * (1 - self.decay)
+
     def get(self):
         return self.scalar

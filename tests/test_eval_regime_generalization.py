@@ -10,12 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from finmamba3.backtester.data_loader import BacktestData, TickData
-from finmamba3.backtester.strategy import (
-    MarketLifecycle,
-    OrderBookLevel,
-    OrderBookSnapshot,
-    StoredBook,
-)
+from finmamba3.backtester.strategy import MarketLifecycle, OrderBookLevel, OrderBookSnapshot, StoredBook
 from finmamba3.envs.lob_features import extract_features, fit_normalization
 from finmamba3.eval.eval_regime_generalization import (
     _degradation,
@@ -33,10 +28,7 @@ _WILD_MIDS = [0.50, 0.70, 0.40, 0.80, 0.30, 0.75, 0.35, 0.70]
 
 
 def _book(mid):
-    return OrderBookSnapshot(
-        bids=(OrderBookLevel(mid - 0.01, 100.0),),
-        asks=(OrderBookLevel(mid + 0.01, 100.0),),
-    )
+    return OrderBookSnapshot(bids=(OrderBookLevel(mid - 0.01, 100.0),), asks=(OrderBookLevel(mid + 0.01, 100.0),))
 
 
 def _stored(mid, book_ts):
@@ -74,8 +66,7 @@ def test_split_slugs_routes_high_vol_to_the_shifted_regime():
 def test_split_slugs_drops_markets_below_min_ticks():
     bt = _two_market_bt()
     realized_vol = realized_vol_from_timeline(bt.timeline)
-    # Each synthetic market has eight two-sided ticks; requiring more leaves no qualifying
-    # market, which must fail fast rather than return a silently empty split.
+    # Requiring more than the eight ticks each synthetic market has must fail fast, not return a silently empty split.
     with pytest.raises(RuntimeError):
         _split_slugs(bt, realized_vol, max_markets=10, min_ticks=100, quantile=0.5)
 
@@ -114,9 +105,9 @@ def test_format_table_reports_not_robust_verdict_for_negative_gap():
 
 
 def test_degradation_sign_is_consistent_across_metric_directions():
-    # macro-F1 is higher-is-better: dropping from 0.6 to 0.4 is a +0.2 degradation.
+    # Macro-F1 is higher-is-better: dropping from 0.6 to 0.4 is a +0.2 degradation.
     assert _degradation(0.60, 0.40, higher_is_better=True) == pytest.approx(0.20)
-    # prediction MSE is lower-is-better: rising from 0.40 to 0.60 is a +0.2 degradation.
+    # Prediction MSE is lower-is-better: rising from 0.40 to 0.60 is a +0.2 degradation.
     assert _degradation(0.40, 0.60, higher_is_better=False) == pytest.approx(0.20)
     # A model that improves under the shift has negative degradation either way.
     assert _degradation(0.40, 0.60, higher_is_better=True) == pytest.approx(-0.20)

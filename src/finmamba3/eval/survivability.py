@@ -52,7 +52,9 @@ def per_trade_pnls(result, slippage_per_share: float = 0.0) -> list[float]:
     return pnls
 
 
-def bootstrap_survivability(trade_pnls: list[float], bankroll: float = 10_000.0, n_paths: int = 10_000, seed: int = 0) -> dict:
+def bootstrap_survivability(
+    trade_pnls: list[float], bankroll: float = 10_000.0, n_paths: int = 10_000, seed: int = 0,
+) -> dict:
     """Monte Carlo bootstrap over the per-trade PnL list (the fat-tail-robust headline test).
 
     Resamples the realized trades with replacement into n_paths equity curves of the same length,
@@ -62,7 +64,10 @@ def bootstrap_survivability(trade_pnls: list[float], bankroll: float = 10_000.0,
     trades within a market are correlated, bootstrap_survivability_by_market is the honest test.
     """
     if not trade_pnls:
-        return {"n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0, "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0}
+        return {
+            "n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0,
+            "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0,
+        }
     pnls = np.asarray(trade_pnls, dtype=np.float64)
     rng = np.random.default_rng(seed)
     sampled = rng.choice(pnls, size=(n_paths, pnls.shape[0]), replace=True)
@@ -95,11 +100,15 @@ def per_trade_pnls_by_market(result, slippage_per_share: float = 0.0) -> dict:
         if outcome is None:
             continue
         payout = 1.0 if fill.token == outcome else 0.0
-        pnls_by_slug.setdefault(fill.market_slug, []).append(float(fill.size * (payout - fill.avg_price) - slippage_per_share * fill.size))
+        pnls_by_slug.setdefault(fill.market_slug, []).append(
+            float(fill.size * (payout - fill.avg_price) - slippage_per_share * fill.size)
+        )
     return pnls_by_slug
 
 
-def bootstrap_survivability_by_market(pnls_by_market: dict, bankroll: float = 10_000.0, n_paths: int = 10_000, seed: int = 0) -> dict:
+def bootstrap_survivability_by_market(
+    pnls_by_market: dict, bankroll: float = 10_000.0, n_paths: int = 10_000, seed: int = 0,
+) -> dict:
     """Market-block bootstrap: resample whole markets with replacement, not individual trades.
 
     Each path draws as many markets as were traded (with replacement), concatenates their trade
@@ -110,10 +119,20 @@ def bootstrap_survivability_by_market(pnls_by_market: dict, bankroll: float = 10
     trades are correlated. Drawdown is reduced per market in O(1) from each market's (total, low, high,
     intrinsic-drawdown) summary, so 10k paths over hundreds of markets stay cheap. n_markets is the true
     independent-unit count the report should cite alongside n_trades.
+
+    The worst-case drawdown over each path's equity curve is computed with vectorized numpy reductions
+    over all paths at once. The per-path Python loop this replaces was ~98% of a sweep value's
+    wall-clock and held the GIL, so a threaded sweep could not parallelize it; the numpy reductions
+    below drop the GIL. The equity before market i is a bankroll-seeded left-to-right cumsum, whose
+    float association is identical to the scalar `prefix += totals[market]` accumulation, so the
+    drawdown is bitwise-identical to the old loop.
     """
     slugs = [slug for slug in pnls_by_market.keys() if pnls_by_market[slug]]
     if not slugs:
-        return {"n_markets": 0, "n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0, "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0}
+        return {
+            "n_markets": 0, "n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0,
+            "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0,
+        }
     cumulatives = [np.cumsum(np.asarray(pnls_by_market[slug], dtype=np.float64)) for slug in slugs]
     totals = np.array([float(c[-1]) for c in cumulatives])
     lows = np.array([float(c.min()) for c in cumulatives])
@@ -125,11 +144,7 @@ def bootstrap_survivability_by_market(pnls_by_market: dict, bankroll: float = 10
     draws = rng.integers(0, n_markets, size=(n_paths, n_markets))
     drawn_totals = totals[draws]
     terminal = drawn_totals.sum(axis=1)
-    # Worst-case drawdown over each path's equity curve, vectorized over all paths at once. The per-path
-    # Python loop this replaces was ~98% of a sweep value's wall-clock and held the GIL (so a threaded
-    # sweep could not parallelize it); the numpy reductions below drop the GIL. The equity before market i
-    # is a bankroll-seeded left-to-right cumsum, whose float association is identical to the scalar
-    # `prefix += totals[market]` accumulation, so the drawdown is bitwise-identical to the old loop.
+    # Vectorized drawdown path; see the docstring for the GIL and bitwise-identity rationale.
     equity_before = np.cumsum(np.concatenate([np.full((n_paths, 1), bankroll), drawn_totals[:, :-1]], axis=1), axis=1)
     equity_high = equity_before + highs[draws]
     # Peak before market i is the inclusive running peak shifted one market right, floored at bankroll.
@@ -151,8 +166,11 @@ def bootstrap_survivability_by_market(pnls_by_market: dict, bankroll: float = 10
 
 
 def _sharpe_from_snapshots(snapshots) -> float:
-    # Per-snapshot Sharpe of the mark-to-market portfolio value; a relative number that lets the A/B
-    # rank arms even though the absolute annualization is arbitrary for sub-hour markets.
+    """Per-snapshot Sharpe of the mark-to-market portfolio value.
+
+    A relative number that lets the A/B rank arms even though the absolute annualization is
+    arbitrary for sub-hour markets.
+    """
     values = np.array([snap.total_value for snap in snapshots], dtype=np.float64)
     if values.size < 3:
         return 0.0

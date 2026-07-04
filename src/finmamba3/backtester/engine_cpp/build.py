@@ -28,5 +28,7 @@ def build() -> int:
     built = list(here.glob("_engine*.pyd")) + list(here.glob("_engine*.so"))
     print(f"built: {[str(path.name) for path in built]}")
     return 0 if built else 1
+
+
 if __name__ == "__main__":
     raise SystemExit(build())

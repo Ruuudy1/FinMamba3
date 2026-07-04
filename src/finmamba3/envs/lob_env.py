@@ -10,12 +10,7 @@ from gymnasium import spaces
 from finmamba3.backtester.data_loader import BacktestData, TickData
 from finmamba3.backtester.strategy import Fill, OrderBookSnapshot, Settlement, Side, Token
 # endregion
-ACTION_SPECS = (
-    (Side.BUY, Token.YES),
-    (Side.BUY, Token.NO),
-    (Side.SELL, Token.YES),
-    (Side.SELL, Token.NO),
-)
+ACTION_SPECS = ((Side.BUY, Token.YES), (Side.BUY, Token.NO), (Side.SELL, Token.YES), (Side.SELL, Token.NO))
 OBS_FEATURE_NAMES = (
     "yes_mid",
     "yes_spread",
@@ -126,9 +121,7 @@ class PolymarketLOBEnv(gym.Env):
         self.reset_to_active = bool(reset_to_active)
         valid_kinds = ("default", "settlement_calibrated", "risk_budgeted")
         if reward_kind not in valid_kinds:
-            raise ValueError(
-                f"reward_kind must be one of {sorted(valid_kinds)}; got {reward_kind!r}"
-            )
+            raise ValueError(f"reward_kind must be one of {sorted(valid_kinds)}; got {reward_kind!r}")
         self.reward_kind = reward_kind
         self.reward_settlement_weight = float(reward_settlement_weight)
         self.reward_risk_budget = float(reward_risk_budget)
@@ -210,12 +203,7 @@ class PolymarketLOBEnv(gym.Env):
         )
         self._done = self._i >= len(self.data.timeline) - 1
         settlement_facts = [settled.settlement for settled in settled_positions]
-        info = self._info(
-            fill=fill,
-            invalid_action=invalid_action,
-            settlements=settlement_facts,
-            submit_ts=submit_ts,
-        )
+        info = self._info(fill=fill, invalid_action=invalid_action, settlements=settlement_facts, submit_ts=submit_ts)
         info.update(
             {
                 "portfolio_value": value_after,
@@ -245,9 +233,9 @@ class PolymarketLOBEnv(gym.Env):
         """
         base_pnl = math.tanh(delta_log / max(self.vol_scale, 1e-8))
         cost = (
-            self.reward_turnover_coef * turnover
-            + self.reward_inventory_coef * inventory_frac ** 2
-            + self.reward_drawdown_coef * drawdown_increment
+            self.reward_turnover_coef * turnover +
+            self.reward_inventory_coef * inventory_frac ** 2 +
+            self.reward_drawdown_coef * drawdown_increment
         )
         if self.reward_kind == "default":
             return base_pnl - cost
@@ -406,17 +394,9 @@ class PolymarketLOBEnv(gym.Env):
             binance_mid = binance_mid_by_asset[asset]
             chainlink = chainlink_by_asset[asset]
             prev_binance = self._prev_binance_mid.get(asset, binance_mid)
-            binance_ret = (
-                math.log(binance_mid / prev_binance)
-                if binance_mid > 0.0 and prev_binance > 0.0
-                else 0.0
-            )
+            binance_ret = math.log(binance_mid / prev_binance) if binance_mid > 0.0 and prev_binance > 0.0 else 0.0
             self._prev_binance_mid[asset] = binance_mid
-            chainlink_drift = (
-                (chainlink - binance_mid) / binance_mid
-                if chainlink > 0.0 and binance_mid > 0.0
-                else 0.0
-            )
+            chainlink_drift = (chainlink - binance_mid) / binance_mid if chainlink > 0.0 and binance_mid > 0.0 else 0.0
             book_ts = tick.book_timestamps.get(slug, tick.ts_sec)
             staleness = max(float(tick.ts_sec - book_ts), 0.0)
             time_remaining = max(float(lc.end_ts - tick.ts_sec), 0.0)

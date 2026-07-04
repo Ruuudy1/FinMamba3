@@ -2,8 +2,9 @@
 backbone on FI-2010 + Kaggle BTC, evaluates recon NLL + direction macro-F1, and prints the MIMO ablation row.
 Reuses the proven dependency cell from colab_lob_pretrain.ipynb.
 """
+# region imports
 import json
-
+# endregion
 cells = []
 
 
@@ -35,7 +36,6 @@ MIMO on A100 (sm_80) uses `chunk_size=8` at the comparable `d_state=128` — an 
 kernel tiling parameter), baked into `configs/{fi2010,kaggle}_mimo.yaml`. It is slow (~9 s/it), so this defaults to a
 3000-step budget matching the 4080 non-MIMO ablation for a fair comparison. On H100/H200 set `chunk_size: 16` in those
 configs for ~2× throughput.""")
-
 code('''import os, sys, subprocess, glob
 from pathlib import Path
 
@@ -91,7 +91,6 @@ def get_hf_token():
 
 
 print("MIMO ablation:", DATASETS, "| steps", MAX_STEPS, "| seed", SEED)''')
-
 code('''# The sj-hryi/FinMamba3 dataset repo is public (ungated), so the HF token is OPTIONAL -- it is used
 # only if you happen to have one set (e.g. for higher rate limits). No token is required to download.
 HF_TOKEN = get_hf_token()
@@ -111,15 +110,13 @@ if "kaggle" in DATASETS:
 snapshot_download(repo_id=HF_REPO, repo_type="dataset", allow_patterns=patterns,
                   token=HF_TOKEN, local_dir=str(DATA_ROOT))
 print("Downloaded from HF:", patterns)''')
-
 code('''import shutil
 if os.path.exists(PROJECT_DIR):
     shutil.rmtree(PROJECT_DIR)
 subprocess.check_call(["git", "clone", "--branch", BRANCH, REPO_URL, PROJECT_DIR])
 os.chdir(PROJECT_DIR)
 print("Repo ready:", os.getcwd())''')
-
-# --- Dependency cell, copied verbatim from colab_lob_pretrain.ipynb (proven A100/H100 setup) ---
+# Dependency cell, copied verbatim from colab_lob_pretrain.ipynb (the proven A100/H100 setup).
 code('''os.chdir(PROJECT_DIR)
 
 pip_cache = CACHE_ROOT / 'pip'
@@ -189,7 +186,6 @@ import causal_conv1d_cuda
 from mamba_ssm.modules.mamba3 import Mamba3
 from mamba_ssm.ops.tilelang.mamba3.mamba3_mimo import mamba3_mimo
 print('Mamba3 + MIMO TileLang import OK:', mamba3_mimo)''')
-
 code('''# A100/H100 GUARD -- run this BEFORE training. The MIMO bwd_bwd TileLang kernel needs ~123 KB of dynamic
 # shared memory per block. sm_80 (A100, 164 KB cap) and sm_90 (H100, 227 KB) fit it; sm_89 (L4 / RTX 4080,
 # ~99 KB cap) CANNOT and dies with "Failed to set the allowed dynamic shared memory size to 123216".
@@ -204,7 +200,6 @@ if cc not in [(8, 0), (9, 0)]:
         f"exceeds the sm_89 cap (~99 KB). Switch the Colab runtime to an A100 (Runtime -> Change runtime type "
         f"-> A100 GPU; requires Colab Pro+), then Run all again. An H100 also works.")
 print("GPU OK for Mamba-3 MIMO.")''')
-
 code('''# Stage the HF-downloaded data into the repo's data/ dir (FI-2010 split files + Kaggle CSV).
 project = Path(PROJECT_DIR)
 data_dir = project / "data"
@@ -224,7 +219,6 @@ if "kaggle" in DATASETS:
     if not dst.exists():
         shutil.copy(src, dst)
     print("Kaggle ready:", dst.name)''')
-
 code('''import torch
 from huggingface_hub import snapshot_download
 
@@ -315,7 +309,6 @@ for ds in DATASETS:
             "--is-mimo", "--threshold", cfg["threshold"], "--windows", 512, "--out", out_md])
     rows[ds] = Path(out_md).read_text()
     print(rows[ds], flush=True)''')
-
 code('''print("\\n" + "=" * 64)
 print("Mamba-3 MIMO ablation rows (recon NLL + direction macro-F1 + params)")
 print("=" * 64)
@@ -325,7 +318,6 @@ print("\\nSlot the MIMO recon-NLL into the ablation tables (RESULTS.md §5.1 and
 print("then compare against the best non-MIMO backbone under matched params:")
 print("  FI-2010 best non-MIMO recon NLL = -0.5403 (Mamba-1);  Kaggle best = -0.0213 (Mamba-2).")
 print("Pre-registered: if MIMO does NOT match/exceed the best alternative, the MIMO-advantage claim fails — report either way.")''')
-
 notebook = {
     "cells": cells,
     "metadata": {

@@ -51,7 +51,7 @@ def fit_trajectory(name, path, key):
     steps, values = parse(path, key)
     keep = values > 0.0
     steps, values = steps[keep], values[keep]
-    record = {
+    return {
         "name": name, "log": path, "metric": key, "n_points": int(len(steps)),
         "step_first": int(steps[0]), "step_last": int(steps[-1]),
         "value_first": float(values[0]), "value_last": float(values[-1]),
@@ -59,7 +59,6 @@ def fit_trajectory(name, path, key):
         "fit_c_floor_neg005": fit_one(steps, values, -0.05),
         "fit_c_relaxed_neg1": fit_one(steps, values, -1.0),
     }
-    return record
 
 
 def main():

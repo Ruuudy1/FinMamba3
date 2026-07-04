@@ -13,17 +13,8 @@ import types
 import numpy as np
 import pytest
 import torch
-from finmamba3.envs.fi2010_loader import (
-    FI2010_FEATURE_DIM,
-    FI2010_F_LEVEL,
-    FI2010_F_TICK,
-    FI2010_K_LEVELS,
-)
-from finmamba3.eval.eval_regime_generalization_fi2010 import (
-    _METRIC_SPEC,
-    _feature_indices,
-    _regime_windows,
-)
+from finmamba3.envs.fi2010_loader import FI2010_FEATURE_DIM, FI2010_F_LEVEL, FI2010_F_TICK, FI2010_K_LEVELS
+from finmamba3.eval.eval_regime_generalization_fi2010 import _METRIC_SPEC, _feature_indices, _regime_windows
 # endregion
 _LEVEL_WIDTH = FI2010_K_LEVELS * FI2010_F_LEVEL
 
@@ -133,9 +124,8 @@ def _fi2010_sequence(n_events: int = 200):
     )
 
 
-# ===========================================================================
-# 1. Feature-mask index math (pure function)
-# ===========================================================================
+# 1. Feature-mask index math (pure function).
+
 
 def test_price_scale_mask_contains_per_level_price_indices():
     idx = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "price_scale")
@@ -151,7 +141,7 @@ def test_price_scale_mask_contains_tick_mid_and_microprice():
 
 
 def test_price_scale_mask_excludes_size_channels():
-    idx = set(_feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "price_scale"))
+    idx = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "price_scale")
     for k in range(FI2010_K_LEVELS):
         assert k * FI2010_F_LEVEL + 1 not in idx, "ask_size must not be in the price/scale mask."
         assert k * FI2010_F_LEVEL + 3 not in idx, "bid_size must not be in the price/scale mask."
@@ -167,9 +157,9 @@ def test_volume_mask_contains_per_level_size_indices_and_total_vol():
 
 
 def test_price_and_volume_masks_are_disjoint():
-    price = set(_feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "price_scale"))
-    volume = set(_feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "volume"))
-    assert price.isdisjoint(volume), "price/scale and volume masks must not share channels."
+    price = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "price_scale")
+    volume = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "volume")
+    assert all(index not in volume for index in price), "price/scale and volume masks must not share channels."
 
 
 def test_mask_indices_in_range():
@@ -183,9 +173,8 @@ def test_unknown_mask_name_raises():
         _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "bogus")
 
 
-# ===========================================================================
-# 2. Metric spec table
-# ===========================================================================
+# 2. Metric spec table.
+
 
 def test_metric_spec_studentt_metrics_need_studentt_and_a_mask():
     for metric in ("studentt_nll", "volume_nll"):
@@ -208,9 +197,8 @@ def test_metric_spec_recon_nll_is_full_studentt():
     assert spec["mask"] == "all"
 
 
-# ===========================================================================
-# 3. The all-mask covers every channel for both schemas
-# ===========================================================================
+# 3. The all-mask covers every channel for both schemas.
+
 
 def test_all_mask_covers_fi2010_schema():
     idx = _feature_indices(FI2010_K_LEVELS, FI2010_F_LEVEL, FI2010_F_TICK, "all")
@@ -223,9 +211,8 @@ def test_all_mask_covers_kaggle_schema():
     assert idx == list(range(94))
 
 
-# ===========================================================================
-# 4. Regime-axis dispatch (predictability primary, spot_vol secondary)
-# ===========================================================================
+# 4. Regime-axis dispatch (predictability primary, spot_vol secondary).
+
 
 def test_regime_windows_predictability_routes_high_er_to_reference():
     window_len = 8
@@ -262,9 +249,8 @@ def test_regime_windows_invalid_axis_raises():
         _regime_windows("bogus", mid, 16, 0.5)
 
 
-# ===========================================================================
-# 3. Student-t prediction-NLL scoring on a CPU world model
-# ===========================================================================
+# 3. Student-t prediction-NLL scoring on a CPU world model.
+
 
 def test_prediction_nll_count_matches_mask_width_and_windows():
     from finmamba3.eval.compare_direction import world_model_prediction_nll
@@ -277,7 +263,7 @@ def test_prediction_nll_count_matches_mask_width_and_windows():
         wm, seq, torch.device("cpu"), feature_indices,
         windows_per_market=windows_per_market, window_len=window_len,
     )
-    # count = windows * (window_len - 1 next-tick targets) * masked channels.
+    # The count is windows * (window_len - 1 next-tick targets) * masked channels.
     assert count == windows_per_market * (window_len - 1) * len(idx)
     assert np.isfinite(sum_nll)
 
@@ -302,7 +288,8 @@ def test_prediction_nll_volume_mask_has_fewer_channels_than_price():
 def test_prediction_nll_rejects_gaussian_decoder():
     from finmamba3.eval.compare_direction import world_model_prediction_nll
     wm = _studentt_world_model()
-    wm.decoder_kind = "mse"  # Force the precondition off to confirm the guard fires.
+    # Force the precondition off to confirm the guard fires.
+    wm.decoder_kind = "mse"
     seq = _fi2010_sequence(n_events=80)
     idx = torch.tensor([0, 1], dtype=torch.long)
     with pytest.raises(AssertionError, match="Student-t decoder"):

@@ -17,14 +17,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from .strategy import (
-    MarketLifecycle,
-    OrderBookLevel,
-    OrderBookSnapshot,
-    Settlement,
-    StoredBook,
-    Token,
-)
+from .strategy import MarketLifecycle, OrderBookLevel, OrderBookSnapshot, Settlement, StoredBook, Token
 # endregion
 if TYPE_CHECKING:
     import pandas as pd
@@ -43,9 +36,7 @@ _MONTHS = {
     "may": 5, "june": 6, "july": 7, "august": 8,
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
-_HOURLY_PATTERN = re.compile(
-    r"^(bitcoin|solana|ethereum)-up-or-down-([a-z]+)-(\d+)-(\d{4})-(\d+)(am|pm)-et$"
-)
+_HOURLY_PATTERN = re.compile(r"^(bitcoin|solana|ethereum)-up-or-down-([a-z]+)-(\d+)-(\d{4})-(\d+)(am|pm)-et$")
 
 
 def _import_pandas():
@@ -56,7 +47,8 @@ def _import_pandas():
 @dataclass
 class TickData:
     """All data available at a single 1-second tick."""
-    ts_sec: int  # Unix epoch seconds.
+    # Unix epoch seconds.
+    ts_sec: int
     # Polymarket prices per market: slug -> price row dict.
     market_prices: dict[str, dict] = field(default_factory=dict)
     # Order books per market: slug -> {yes_book: OBS, no_book: OBS}.
@@ -77,11 +69,7 @@ class TickData:
 # Raw data loaders, adapted from export_data.py.
 
 
-def load_market_prices(
-    db_path: Path,
-    start_us: int | None = None,
-    end_us: int | None = None,
-) -> pd.DataFrame:
+def load_market_prices(db_path: Path, start_us: int | None = None, end_us: int | None = None) -> pd.DataFrame:
     """Load market_prices table from SQLite, optionally filtered by time range."""
     pd = _import_pandas()
     if not db_path.exists():
@@ -108,12 +96,15 @@ def load_market_prices(
 
 
 def load_orderbooks(books_dir: Path) -> pd.DataFrame:
-    """Load order book snapshots from Parquet or CSV files (and legacy JSONL)."""
+    """Load order book snapshots from Parquet or CSV files (and legacy JSONL).
+
+    The Parquet schema matches the CSV export column-for-column (timestamp_us, market_slug,
+    interval, the *_json ladders, and the derived best-bid/ask, count, and total-size columns),
+    so no remapping is needed between the two formats.
+    """
     pd = _import_pandas()
     frames = []
-    # Preferred Parquet format. Its schema matches the CSV export column-for-column
-    # (timestamp_us, market_slug, interval, the *_json ladders, and the derived
-    # best-bid/ask, count, and total-size columns), so no remapping is needed.
+    # Parquet is preferred; its schema matches the CSV export column-for-column, so no remapping is needed.
     for path in sorted(books_dir.glob("*.parquet")):
         frames.append(pd.read_parquet(path))
     for path in sorted(books_dir.glob("*.csv")):
@@ -127,15 +118,9 @@ def load_orderbooks(books_dir: Path) -> pd.DataFrame:
                 yes_book = rec.get("yes_book", {})
                 no_book = rec.get("no_book", {})
                 def _sort_bids(orders):
-                    return sorted(
-                        [[float(b["price"]), float(b["size"])] for b in orders],
-                        key=lambda x: -x[0],
-                    )
+                    return sorted([[float(b["price"]), float(b["size"])] for b in orders], key=lambda x: -x[0])
                 def _sort_asks(orders):
-                    return sorted(
-                        [[float(a["price"]), float(a["size"])] for a in orders],
-                        key=lambda x: x[0],
-                    )
+                    return sorted([[float(a["price"]), float(a["size"])] for a in orders], key=lambda x: x[0])
                 yb = _sort_bids(yes_book.get("bids", []))
                 ya = _sort_asks(yes_book.get("asks", []))
                 nb = _sort_bids(no_book.get("bids", []))
@@ -192,28 +177,19 @@ def load_binance_lob(binance_dir: Path) -> pd.DataFrame:
     combined = pa.concat_tables(tables)
     df = combined.to_pandas()
     df["ts_sec"] = df["timestamp_us"] // 1_000_000
-    # Classify asset by price magnitude - the three assets (BTC, ETH, SOL)
-    # are orders of magnitude apart so this is unambiguous.
+    # Price magnitude identifies the asset unambiguously because BTC, ETH and SOL are orders of magnitude apart.
     if "bid_price_1" in df.columns:
-        df["asset"] = df["bid_price_1"].apply(
-            lambda x: "BTC" if x > 10_000 else ("ETH" if x > 500 else "SOL")
-        )
+        df["asset"] = df["bid_price_1"].apply(lambda x: "BTC" if x > 10_000 else ("ETH" if x > 500 else "SOL"))
     return df
 
 
-def load_chainlink_prices(
-    db_path: Path,
-    start_us: int | None = None,
-    end_us: int | None = None,
-) -> pd.DataFrame:
+def load_chainlink_prices(db_path: Path, start_us: int | None = None, end_us: int | None = None) -> pd.DataFrame:
     """Load Chainlink BTC/USD prices from rtds_prices table."""
     pd = _import_pandas()
     if not db_path.exists():
         return pd.DataFrame()
     conn = sqlite3.connect(str(db_path))
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='rtds_prices'"
-    ).fetchall()
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='rtds_prices'").fetchall()
     if not tables:
         conn.close()
         return pd.DataFrame()
@@ -238,15 +214,11 @@ def load_market_outcomes(db_path: Path) -> dict[str, str]:
     if not db_path.exists():
         return {}
     conn = sqlite3.connect(str(db_path))
-    tables = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='market_outcomes'"
-    ).fetchall()
+    tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='market_outcomes'").fetchall()
     if not tables:
         conn.close()
         return {}
-    cur = conn.execute(
-        "SELECT market_slug, outcome FROM market_outcomes WHERE status='resolved'"
-    )
+    cur = conn.execute("SELECT market_slug, outcome FROM market_outcomes WHERE status='resolved'")
     outcomes = {row[0]: row[1] for row in cur.fetchall()}
     conn.close()
     return outcomes
@@ -266,12 +238,7 @@ def parse_slug_lifecycle(slug: str) -> MarketLifecycle | None:
             if m:
                 start_ts = int(m.group(1))
                 end_ts = start_ts + cfg["seconds"]
-                return MarketLifecycle(
-                    market_slug=slug,
-                    interval=interval,
-                    start_ts=start_ts,
-                    end_ts=end_ts,
-                )
+                return MarketLifecycle(market_slug=slug, interval=interval, start_ts=start_ts, end_ts=end_ts)
     # Try hourly date-based slug.
     m = _HOURLY_PATTERN.match(slug)
     if m:
@@ -286,8 +253,7 @@ def parse_slug_lifecycle(slug: str) -> MarketLifecycle | None:
             hour_24 = 0
         from datetime import datetime
         import zoneinfo
-        # Fail loud rather than silently falling back to UTC: an ET->UTC shift would
-        # misalign every hourly market's settlement clock by several hours.
+        # Fail loud instead of falling back to UTC: an ET->UTC shift would misalign every hourly settlement clock.
         et = zoneinfo.ZoneInfo("America/New_York")
         try:
             dt_et = datetime(int(year), month, int(day), hour_24, 0, 0, tzinfo=et)
@@ -295,12 +261,7 @@ def parse_slug_lifecycle(slug: str) -> MarketLifecycle | None:
             return None
         start_ts = int(dt_et.timestamp())
         end_ts = start_ts + 3600
-        return MarketLifecycle(
-            market_slug=slug,
-            interval="hourly",
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
+        return MarketLifecycle(market_slug=slug, interval="hourly", start_ts=start_ts, end_ts=end_ts)
     return None
 # Settlement computation.
 
@@ -314,7 +275,8 @@ def _asset_from_slug(slug: str) -> str:
         return "SOL"
     elif s.startswith("eth-") or s.startswith("ethereum-"):
         return "ETH"
-    return "BTC"  # Default fallback for unknown asset names.
+    # Default fallback for unknown asset names.
+    return "BTC"
 
 
 def compute_settlements(
@@ -361,14 +323,10 @@ def compute_settlements(
         if asset_cl is None or asset_cl.empty:
             continue
         # Get Chainlink price closest to market start.
-        start_mask = (asset_cl["ts_sec"] >= lc.start_ts - 5) & (
-            asset_cl["ts_sec"] <= lc.start_ts + 5
-        )
+        start_mask = (asset_cl["ts_sec"] >= lc.start_ts - 5) & (asset_cl["ts_sec"] <= lc.start_ts + 5)
         start_prices = asset_cl[start_mask]
         # Get Chainlink price closest to market end.
-        end_mask = (asset_cl["ts_sec"] >= lc.end_ts - 5) & (
-            asset_cl["ts_sec"] <= lc.end_ts + 5
-        )
+        end_mask = (asset_cl["ts_sec"] >= lc.end_ts - 5) & (asset_cl["ts_sec"] <= lc.end_ts + 5)
         end_prices = asset_cl[end_mask]
         if start_prices.empty or end_prices.empty:
             # Fallback: use nearest available price.
@@ -377,16 +335,8 @@ def compute_settlements(
             open_price = float(asset_cl.loc[start_idx, "price"])
             close_price = float(asset_cl.loc[end_idx, "price"])
         else:
-            open_price = float(
-                start_prices.loc[
-                    (start_prices["ts_sec"] - lc.start_ts).abs().idxmin(), "price"
-                ]
-            )
-            close_price = float(
-                end_prices.loc[
-                    (end_prices["ts_sec"] - lc.end_ts).abs().idxmin(), "price"
-                ]
-            )
+            open_price = float(start_prices.loc[(start_prices["ts_sec"] - lc.start_ts).abs().idxmin(), "price"])
+            close_price = float(end_prices.loc[(end_prices["ts_sec"] - lc.end_ts).abs().idxmin(), "price"])
         outcome = Token.YES if close_price >= open_price else Token.NO
         settlements[slug] = Settlement(
             market_slug=slug,
@@ -468,17 +418,12 @@ def build_timeline(
     if hours is not None and hours > 0 and db_path.exists():
         # Find the max timestamp in the DB to compute the window.
         conn = sqlite3.connect(str(db_path))
-        row = conn.execute(
-            "SELECT MAX(timestamp_us) FROM market_prices"
-        ).fetchone()
+        row = conn.execute("SELECT MAX(timestamp_us) FROM market_prices").fetchone()
         conn.close()
         if row and row[0]:
             end_us = int(row[0])
             start_us = end_us - int(hours * 3600 * 1_000_000)
-            logger.info(
-                f"Time filter: last {hours}h "
-                f"({start_us // 1_000_000} - {end_us // 1_000_000})"
-            )
+            logger.info(f"Time filter: last {hours}h ({start_us // 1_000_000} - {end_us // 1_000_000})")
     # Load raw data.
     logger.info("Loading market prices...")
     prices_df = load_market_prices(db_path, start_us=start_us, end_us=end_us)
@@ -491,27 +436,19 @@ def build_timeline(
     known_outcomes = load_market_outcomes(db_path)
     if prices_df.empty:
         logger.warning("No market price data found")
-        return BacktestData(
-            timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0
-        )
+        return BacktestData(timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0)
     # Filter to requested intervals.
     prices_df = prices_df[prices_df["interval"].isin(intervals)]
     if prices_df.empty:
         logger.warning(f"No data for intervals {intervals}")
-        return BacktestData(
-            timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0
-        )
+        return BacktestData(timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0)
     # Filter to requested assets; eliminates SOL/ETH work when the strategy is BTC-only.
     if assets:
         wanted_assets = {a.upper(): True for a in assets}
-        prices_df = prices_df[prices_df["market_slug"].apply(
-            lambda s: _asset_from_slug(s) in wanted_assets
-        )]
+        prices_df = prices_df[prices_df["market_slug"].apply(lambda s: _asset_from_slug(s) in wanted_assets)]
         if prices_df.empty:
             logger.warning(f"No data for assets {assets}")
-            return BacktestData(
-                timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0
-            )
+            return BacktestData(timeline=[], lifecycles=[], settlements={}, start_ts=0, end_ts=0)
     # Discover all market lifecycles from slugs.
     all_slugs = prices_df["market_slug"].unique()
     lifecycles: list[MarketLifecycle] = []
@@ -528,12 +465,8 @@ def build_timeline(
     global_start = int(prices_df["ts_sec"].min())
     global_end = int(prices_df["ts_sec"].max())
     # Aggregate Binance to per-second, one dict per asset.
-    # Mid and spread are derived on the fly from bid_price_1/ask_price_1
-    # since the Parquet schema does not carry a mid_price column. The
-    # "asset" column is set upstream in load_binance_lob.
-    binance_by_sec: dict[str, dict[int, tuple[float, float]]] = {
-        "BTC": {}, "ETH": {}, "SOL": {},
-    }
+    # Mid and spread are derived on the fly from bid_price_1/ask_price_1 since the Parquet schema does not carry a mid_price column; the "asset" column is set upstream in load_binance_lob.
+    binance_by_sec: dict[str, dict[int, tuple[float, float]]] = {"BTC": {}, "ETH": {}, "SOL": {}}
     if not binance_df.empty and "bid_price_1" in binance_df.columns and "ask_price_1" in binance_df.columns:
         has_asset_col = "asset" in binance_df.columns
         for asset in ("BTC", "ETH", "SOL"):
@@ -546,10 +479,7 @@ def build_timeline(
                 _mid=(asset_lob["bid_price_1"] + asset_lob["ask_price_1"]) / 2,
                 _spread=(asset_lob["ask_price_1"] - asset_lob["bid_price_1"]),
             )
-            agg = asset_lob.groupby("ts_sec").agg(
-                mid=("_mid", "last"),
-                spread=("_spread", "last"),
-            )
+            agg = asset_lob.groupby("ts_sec").agg(mid=("_mid", "last"), spread=("_spread", "last"))
             binance_by_sec[asset] = dict(
                 zip(
                     agg.index.astype(int).tolist(),
@@ -560,8 +490,7 @@ def build_timeline(
                 )
             )
     # Aggregate Chainlink to per-second, one dict per asset.
-    # Filter by symbol before groupby so `.last()` only sees rows for a
-    # single asset within each bucket.
+    # Filter by symbol before groupby so `.last()` only sees rows for a single asset within each bucket.
     chainlink_by_sec: dict[str, dict[int, float]] = {"BTC": {}, "ETH": {}, "SOL": {}}
     if not chainlink_df.empty and "symbol" in chainlink_df.columns:
         _symbol_to_asset = {"BTC/USD": "BTC", "ETH/USD": "ETH", "SOL/USD": "SOL"}
@@ -570,21 +499,11 @@ def build_timeline(
             if sub.empty:
                 continue
             agg = sub.groupby("ts_sec").agg(price=("price", "last"))
-            chainlink_by_sec[asset] = dict(
-                zip(
-                    agg.index.astype(int).tolist(),
-                    agg["price"].astype(float).tolist(),
-                )
-            )
+            chainlink_by_sec[asset] = dict(zip(agg.index.astype(int).tolist(), agg["price"].astype(float).tolist()))
     elif not chainlink_df.empty:
         # Fall back to single-symbol rows (rtds_prices with no symbol column).
         agg = chainlink_df.groupby("ts_sec").agg(price=("price", "last"))
-        chainlink_by_sec["BTC"] = dict(
-            zip(
-                agg.index.astype(int).tolist(),
-                agg["price"].astype(float).tolist(),
-            )
-        )
+        chainlink_by_sec["BTC"] = dict(zip(agg.index.astype(int).tolist(), agg["price"].astype(float).tolist()))
     # Group prices by ts_sec for fast lookup.
     # `to_dict('records')` is ~20x faster than iterrows() on large frames.
     prices_grouped: dict[int, dict] = {}
@@ -597,28 +516,22 @@ def build_timeline(
             prices_grouped[ts] = bucket
         bucket[slug] = rec
     # Release the prices DataFrame - the grouped dict has everything we need.
-    # Without this, pandas holds ~1 GB of row data alive through the JSON-parse
-    # step below, causing GC thrashing on OneDrive-synced directories.
-    # We rely on refcount-based cleanup; no explicit gc.collect() (scanning
-    # the ~9M book-level objects takes over two minutes on big datasets).
+    # Without this, pandas holds ~1 GB of row data alive through the JSON-parse step below, causing GC thrashing on OneDrive-synced directories.
+    # We rely on refcount-based cleanup; no explicit gc.collect() (scanning the ~9M book-level objects takes over two minutes on big datasets).
     del prices_df
     del binance_df, chainlink_df
     import gc
-    # Filter books_df to slugs actually in scope. After interval+asset
-    # filtering on prices_df, `lifecycles` is the authoritative list of
-    # markets the engine will see. Books for any other slug are wasted
-    # parse work.
+    # Filter books_df to slugs actually in scope.
+    # After interval+asset filtering on prices_df, `lifecycles` is the authoritative list of markets the engine will see.
+    # Books for any other slug are wasted parse work.
     if not books_df.empty and "market_slug" in books_df.columns:
         lifecycle_slugs = [lc.market_slug for lc in lifecycles]
         if lifecycle_slugs:
             books_df = books_df[books_df["market_slug"].isin(lifecycle_slugs)]
-    # Build pre-parsed book snapshots indexed by (slug, ts) for O(1)
-    # forward-fill. Use one groupby() pass rather than scanning the frame
-    # per slug - the per-slug approach is O(N*S) on 8k+ slugs.
-    #
-    # No pickle cache: 1.75M dataclass instances pickle to ~6 GB of Python
-    # object overhead, so re-parsing on cold start is faster. The del/gc
-    # cleanup above keeps cold-parse near raw CPU cost (~90s on full train).
+    # Build pre-parsed book snapshots indexed by (slug, ts) for O(1) forward-fill.
+    # Use one groupby() pass rather than scanning the frame per slug - the per-slug approach is O(N*S) on 8k+ slugs.
+    # No pickle cache: 1.75M dataclass instances pickle to ~6 GB of Python object overhead, so re-parsing on cold start is faster.
+    # The del/gc cleanup above keeps cold-parse near raw CPU cost (~90s on full train).
     import bisect
     books_by_slug: dict[str, Any] = {}
     book_ts_index: dict[str, list[int]] = {}
@@ -626,19 +539,13 @@ def build_timeline(
     if not books_df.empty:
         logger.info(f"Parsing {len(books_df):,} order-book snapshots...")
         # Pre-extract the columns we need to avoid pandas .get() overhead per row.
-        book_cols = [
-            "ts_sec", "market_slug",
-            "yes_bids_json", "yes_asks_json",
-            "no_bids_json", "no_asks_json",
-        ]
+        book_cols = ["ts_sec", "market_slug", "yes_bids_json", "yes_asks_json", "no_bids_json", "no_asks_json"]
         available = [c for c in book_cols if c in books_df.columns]
         slim = books_df[available].sort_values(["market_slug", "ts_sec"])
         parsed = 0
         progress_every = max(len(slim) // 5, 1)
-        # Disable GC during the parse. We create millions of small objects
-        # (OrderBookLevel tuples, OrderBookSnapshot dataclasses); with GC
-        # enabled, each collection pass scans the whole prices_grouped dict
-        # as well, which is a ~2-3x slowdown on large datasets.
+        # Disable GC during the parse.
+        # We create millions of small objects (OrderBookLevel tuples, OrderBookSnapshot dataclasses); with GC enabled, each collection pass scans the whole prices_grouped dict as well, which is a ~2-3x slowdown on large datasets.
         gc.disable()
         try:
             for slug, grp in slim.groupby("market_slug", sort=False):
@@ -673,14 +580,11 @@ def build_timeline(
         finally:
             gc.enable()
         # Release the raw books DataFrame - parsed snapshots have all we need.
-        # NO explicit gc.collect() - scanning the ~9M book-level objects
-        # we just created would cost 2+ minutes and saves nothing material.
+        # NO explicit gc.collect() - scanning the ~9M book-level objects we just created would cost 2+ minutes and saves nothing material.
         del books_df, slim
-        # Move everything created so far to the "permanent generation"
-        # (gc.freeze). Subsequent collections during the tick loop only
-        # scan newly-created objects, not the 1M+ immutable book snapshots
-        # we just built. Removes the 1-2 minute stall we were seeing
-        # between "parsed" and the first timeline-progress log.
+        # Move everything created so far to the "permanent generation" (gc.freeze).
+        # Subsequent collections during the tick loop only scan newly-created objects, not the 1M+ immutable book snapshots we just built.
+        # Removes the 1-2 minute stall we were seeing between "parsed" and the first timeline-progress log.
         gc.freeze()
     # Track which slugs have JSONL books vs. those that need synthetic order books.
     # Dict-as-keyset keeps O(1) membership without using a Python set.
@@ -696,22 +600,15 @@ def build_timeline(
     logger.info(f"Building timeline: {total_secs} seconds, {len(lifecycles)} markets")
     timeline: list[TickData] = []
     # Sort lifecycle events so we only look at *currently active* markets per tick.
-    # Without this, the inner slug loop is O(T * N) = billions of iterations on
-    # the full train set (641K seconds * 8.4K markets).
-    starts_sorted = sorted(
-        ((lc.start_ts, lc.market_slug) for lc in lifecycles), key=lambda x: x[0]
-    )
-    ends_sorted = sorted(
-        ((lc.end_ts, lc.market_slug) for lc in lifecycles), key=lambda x: x[0]
-    )
+    # Without this, the inner slug loop is O(T * N) = billions of iterations on the full train set (641K seconds * 8.4K markets).
+    starts_sorted = sorted(((lc.start_ts, lc.market_slug) for lc in lifecycles), key=lambda x: x[0])
+    ends_sorted = sorted(((lc.end_ts, lc.market_slug) for lc in lifecycles), key=lambda x: x[0])
     start_idx = 0
     end_idx = 0
     # Dict-as-keyset keeps O(1) add and discard for the per-tick active list.
     active_by_slug: dict[str, bool] = {}
     # Track the last observed value for each asset so we can forward-fill.
-    last_binance: dict[str, tuple[float, float]] = {
-        "BTC": (0.0, 0.0), "ETH": (0.0, 0.0), "SOL": (0.0, 0.0),
-    }
+    last_binance: dict[str, tuple[float, float]] = {"BTC": (0.0, 0.0), "ETH": (0.0, 0.0), "SOL": (0.0, 0.0)}
     last_chainlink_by_asset: dict[str, float] = {"BTC": 0.0, "ETH": 0.0, "SOL": 0.0}
     # Map of slug -> {yes_book, no_book, book_ts}.
     last_books: dict[str, dict] = {}
@@ -730,7 +627,7 @@ def build_timeline(
         # Market prices (only available at recorded ticks).
         if ts in prices_grouped:
             tick.market_prices = prices_grouped[ts]
-        # Order books: forward-fill from last known snapshot using bisect
+        # Order books: forward-fill from last known snapshot using bisect.
         # Only iterate the ~50-200 currently active markets, not all 8.4K.
         for slug in active_by_slug:
             if slug in book_ts_index:
@@ -780,10 +677,7 @@ def build_timeline(
         timeline.append(tick)
         if len(timeline) % progress_step == 0:
             pct = len(timeline) / total_secs * 100
-            logger.info(
-                f"  timeline build: {len(timeline):,}/{total_secs:,} "
-                f"({pct:.0f}%, active={len(active_by_slug)})"
-            )
+            logger.info(f"  timeline build: {len(timeline):,}/{total_secs:,} ({pct:.0f}%, active={len(active_by_slug)})")
     logger.info(f"Timeline built: {len(timeline)} ticks, {len(lifecycles)} markets")
     return BacktestData(
         timeline=timeline,

@@ -34,14 +34,10 @@ SRC_DIR = Path(__file__).resolve().parents[2]
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Diagnose a world-model checkpoint")
-    p.add_argument("--checkpoint", required=True, type=Path,
-                   help="Path to world_model.pth")
-    p.add_argument("--config", required=True, type=Path,
-                   help="YAML config used to build the model")
-    p.add_argument("--data-val", required=True, type=Path,
-                   help="Validation data directory")
-    p.add_argument("--norm-path", type=Path,
-                   default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
+    p.add_argument("--checkpoint", required=True, type=Path, help="Path to world_model.pth")
+    p.add_argument("--config", required=True, type=Path, help="YAML config used to build the model")
+    p.add_argument("--data-val", required=True, type=Path, help="Validation data directory")
+    p.add_argument("--norm-path", type=Path, default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     p.add_argument("--out-dir", type=Path, default=Path("notes"))
     p.add_argument("--market-slug", default=None)
     p.add_argument("--hours-val", type=float, default=1.0)
@@ -67,8 +63,7 @@ def _load_world_model(args: argparse.Namespace, device: torch.device):
         cfg_raw = yaml.safe_load(f)
     cfg_raw = parse_args_and_update_config(cfg_raw, argv=[])
     cfg = DotDict(cfg_raw)
-    # Action_dim is read by WorldModel from the agent action space; for diagnosis
-    # we use a small default since action input is gated by Phase A defaults anyway.
+    # Action input is gated by Phase A defaults, so a small fixed action_dim suffices for diagnosis.
     action_dim = 13
     wm = WorldModel(action_dim=action_dim, config=cfg, device=device).to(device)
     state = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -111,9 +106,7 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
     decoded = []
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         ctx_latent = wm.encode_obs(obs)
         prefix_latent = ctx_latent
         prefix_action = action
@@ -131,14 +124,16 @@ def _imagine_rollout(wm, val_seq, context_len: int, horizon: int) -> np.ndarray:
             decoded.append(wm.obs_decoder(prior_flat).float().cpu().numpy()[0, 0])
             if step != horizon - 1:
                 prefix_latent = torch.cat([prefix_latent, prior_flat], dim=1)
-                prefix_action = torch.cat(
-                    [prefix_action, torch.zeros((1, 1), dtype=torch.float32, device=device)], dim=1
-                )
+                prefix_action = torch.cat([prefix_action, torch.zeros((1, 1), dtype=torch.float32, device=device)], dim=1)
     return np.stack(decoded, axis=0)
 
 
 def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]:
-    """Return mean and std of per-step entropy for posterior and prior over a val batch."""
+    """Return mean and std of per-step entropy for posterior and prior over a val batch.
+
+    Entropy is computed per categorical group (CategoricalDim groups of ClassDim classes).
+    Higher entropy means the latent is closer to uniform; full collapse is log(ClassDim).
+    """
     device = wm.device
     flat = val_seq.to_flat()
     T = flat.shape[0]
@@ -151,9 +146,7 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -166,8 +159,6 @@ def _categorical_entropy_stats(wm, val_seq, batch_size: int) -> dict[str, float]
             dist_feat = wm.sequence_model(flattened_sample, action)
         dist_feat = wm.condition_dist_feat(dist_feat)
         prior_logits = wm.dist_head.forward_prior(dist_feat)
-    # Entropy is computed per categorical group (CategoricalDim groups of ClassDim classes).
-    # Higher entropy means the latent is closer to uniform; full collapse is log(ClassDim).
     def _entropy(logits: torch.Tensor) -> torch.Tensor:
         log_probs = torch.log_softmax(logits.float(), dim=-1)
         probs = log_probs.exp()
@@ -198,9 +189,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((batch_size, batch_length), dtype=torch.float32, device=device)
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -219,10 +208,7 @@ def _per_feature_val_mse(wm, val_seq, batch_size: int = 64, batch_length: int = 
     pred_next = next_hat.detach().float()
     diff = pred_next - target_next
     feature_mse = (diff ** 2).mean(dim=(0, 1)).cpu().numpy()
-    return sorted(
-        [(FLAT_FEATURE_NAMES[i], float(v)) for i, v in enumerate(feature_mse)],
-        key=lambda x: -x[1],
-    )
+    return sorted([(FLAT_FEATURE_NAMES[i], float(v)) for i, v in enumerate(feature_mse)], key=lambda x: -x[1])
 
 
 def _maybe_plot(decoded: np.ndarray, out_path: Path) -> None:
@@ -277,10 +263,8 @@ def main() -> int:
     logger.info(f"rollout summary: {rollout_summary}")
     entropy_stats = _categorical_entropy_stats(wm, val_seq, args.entropy_batch)
     logger.info(f"entropy stats (uniform={entropy_stats['uniform_entropy']:.4f}):")
-    logger.info(f"  posterior mean={entropy_stats['post_entropy_mean']:.4f} "
-                f"std={entropy_stats['post_entropy_std']:.4f}")
-    logger.info(f"  prior     mean={entropy_stats['prior_entropy_mean']:.4f} "
-                f"std={entropy_stats['prior_entropy_std']:.4f}")
+    logger.info(f"  posterior mean={entropy_stats['post_entropy_mean']:.4f} std={entropy_stats['post_entropy_std']:.4f}")
+    logger.info(f"  prior     mean={entropy_stats['prior_entropy_mean']:.4f} std={entropy_stats['prior_entropy_std']:.4f}")
     feature_mse = _per_feature_val_mse(wm, val_seq)
     logger.info("top 10 per-feature val MSE:")
     for name, val in feature_mse[:10]:

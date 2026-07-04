@@ -24,6 +24,7 @@ class ScaledDotProductAttention(nn.Module):
         super().__init__()
         self.temperature = temperature
         self.dropout = nn.Dropout(attn_dropout)
+
     def forward(self, q, k, v, mask=None):
         attn = torch.matmul(q / self.temperature, k.transpose(2, 3))
         if mask is not None:
@@ -48,22 +49,22 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention(temperature=d_k ** 0.5)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
+
     def forward(self, q, k, v, mask=None):
         d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
         sz_b, len_q, len_k, len_v = q.size(0), q.size(1), k.size(1), v.size(1)
         residual = q
-        # Project to queries, keys, and values: b x lq x (n*dv).
-        # Separate into heads: b x lq x n x dv.
+        # Project to queries, keys, and values (b x lq x (n*dv)), then separate into heads: b x lq x n x dv.
         q = self.w_qs(q).view(sz_b, len_q, n_head, d_k)
         k = self.w_ks(k).view(sz_b, len_k, n_head, d_k)
         v = self.w_vs(v).view(sz_b, len_v, n_head, d_v)
         # Transpose for attention dot product: b x n x lq x dv.
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         if mask is not None:
-            mask = mask.unsqueeze(1)   # For head axis broadcasting.
+            # For head axis broadcasting.
+            mask = mask.unsqueeze(1)
         q, attn = self.attention(q, k, v, mask=mask)
-        # Transpose head dimension back: b x lq x n x dv.
-        # Concatenate all heads: b x lq x (n*dv).
+        # Transpose the head dimension back (b x lq x n x dv), then concatenate all heads: b x lq x (n*dv).
         q = q.transpose(1, 2).contiguous().view(sz_b, len_q, -1)
         q = self.dropout(self.fc(q))
         q += residual
@@ -80,6 +81,7 @@ class PositionwiseFeedForward(nn.Module):
         self.w_2 = nn.Linear(d_hid, d_in)
         self.layer_norm = nn.LayerNorm(d_in, eps=1e-6)
         self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         residual = x
         x = self.w_2(F.relu(self.w_1(x)))
@@ -90,22 +92,25 @@ class PositionwiseFeedForward(nn.Module):
 
 
 class AttentionBlock(nn.Module):
+
     def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
         super().__init__()
         self.slf_attn = MultiHeadAttention(num_heads, feat_dim, feat_dim//num_heads, feat_dim//num_heads, dropout=dropout)
         self.pos_ffn = PositionwiseFeedForward(feat_dim, hidden_dim, dropout=dropout)
+
     def forward(self, enc_input, slf_attn_mask=None):
-        enc_output, enc_slf_attn = self.slf_attn(
-            enc_input, enc_input, enc_input, mask=slf_attn_mask)
+        enc_output, enc_slf_attn = self.slf_attn(enc_input, enc_input, enc_input, mask=slf_attn_mask)
         enc_output = self.pos_ffn(enc_output)
         return enc_output, enc_slf_attn
 
 
 class AttentionBlockKVCache(nn.Module):
+
     def __init__(self, feat_dim, hidden_dim, num_heads, dropout):
         super().__init__()
         self.slf_attn = MultiHeadAttention(num_heads, feat_dim, feat_dim//num_heads, feat_dim//num_heads, dropout=dropout)
         self.pos_ffn = PositionwiseFeedForward(feat_dim, hidden_dim, dropout=dropout)
+
     def forward(self, q, k, v, slf_attn_mask=None):
         output, attn = self.slf_attn(q, k, v, mask=slf_attn_mask)
         output = self.pos_ffn(output)
@@ -127,6 +132,7 @@ class MultiHeadAttentionPreNorm(nn.Module):
         self.attention = ScaledDotProductAttention(temperature=d_k ** 0.5, attn_dropout=dropout)
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.RMSNorm(d_model)
+
     def forward(self, q, k, v, mask=None):
         d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
         sz_b, len_q, len_k, len_v = q.size(0), q.size(1), k.size(1), v.size(1)
@@ -142,7 +148,8 @@ class MultiHeadAttentionPreNorm(nn.Module):
         # Transpose for the attention dot product: b x n x lq x dv.
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
         if mask is not None:
-            mask = mask.unsqueeze(1)   # For head axis broadcasting.
+            # For head axis broadcasting.
+            mask = mask.unsqueeze(1)
         q, attn = self.attention(q, k, v, mask=mask)
         # Concatenate heads back to b x lq x (n*dv).
         q = q.transpose(1, 2).contiguous().view(sz_b, len_q, -1)
@@ -160,6 +167,7 @@ class PositionwiseFeedForwardPreNorm(nn.Module):
         self.w_2 = nn.Linear(d_hid, d_in, bias=False)
         self.layer_norm = nn.RMSNorm(d_in)
         self.dropout = nn.Dropout(dropout)
+
     def forward(self, x):
         residual = x
         # Pre-norm: normalize before the feed-forward, leaving the residual path unnormalized.
@@ -177,6 +185,7 @@ class AttentionBlockPreNorm(nn.Module):
         super().__init__()
         self.slf_attn = MultiHeadAttentionPreNorm(num_heads, feat_dim, feat_dim//num_heads, feat_dim//num_heads, dropout=dropout)
         self.pos_ffn = PositionwiseFeedForwardPreNorm(feat_dim, hidden_dim, dropout=dropout)
+
     def forward(self, enc_input, slf_attn_mask=None):
         enc_output, enc_slf_attn = self.slf_attn(enc_input, enc_input, enc_input, mask=slf_attn_mask)
         enc_output = self.pos_ffn(enc_output)
@@ -190,6 +199,7 @@ class AttentionBlockKVCachePreNorm(nn.Module):
         super().__init__()
         self.slf_attn = MultiHeadAttentionPreNorm(num_heads, feat_dim, feat_dim//num_heads, feat_dim//num_heads, dropout=dropout)
         self.pos_ffn = PositionwiseFeedForwardPreNorm(feat_dim, hidden_dim, dropout=dropout)
+
     def forward(self, q, k, v, slf_attn_mask=None):
         output, attn = self.slf_attn(q, k, v, mask=slf_attn_mask)
         output = self.pos_ffn(output)
@@ -197,20 +207,19 @@ class AttentionBlockKVCachePreNorm(nn.Module):
 
 
 class PositionalEncoding1D(nn.Module):
-    def __init__(
-        self,
-        max_length: int,
-        embed_dim: int
-    ):
+
+    def __init__(self, max_length: int, embed_dim: int):
         super().__init__()
         self.max_length = max_length
         self.embed_dim = embed_dim
         self.pos_emb = nn.Embedding(self.max_length, embed_dim)
+
     def forward(self, feat):
         pos_emb = self.pos_emb(torch.arange(self.max_length, device=feat.device))
         pos_emb = repeat(pos_emb, "L D -> B L D", B=feat.shape[0])
         feat = feat + pos_emb[:, :feat.shape[1], :]
         return feat
+
     def forward_with_position(self, feat, position):
         assert feat.shape[1] == 1
         pos_emb = self.pos_emb(torch.arange(self.max_length, device=feat.device))

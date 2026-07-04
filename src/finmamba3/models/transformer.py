@@ -9,6 +9,7 @@ from finmamba3.models.attention import AttentionBlockPreNorm, AttentionBlockKVCa
 
 
 class StochasticTransformer(nn.Module):
+
     def __init__(self, stoch_dim, action_dim, feat_dim, num_layers, num_heads, max_length, dropout):
         super().__init__()
         self.action_dim = action_dim
@@ -26,6 +27,7 @@ class StochasticTransformer(nn.Module):
         ])
         self.layer_norm = nn.LayerNorm(feat_dim, eps=1e-6)
         self.head = nn.Linear(feat_dim, stoch_dim)
+
     def forward(self, samples, action, mask):
         action = F.one_hot(action.long(), self.action_dim).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
@@ -33,11 +35,11 @@ class StochasticTransformer(nn.Module):
         feats = self.layer_norm(feats)
         for enc_layer in self.layer_stack:
             feats, attn = enc_layer(feats, mask)
-        feat = self.head(feats)
-        return feat
+        return self.head(feats)
 
 
 class StochasticTransformerKVCache(nn.Module):
+
     def __init__(self, stoch_dim, action_dim, feat_dim, num_layers, num_heads, max_length, dropout):
         super().__init__()
         self.action_dim = action_dim

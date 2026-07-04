@@ -138,8 +138,9 @@ def test_gpu_path_outcome_buffer():
 
 
 def _populate_two_markets(buf: ReplayBuffer, sizes=(20, 20)) -> None:
-    # Encode each tick's obs as [global_index, market_id] so a sampled window can be
-    # checked for boundary straddling: the market id must stay constant within a window.
+    """Encode each tick's obs as [global_index, market_id] so a sampled window can be checked
+    for boundary straddling: the market id must stay constant within a window.
+    """
     global_index = 0
     for market_id, size in enumerate(sizes):
         for t in range(size):
@@ -149,12 +150,13 @@ def _populate_two_markets(buf: ReplayBuffer, sizes=(20, 20)) -> None:
 
 
 def test_valid_start_mask_matches_hand_computation():
+    """Market A is indices 0..4, market B is 5..9; the boundary sits at index 4. With window
+    length 3, starts 3 and 4 straddle that boundary and all others are valid.
+    """
     cfg = _make_config(buffer_max_length=16, feature_dim=2)
     buf = ReplayBuffer(cfg, device="cpu")
     _populate_two_markets(buf, sizes=(5, 5))
     mask = buf._valid_start_mask(batch_length=3)
-    # Market A is indices 0..4, market B is 5..9; the boundary sits at index 4. With
-    # window length 3, starts 3 and 4 straddle that boundary and all others are valid.
     expected = np.array([1, 1, 1, 0, 0, 1, 1, 1], dtype=np.float64)
     assert np.array_equal(mask, expected)
 
@@ -178,14 +180,15 @@ def test_imagine_sample_never_straddles_a_market_boundary():
 
 
 def test_single_market_sampling_stays_contiguous():
+    """With no boundaries the mask is all-True, so each window is a contiguous run of indices,
+    exactly as the legacy single-market path produced.
+    """
     cfg = _make_config(buffer_max_length=64, feature_dim=2)
     buf = ReplayBuffer(cfg, device="cpu")
     for i in range(40):
         obs = np.array([float(i), 0.0], dtype=np.float32)
         buf.append(obs=obs, action=0, reward=0.0, termination=0.0)
     sample_obs, _, _, _, _ = buf.sample(batch_size=8, batch_length=8, imagine=False)
-    # With no boundaries the mask is all-True, so each window is a contiguous run of
-    # indices, exactly as the legacy single-market path produced.
     global_indices = sample_obs[..., 0]
     diffs = global_indices[:, 1:] - global_indices[:, :-1]
     assert torch.all(diffs == 1.0)

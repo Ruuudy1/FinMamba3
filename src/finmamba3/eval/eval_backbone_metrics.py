@@ -38,14 +38,19 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Single-model recon NLL + direction macro-F1 for the backbone ablation")
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--dataset", choices=("fi2010", "kaggle"), required=True)
-    p.add_argument("--backbone", default=None,
-                   help="Override Models.WorldModel.Backbone (Mamba, Mamba2, Mamba3, Transformer).")
+    p.add_argument(
+        "--backbone", default=None,
+        help="Override Models.WorldModel.Backbone (Mamba, Mamba2, Mamba3, Transformer).",
+    )
     p.add_argument("--checkpoint", required=True, type=Path, help="world_model_final.pth from the run.")
     p.add_argument("--data-val", required=True, type=Path)
     p.add_argument("--norm-path", required=True, type=Path, help="Training normalization stats (no train/serve skew).")
     p.add_argument("--horizon", type=int, default=10, help="FI-2010 label horizon (ignored for Kaggle).")
     p.add_argument("--max-events", type=int, default=None)
-    p.add_argument("--threshold", type=float, default=0.0, help="Next-tick direction flat-bucket threshold on normalized mid.")
+    p.add_argument(
+        "--threshold", type=float, default=0.0,
+        help="Next-tick direction flat-bucket threshold on normalized mid.",
+    )
     p.add_argument("--windows", type=int, default=512, help="Random windows scored over the val stream.")
     p.add_argument("--is-mimo", action="store_true", help="Rebuild as MIMO (A100-only; the 4080 segfaults at build).")
     p.add_argument("--out", type=Path, default=Path("reports/backbone_metrics.md"))
@@ -109,7 +114,5 @@ def main() -> int:
         f"macro_f1={metrics['macro_f1']:.5f} acc={metrics['accuracy']:.5f} -> wrote {args.out}"
     )
     return 0
-
-
 if __name__ == "__main__":
     sys.exit(main())

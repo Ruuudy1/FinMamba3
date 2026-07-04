@@ -44,7 +44,39 @@ RMSNorm = nn.RMSNorm
 
 
 class WorldModel(nn.Module):
+
     def __init__(self, action_dim, config, device):
+        """Build the world model's encoder, sequence backbone, decoder and auxiliary heads from config.
+
+        Notes on the RegimeFiLM and Direction knobs, kept here in full since a one-line
+        why-comment at each assignment cannot carry the whole rationale:
+
+        SuperviseVol removes the uniform-router failure mode where load balancing alone drives
+        the router to a degenerate per-step uniform (so FiLM becomes a constant bias) by forcing
+        the router onto the volatility axis the generalization eval splits on.
+
+        SuperviseAxis: 'vol' is the realized-volatility bucket (the prior campaign's axis);
+        'predictability' is the efficiency-ratio bucket (newgoal-2's axis, which a
+        selective-betting policy has a genuine reason to encode).
+
+        FeedObsVol: without it, the router only sees the latent-speed proxy, which tracks obs
+        volatility too weakly for even a supervised router to discriminate regimes (verified:
+        argmax-vs-vol agreement stays at chance).
+
+        DecoupleRouterFromFiLM: without it, an adaptive optimizer keeps the router uniform no
+        matter how the supervision weight is scaled, because the recon gradient direction on the
+        shared params wins.
+
+        ApplyAfterScan: the input-side affine folds losslessly into the block's own Delta, B and
+        C projections, so the gauge direction joint training returns to identity; this flag is
+        the non-gauge positive control, since a post-scan gate sits on the residual stream and
+        the host projections cannot absorb it the same way.
+
+        Direction.ClassBalanced: FI-2010's next-tick mid is flat on ~76% of ticks, so an
+        unweighted cross-entropy is minimized by predicting the flat majority class and the head
+        learns nothing about direction; inverse-frequency class weighting cancels that majority
+        dominance.
+        """
         super().__init__()
         self.hidden_state_dim = config.Models.WorldModel.HiddenStateDim
         self.final_feature_width = config.Models.WorldModel.Transformer.FinalFeatureWidth
@@ -64,55 +96,44 @@ class WorldModel(nn.Module):
             raise ValueError("FinMamba3 only supports Models.WorldModel.Encoder.Type='lob'")
         regime_cfg = config.Models.WorldModel.get('Regime', None)
         self.use_regime = bool(regime_cfg is not None and regime_cfg.get('Enabled', False))
-        # RegimeFiLM is the in-scan modulation path: a regime hypernetwork emits per-block
-        # FiLM applied to each Mamba block input, distinct from the post-hoc self.use_regime
-        # conditioner. Config reads mirror the sibling Regime block for cross-config safety.
+        # RegimeFiLM is the in-scan modulation path:
+        # A regime hypernetwork emits per-block FiLM applied to each Mamba block input, distinct from the post-hoc self.use_regime conditioner.
+        # Config reads mirror the sibling Regime block for cross-config safety.
         regime_film_cfg = config.Models.WorldModel.get('RegimeFiLM', None)
         self.use_regime_film = bool(regime_film_cfg is not None and regime_film_cfg.get('Enabled', False))
         self.regime_film_num_regimes = int(regime_film_cfg.get('NumRegimes', 8)) if regime_film_cfg is not None else 8
         self.regime_film_embed_dim = int(regime_film_cfg.get('EmbedDim', 32)) if regime_film_cfg is not None else 32
         self.regime_film_entropy_coef = float(regime_film_cfg.get('EntropyCoef', 0.01)) if regime_film_cfg is not None else 0.01
-        # InitScale, Dropout, LRMult and WeightDecay are the FiLM tuning knobs: a positive InitScale
-        # escapes the slow zero-init warmup, Dropout and a larger WeightDecay guard the hypernetwork's
-        # added capacity against overfitting, and LRMult lets the modulator learn faster than the backbone.
+        # InitScale, Dropout, LRMult and WeightDecay are the FiLM tuning knobs:
+        # A positive InitScale escapes the slow zero-init warmup, Dropout and a larger WeightDecay guard the hypernetwork's added capacity against overfitting, and LRMult lets the modulator learn faster than the backbone.
         self.regime_film_init_scale = float(regime_film_cfg.get('InitScale', 0.0)) if regime_film_cfg is not None else 0.0
         self.regime_film_dropout = float(regime_film_cfg.get('Dropout', 0.0)) if regime_film_cfg is not None else 0.0
         self.regime_film_lr_mult = float(regime_film_cfg.get('LRMult', 1.0)) if regime_film_cfg is not None else 1.0
         self.regime_film_weight_decay = regime_film_cfg.get('WeightDecay', None) if regime_film_cfg is not None else None
         # ConditionOnVol steers the router onto the volatility axis the generalization eval splits on.
-        # The modulator derives a causal volatility proxy over VolWindow steps from the stem summary
-        # itself, so the conditioning is identical across training, imagination and evaluation forwards
-        # with no caller plumbing; the world model only forwards the flags.
+        # The modulator derives a causal volatility proxy over VolWindow steps from the stem summary itself, so the conditioning is identical across training, imagination and evaluation forwards with no caller plumbing; the world model only forwards the flags.
         self.regime_film_condition_on_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('ConditionOnVol', False))
         self.regime_film_vol_window = int(regime_film_cfg.get('VolWindow', 16)) if regime_film_cfg is not None else 16
-        # SuperviseVol adds a cross-entropy from the regime logits to the realized-volatility bucket of
-        # each step, derived inline from the obs midprice. It is the decision tree's highest-leverage
-        # lever: it removes the uniform-router failure mode (load balancing alone drives the router to a
-        # degenerate per-step uniform, so FiLM becomes a constant bias) by forcing the router onto the
-        # volatility axis the generalization eval splits on. SupervisionWeight scales that term.
+        # SuperviseVol adds a cross-entropy from the regime logits to the realized-volatility bucket of each step, derived inline from the obs midprice.
+        # It is the decision tree's highest-leverage lever:
+        # It removes the uniform-router failure mode (load balancing alone drives the router to a degenerate per-step uniform, so FiLM becomes a constant bias) by forcing the router onto the volatility axis the generalization eval splits on.
+        # SupervisionWeight scales that term.
         self.regime_film_supervise_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('SuperviseVol', False))
         self.regime_film_supervision_weight = float(regime_film_cfg.get('SupervisionWeight', 0.0)) if regime_film_cfg is not None else 0.0
-        # SuperviseAxis chooses what the router is supervised to predict: 'vol' (the realized-volatility
-        # bucket, the prior campaign's axis) or 'predictability' (the efficiency-ratio bucket, newgoal-2's
-        # axis a selective-betting policy has a genuine reason to encode). SuperviseChannelIndex points the
-        # supervision and the FeedObsVol conditioning at an obs channel (default the midprice); the spot
-        # block exposes the honest underlying axis the held-out eval splits on.
+        # SuperviseAxis chooses what the router is supervised to predict:
+        # 'vol' (the realized-volatility bucket, the prior campaign's axis) or 'predictability' (the efficiency-ratio bucket, newgoal-2's axis a selective-betting policy has a genuine reason to encode).
+        # SuperviseChannelIndex points the supervision and the FeedObsVol conditioning at an obs channel (default the midprice); the spot block exposes the honest underlying axis the held-out eval splits on.
         self.regime_film_supervise_axis = regime_film_cfg.get('SuperviseAxis', 'vol') if regime_film_cfg is not None else 'vol'
         self.regime_film_supervise_index = regime_film_cfg.get('SuperviseChannelIndex', None) if regime_film_cfg is not None else None
-        # FeedObsVol routes the realized volatility measured from the observation midprice into the router
-        # as its conditioning feature, the faithful axis the supervision label and eval split use. Without
-        # it the router only sees the latent-speed proxy, which tracks obs volatility too weakly for even a
-        # supervised router to discriminate regimes (verified: argmax-vs-vol agreement stays at chance).
+        # FeedObsVol routes the realized volatility measured from the observation midprice into the router as its conditioning feature, the faithful axis the supervision label and eval split use.
+        # Without it the router only sees the latent-speed proxy, which tracks obs volatility too weakly for even a supervised router to discriminate regimes (verified: argmax-vs-vol agreement stays at chance).
         self.regime_film_feed_obs_vol = bool(regime_film_cfg is not None and regime_film_cfg.get('FeedObsVol', False))
-        # DecoupleRouterFromFiLM detaches the router logits on the path into the FiLM hypernetwork, so the
-        # reconstruction gradient can no longer drag the router back to uniform; the router is then driven
-        # purely by the supervision CE. Without it, an adaptive optimizer keeps the router uniform no matter
-        # how the supervision weight is scaled, because the recon gradient direction on the shared params wins.
+        # DecoupleRouterFromFiLM detaches the router logits on the path into the FiLM hypernetwork, so the reconstruction gradient can no longer drag the router back to uniform; the router is then driven purely by the supervision CE.
+        # Without it, an adaptive optimizer keeps the router uniform no matter how the supervision weight is scaled, because the recon gradient direction on the shared params wins.
         self.regime_film_decouple_router = bool(regime_film_cfg is not None and regime_film_cfg.get('DecoupleRouterFromFiLM', False))
         # ApplyAfterScan moves the FiLM gate from each block's input to its output, past the selective scan.
-        # The input-side affine folds losslessly into the block's own Delta, B and C projections, the gauge
-        # direction joint training returns to identity, so this flag is the non-gauge positive control: a
-        # post-scan gate sits on the residual stream and the host projections cannot absorb it the same way.
+        # The input-side affine folds losslessly into the block's own Delta, B and C projections, the gauge direction joint training returns to identity, so this flag is the non-gauge positive control:
+        # A post-scan gate sits on the residual stream and the host projections cannot absorb it the same way.
         self.regime_film_apply_after_scan = bool(regime_film_cfg is not None and regime_film_cfg.get('ApplyAfterScan', False))
         assert not self.regime_film_condition_on_vol or self.regime_film_vol_window >= 2, (
             "Models.WorldModel.RegimeFiLM.VolWindow must be at least 2 to estimate volatility."
@@ -208,10 +229,7 @@ class WorldModel(nn.Module):
         elif self.model == 'Mamba3':
             mamba3_cfg = config.Models.WorldModel.Mamba3
             if self.hidden_state_dim % mamba3_cfg.headdim != 0:
-                raise ValueError(
-                    "Models.WorldModel.HiddenStateDim must be divisible by "
-                    "Models.WorldModel.Mamba3.headdim"
-                )
+                raise ValueError("Models.WorldModel.HiddenStateDim must be divisible by Models.WorldModel.Mamba3.headdim")
             if not mamba3_cfg.get('Enabled', True):
                 raise ValueError("Backbone is Mamba3 but Models.WorldModel.Mamba3.Enabled is false")
             self.sequence_model = FinMambaSequenceModel(
@@ -278,9 +296,7 @@ class WorldModel(nn.Module):
                 dtype=config.Models.WorldModel.dtype, device=device,
             )
         else:
-            raise ValueError(
-                f"Models.WorldModel.Decoder.Kind must be 'mse' or 'studentt'; got {decoder_kind!r}"
-            )
+            raise ValueError(f"Models.WorldModel.Decoder.Kind must be 'mse' or 'studentt'; got {decoder_kind!r}")
         self.use_reward_head = bool(config.Models.WorldModel.Reward.get('Enabled', True))
         self.use_termination_head = bool(config.Models.WorldModel.Termination.get('Enabled', True))
         if self.use_reward_head:
@@ -318,10 +334,9 @@ class WorldModel(nn.Module):
             self.direction_loss_weight = float(direction_cfg.get('LossWeight', 0.5))
             self.direction_threshold = float(direction_cfg.get('Threshold', 1.0e-2))
             self.direction_num_classes = int(direction_cfg.get('NumClasses', 3))
-            # FI-2010's next-tick mid is flat on ~76% of ticks, so an unweighted cross-entropy is
-            # minimized by predicting the flat majority class for every position and the head learns
-            # nothing about direction. Inverse-frequency class weighting cancels that majority
-            # dominance so the up/down classes carry gradient. Default off to preserve prior runs.
+            # FI-2010's next-tick mid is flat on ~76% of ticks, so an unweighted cross-entropy is minimized by predicting the flat majority class for every position and the head learns nothing about direction.
+            # Inverse-frequency class weighting cancels that majority dominance so the up/down classes carry gradient.
+            # Default off to preserve prior runs.
             self.direction_class_balanced = bool(direction_cfg.get('ClassBalanced', False))
             # Index of normalized midprice in the flat feature vector.
             self.midprice_index = int(enc_cfg.K) * int(enc_cfg.FeatureDimLevel)
@@ -388,9 +403,7 @@ class WorldModel(nn.Module):
             self.hawkes_head = None
             self.hawkes_loss_weight = 0.0
         settle_cfg = config.Models.WorldModel.get('Settlement', None)
-        self.use_settlement_head = bool(
-            settle_cfg is not None and settle_cfg.get('Enabled', False)
-        )
+        self.use_settlement_head = bool(settle_cfg is not None and settle_cfg.get('Enabled', False))
         if self.use_settlement_head:
             self.settlement_head = SettlementHead(
                 hidden_dim=self.hidden_state_dim,
@@ -398,9 +411,8 @@ class WorldModel(nn.Module):
                 device=device,
             )
             self.settlement_loss_weight = float(settle_cfg.get('LossWeight', 0.25))
-            # Phase 0.3 honest target: TTEWeighted weights the realized-outcome BCE by (1 - tte_frac)
-            # so early-tick label noise stops dominating; SpotSignAux adds a dense pre-expiry term that
-            # supervises the head toward the observable running spot sign, weighted by tte_frac.
+            # Phase 0.3 honest target:
+            # TTEWeighted weights the realized-outcome BCE by (1 - tte_frac) so early-tick label noise stops dominating; SpotSignAux adds a dense pre-expiry term that supervises the head toward the observable running spot sign, weighted by tte_frac.
             self.settlement_tte_weighted = bool(settle_cfg.get('TTEWeighted', False))
             self.use_settlement_spot_sign = bool(settle_cfg.get('SpotSignAux', False))
             self.settlement_spot_sign_weight = float(settle_cfg.get('SpotSignWeight', 0.0))
@@ -438,8 +450,8 @@ class WorldModel(nn.Module):
         # Decoder size_weight up-weights size and depth feature MSE relative to price features.
         # The 2.0 default biases the decoder toward volume signal but can crowd out predictive capacity for mid and spread.
         size_weight = float(config.Models.WorldModel.Decoder.get('SizeWeight', 2.0))
-        # Per-feature size indices default to the Polymarket schema. FI-2010 and other
-        # datasets with different level/tick orderings override these in the loss configs.
+        # Per-feature size indices default to the Polymarket schema.
+        # FI-2010 and other datasets with different level/tick orderings override these in the loss configs.
         level_size_indices = config.Models.WorldModel.Decoder.get('LevelSizeIndices', (1, 2, 3))
         tick_size_indices = config.Models.WorldModel.Decoder.get('TickSizeIndices', (6, 7, 11, 12))
         if self.decoder_kind == 'mse':
@@ -477,9 +489,8 @@ class WorldModel(nn.Module):
             base_lr = config.Models.WorldModel.Adam.LearningRate
         else:
             raise ValueError(f"Unknown optimiser: {optimiser_name}")
-        # The regime modulator gets its own optimizer group only when a tuning knob asks for it, so the
-        # default run stays a single group and bit-identical to before. A larger LRMult lets the zero-init
-        # FiLM warm up faster; a WeightDecay override is the overfitting guard on its added capacity.
+        # The regime modulator gets its own optimizer group only when a tuning knob asks for it, so the default run stays a single group and bit-identical to before.
+        # A larger LRMult lets the zero-init FiLM warm up faster; a WeightDecay override is the overfitting guard on its added capacity.
         if self.use_regime_film and (self.regime_film_lr_mult != 1.0 or self.regime_film_weight_decay is not None):
             film_prefix = "sequence_model.regime_modulator."
             base_named_params = [p for name, p in self.named_parameters() if not name.startswith(film_prefix)]
@@ -517,11 +528,13 @@ class WorldModel(nn.Module):
         # After that we trust the run.
         self.nan_guard_steps = int(config.Models.WorldModel.get('NaNGuardSteps', 50))
         self._nan_skip_count = 0
+
     def condition_dist_feat(self, dist_feat):
         if not self.use_regime:
             return dist_feat
         _, regime_emb = self.regime_head(dist_feat)
         return self.regime_conditioner(dist_feat, regime_emb)
+
     def encode_obs(self, obs):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             embedding = self.encoder(obs)
@@ -529,6 +542,7 @@ class WorldModel(nn.Module):
             sample = self.straight_through_gradient(post_logits, sample_mode="random_sample")
             flattened_sample = self.flatten_sample(sample)
         return flattened_sample
+
     # Called only when using the Transformer backbone (requires KV cache).
     def predict_next(self, last_flattened_sample, action, log_video=True):
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -553,6 +567,7 @@ class WorldModel(nn.Module):
             else:
                 termination_hat = torch.zeros(conditioned_dist_feat.shape[:2], device=conditioned_dist_feat.device, dtype=torch.bool)
         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, conditioned_dist_feat
+
     def straight_through_gradient(self, logits, sample_mode="random_sample"):
         # Sanitize logits before building the categorical distribution.
         logits = torch.nan_to_num(logits, nan=0.0, posinf=20.0, neginf=-20.0)
@@ -567,8 +582,10 @@ class WorldModel(nn.Module):
         else:
             raise ValueError(f"Unknown sample_mode: {sample_mode}")
         return sample
+
     def flatten_sample(self, sample):
         return rearrange(sample, "B L K C -> B L (K C)")
+
     def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype, device):
         """Pre-allocate imagination buffers to avoid per-step allocation overhead."""
         if self.imagine_batch_size != imagine_batch_size or self.imagine_batch_length != imagine_batch_length:
@@ -583,6 +600,7 @@ class WorldModel(nn.Module):
             self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
+
     def _imagine_data_full_prefix(self, agent: ActorCriticAgent, sample_obs, sample_action,
                                   imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
@@ -631,6 +649,7 @@ class WorldModel(nn.Module):
         context_out = torch.cat([context_flattened_sample, conditioned_context_dist_feat], dim=-1)
         imagined_out = torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1)
         return imagined_out, self.action_buffer, old_logits_tensor, context_out, self.reward_hat_buffer, self.termination_hat_buffer
+
     def imagine_data(self, agent: ActorCriticAgent, sample_obs, sample_action,
                      imagine_batch_size, imagine_batch_length, log_video, logger, global_step):
         if self.model not in ('Transformer', 'TransformerModern'):
@@ -661,6 +680,7 @@ class WorldModel(nn.Module):
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
+
     def _direction_class_weight(self, flat_targets, dtype):
         """Per-batch inverse-frequency class weights for the direction cross-entropy, or None.
 
@@ -674,6 +694,7 @@ class WorldModel(nn.Module):
             return None
         counts = torch.bincount(flat_targets, minlength=self.direction_num_classes).to(dtype=dtype)
         return counts.clamp(min=1.0).reciprocal()
+
     def update(self, obs, action, reward, termination, global_step, epoch_step,
                logger=None, accum_steps: int = 1, is_last_accum: bool = True,
                event_counts: torch.Tensor | None = None,
@@ -706,9 +727,7 @@ class WorldModel(nn.Module):
                 temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
                 dist_feat = self.sequence_model(flattened_sample, action, temporal_mask)
             elif self.use_regime_film:
-                # When FeedObsVol is set, hand the router the realized volatility measured from the obs
-                # midprice so it can actually discriminate the regime it is supervised toward; otherwise
-                # the modulator falls back to its latent-speed proxy.
+                # When FeedObsVol is set, hand the router the realized volatility measured from the obs midprice so it can actually discriminate the regime it is supervised toward; otherwise the modulator falls back to its latent-speed proxy.
                 regime_vol = None
                 if self.regime_film_feed_obs_vol:
                     assert self.midprice_index >= 0, (
@@ -797,9 +816,7 @@ class WorldModel(nn.Module):
             # The term only contributes when event_counts is provided with shape (B, L, 2) for buy and sell counts per tick or bar.
             if self.use_hawkes_head and event_counts is not None:
                 hawkes_logits = self.hawkes_head(conditioned_dist_feat)
-                hawkes_loss = HawkesIntensityHead.poisson_nll(
-                    hawkes_logits, event_counts.to(dtype=hawkes_logits.dtype)
-                )
+                hawkes_loss = HawkesIntensityHead.poisson_nll(hawkes_logits, event_counts.to(dtype=hawkes_logits.dtype))
             else:
                 hawkes_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             # Settlement auxiliary predicts the binary contract outcome from the latent.
@@ -809,26 +826,22 @@ class WorldModel(nn.Module):
                 outcome_flat = outcome.reshape(-1).to(dtype=settle_logits.dtype)
                 if outcome_flat.shape[0] != settle_logits.shape[0] and outcome.dim() == 1:
                     outcome_flat = outcome.unsqueeze(1).expand(-1, conditioned_dist_feat.shape[1]).reshape(-1).to(dtype=settle_logits.dtype)
-                # Phase 0.3: concentrate the realized-outcome supervision near expiry, where the binary
-                # outcome is determined, rather than pooling the uninformative early ticks with it.
+                # Phase 0.3: concentrate the realized-outcome supervision near expiry, where the binary outcome is determined, rather than pooling the uninformative early ticks with it.
                 ttf_flat = None
                 if self.settlement_tte_weighted and time_to_expiry_frac is not None:
                     ttf_flat = time_to_expiry_frac.reshape(-1).to(dtype=settle_logits.dtype)
                 settlement_loss = SettlementHead.bce(settle_logits, outcome_flat, ttf_flat)
-                # The observable running spot sign is the same rule the contract settles on, so an
-                # early auxiliary toward it gives a dense, learnable target and keeps the causal sign
-                # salient in the latent. tte_frac weights it toward the start (complement of the outcome).
+                # The observable running spot sign is the same rule the contract settles on, so an early auxiliary toward it gives a dense, learnable target and keeps the causal sign salient in the latent.
+                # `tte_frac` weights it toward the start (complement of the outcome).
                 if self.use_settlement_spot_sign and spot_signed_distance is not None:
                     aux_ttf = time_to_expiry_frac.reshape(-1) if time_to_expiry_frac is not None else None
-                    spot_sign_loss = SettlementHead.spot_sign_bce(
-                        settle_logits, spot_signed_distance.reshape(-1), aux_ttf
-                    )
+                    spot_sign_loss = SettlementHead.spot_sign_bce(settle_logits, spot_signed_distance.reshape(-1), aux_ttf)
                     settlement_loss = settlement_loss + self.settlement_spot_sign_weight * spot_sign_loss
             else:
                 settlement_loss = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
-            # Book-relative edge head: supervise ev_yes_hat and ev_no_hat directly from the book
-            # ask prices and the realized settlement outcome. Rows with NaN asks or zero depth are
-            # masked out so existing configs without edge data run unchanged.
+            # Book-relative edge head:
+            # Supervise ev_yes_hat and ev_no_hat directly from the book ask prices and the realized settlement outcome.
+            # Rows with NaN asks or zero depth are masked out so existing configs without edge data run unchanged.
             edge_zero = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             if (self.use_edge_head and outcome is not None and
                     yes_ask is not None and no_ask is not None and book_depth is not None):
@@ -850,14 +863,13 @@ class WorldModel(nn.Module):
                 edge_huber_loss = edge_zero
                 edge_action_loss = edge_zero
             # Regime-FiLM load-balance regularizer keeps the inferred regime distribution from collapsing.
-            # The entropy, gamma deviation and beta magnitude reported beside it are diagnostics only: they
-            # reveal whether the router collapsed and whether FiLM ever left its identity init, never the loss.
+            # The entropy, gamma deviation and beta magnitude reported beside it are diagnostics only:
+            # They reveal whether the router collapsed and whether FiLM ever left its identity init, never the loss.
             regime_zero = torch.zeros((), device=obs.device, dtype=reconstruction_loss.dtype)
             if self.use_regime_film and regime_aux is not None:
                 regime_loss = (self.regime_film_entropy_coef * regime_load_balance_loss(regime_aux.regime_logits)).to(reconstruction_loss.dtype)
-                # Regime supervision pins the router to the realized-volatility axis so FiLM stops being a
-                # constant bias. The bucket labels come from the obs midprice over the same VolWindow the
-                # router's vol proxy uses, so training, imagination and eval see one consistent definition.
+                # Regime supervision pins the router to the realized-volatility axis so FiLM stops being a constant bias.
+                # The bucket labels come from the obs midprice over the same VolWindow the router's vol proxy uses, so training, imagination and eval see one consistent definition.
                 if self.regime_film_supervise_vol:
                     assert self.midprice_index >= 0, (
                         "RegimeFiLM.SuperviseVol needs the obs midprice channel index, which is only set "

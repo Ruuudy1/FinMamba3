@@ -15,6 +15,12 @@ Bar types implemented:
 Each bar yields the same 94-dim flat feature vector as the raw-tick path so
 the rest of the pipeline (encoder, replay buffer) is agnostic to the
 aggregation choice.
+
+Feature layout (used by the DEFAULT_* index constants at the bottom of this
+module): K=10 levels times F_LEVEL=8 equals 80, then F_TICK=14 tick features.
+Tick offsets after 80: 0 mid, 1 spread, 2 log_spread, 3 imbalance,
+4 microprice, 5 weighted_mid_disp, 6 log_bid_vol, 7 log_ask_vol, 8 dmid,
+9 dspread, 10 dimbalance, 11 ofi_top, 12 trade_intensity, 13 rolling_vol.
 """
 # region imports
 from __future__ import annotations
@@ -65,6 +71,7 @@ class _BarAccumulator:
             sum_buf=np.zeros(feature_dim, dtype=np.float32),
             last_buf=np.zeros(feature_dim, dtype=np.float32),
         )
+
     def reset(self) -> None:
         self.sum_buf.fill(0.0)
         self.last_buf.fill(0.0)
@@ -145,8 +152,7 @@ def aggregate_to_bars(
         else:
             raise ValueError(f"Unknown BarConfig.kind: {config.kind!r}")
         if triggered:
-            # Carry the last tick for close-of-bar semantics; sum-mode features
-            # are summed across the bar instead.
+            # Carry the last tick for close-of-bar semantics; sum-mode features are summed across the bar instead.
             bar = acc.last_buf.copy()
             if acc.count > 0:
                 for sum_index in sum_indices:
@@ -168,29 +174,20 @@ def aggregate_array(
 
     Returns (bar_features, bar_close_timestamps).
     """
-    bars = list(
-        aggregate_to_bars(
-            features, timestamps, mid_index, volume_index, sum_indices, config
-        )
-    )
+    bars = list(aggregate_to_bars(features, timestamps, mid_index, volume_index, sum_indices, config))
     if not bars:
-        return (
-            np.zeros((0, features.shape[1]), dtype=np.float32),
-            np.zeros((0,), dtype=np.float64),
-        )
+        return (np.zeros((0, features.shape[1]), dtype=np.float32), np.zeros((0,), dtype=np.float64))
     feats = np.stack([b[0] for b in bars], axis=0).astype(np.float32)
     ts = np.array([b[1] for b in bars], dtype=np.float64)
     return feats, ts
-# Default sum-mode indices for the project's 94-dim feature layout.
-# Layout: K=10 levels times F_LEVEL=8 equals 80, then F_TICK=14 tick features.
-# Tick offsets after 80: 0 mid, 1 spread, 2 log_spread, 3 imbalance, 4 microprice, 5 weighted_mid_disp, 6 log_bid_vol, 7 log_ask_vol, 8 dmid, 9 dspread, 10 dimbalance, 11 ofi_top, 12 trade_intensity, 13 rolling_vol.
+# Default sum-mode indices (dmid, dspread, dimbalance, ofi_top, trade_intensity) per the 94-dim layout in the module docstring.
 DEFAULT_TICK_BASE = 80
 DEFAULT_MID_INDEX = DEFAULT_TICK_BASE + 0
 DEFAULT_BID_VOL_INDEX = DEFAULT_TICK_BASE + 6
 DEFAULT_SUM_INDICES: tuple[int, ...] = (
-    DEFAULT_TICK_BASE + 8,   # Dmid.
-    DEFAULT_TICK_BASE + 9,   # Dspread.
-    DEFAULT_TICK_BASE + 10,  # Dimbalance.
-    DEFAULT_TICK_BASE + 11,  # OFI top.
-    DEFAULT_TICK_BASE + 12,  # Trade intensity.
+    DEFAULT_TICK_BASE + 8,
+    DEFAULT_TICK_BASE + 9,
+    DEFAULT_TICK_BASE + 10,
+    DEFAULT_TICK_BASE + 11,
+    DEFAULT_TICK_BASE + 12,
 )

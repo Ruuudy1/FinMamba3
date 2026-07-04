@@ -100,8 +100,9 @@ def test_filter_backtest_data_volatility_keeps_high_vol():
     kept = [m.market_slug for m in bt2.lifecycles]
     assert kept == [_WILD]
     assert desc.startswith("vol>")
-# Phase 0.5: the spot-vol split buckets markets by the underlying Chainlink realized vol over each
-# market window, the honest axis, instead of the YES-mid vol that is confounded with time-to-expiry.
+
+
+# Phase 0.5: the spot-vol split buckets markets by the underlying Chainlink realized vol over each market window, the honest axis, instead of the YES-mid vol that is confounded with time-to-expiry.
 _SPOT_CALM = "btc-updown-5m-0"
 _SPOT_WILD = "btc-updown-5m-10"
 _SPOT_LIFECYCLES = [
@@ -112,8 +113,7 @@ _SPOT_LIFECYCLES = [
 
 def _spot_timeline_two_markets():
     calm_prices = [50_000.0 + (ts % 2) for ts in range(10)]
-    wild_prices = [50_000.0, 51_000.0, 49_000.0, 52_000.0, 48_000.0,
-                   53_000.0, 47_000.0, 54_000.0, 46_000.0, 55_000.0]
+    wild_prices = [50_000.0, 51_000.0, 49_000.0, 52_000.0, 48_000.0, 53_000.0, 47_000.0, 54_000.0, 46_000.0, 55_000.0]
     ticks = []
     for ts in range(20):
         price = calm_prices[ts] if ts < 10 else wild_prices[ts - 10]

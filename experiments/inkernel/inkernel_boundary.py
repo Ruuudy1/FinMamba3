@@ -51,7 +51,13 @@ def make_filter_task(n_seq, seq_len, d_model, generator):
 class ReferenceSelectiveScan(nn.Module):
     """A tiny SISO selective state-space block on the pure-PyTorch reference recurrence (no fused kernel), with
     a switchable modulation placement so the input-affine (gauge) and in-kernel (non-gauge) forms run through
-    the identical scan and differ only in where the learned affine is applied."""
+    the identical scan and differ only in where the learned affine is applied.
+
+    The modulation is stored as a raw deviation g with the scale gamma = 1 + g and the shift beta = g, so that
+    the parameter zero is the identity exactly as in the paper's zero-initialised hypernet; this is what makes
+    weight decay pull the modulation toward identity rather than toward a zero scale. The deviations are forced
+    active at initialisation so we watch an active modulation either decay back to identity or persist, rather
+    than starting it at the identity it is supposed to leave."""
 
     def __init__(self, d_model, d_state, placement, init_scale):
         super().__init__()
@@ -63,11 +69,7 @@ class ReferenceSelectiveScan(nn.Module):
         self.w_b = nn.Linear(d_model, d_state)
         self.w_c = nn.Linear(d_model, d_state)
         self.readout = nn.Linear(d_model, d_model)
-        # The modulation is stored as a raw deviation g with the scale gamma = 1 + g and the shift beta = g,
-        # so that the parameter zero is the identity exactly as in the paper's zero-initialised hypernet; this
-        # is what makes weight decay pull the modulation toward identity rather than toward a zero scale. The
-        # deviations are forced active at initialisation so we watch an active modulation either decay back to
-        # identity or persist, rather than starting it at the identity it is supposed to leave.
+        # The deviations are forced active at init, not at identity, so training can be watched decaying back to it or persisting.
         self.g_input = nn.Parameter(init_scale * torch.linspace(-1.0, 1.0, d_model))
         self.beta_input = nn.Parameter(init_scale * torch.linspace(1.0, -1.0, d_model))
         self.g_delta = nn.Parameter(init_scale * torch.linspace(-1.0, 1.0, d_model))

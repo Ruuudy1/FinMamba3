@@ -13,6 +13,12 @@ so the downstream replay buffer can consume it without a second normalization
 pass. We still clip to the BasicSettings.NormClip window to match the
 Polymarket pipeline's safety net.
 
+File variants: DecPre is the decimal-precision normalized variant (used by
+DeepLOB's vendored data.zip); ZScore is the per-stock per-day z-scored variant
+from the FairData release. Either works because the trainer fits its own
+normalization stats. Published label encoding is {1=up, 2=stationary, 3=down};
+our direction head expects {0=down, 1=flat, 2=up} so we remap on load.
+
 Public entry point: load_fi2010_split(data_dir, split, horizon).
 """
 # region imports
@@ -29,31 +35,20 @@ FI2010_F_LEVEL = 4
 FI2010_F_TICK = 6
 FI2010_FEATURE_DIM = FI2010_K_LEVELS * FI2010_F_LEVEL + FI2010_F_TICK
 LEVEL_FEATURE_NAMES_FI2010 = ("ask_price", "ask_size", "bid_price", "bid_size")
-TICK_FEATURE_NAMES_FI2010 = (
-    "mid", "spread", "log_spread", "imbalance", "microprice", "log_total_vol",
-)
+TICK_FEATURE_NAMES_FI2010 = ("mid", "spread", "log_spread", "imbalance", "microprice", "log_total_vol")
 FLAT_FEATURE_NAMES_FI2010 = (
-    tuple(
-        f"level{k}.{name}"
-        for k in range(FI2010_K_LEVELS)
-        for name in LEVEL_FEATURE_NAMES_FI2010
-    )
-    + tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES_FI2010)
+    tuple(f"level{k}.{name}" for k in range(FI2010_K_LEVELS) for name in LEVEL_FEATURE_NAMES_FI2010) +
+    tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES_FI2010)
 )
-# FI-2010 label encoding from the published files: 1 = up, 2 = stationary, 3 = down.
-# Our direction head expects {0=down, 1=flat, 2=up} so we remap on load.
+# Published label rows use the {1=up, 2=stationary, 3=down} encoding documented in the module docstring; remapped on load.
 _LABEL_ROW_BY_HORIZON = {10: 144, 20: 145, 30: 146, 50: 147, 100: 148}
-# Candidate filenames in priority order. The first one that exists wins.
-# DecPre is the decimal-precision normalized variant (used by DeepLOB's vendored
-# data.zip); ZScore is the per-stock per-day z-scored variant from the FairData
-# release. Either works because the trainer fits its own normalization stats.
+# Candidate filenames in priority order; the first one that exists wins (variants documented in the module docstring).
 FILENAMES_BY_SPLIT = {
     "train": (
         "Train_Dst_NoAuction_DecPre_CF_7.txt",
         "Train_Dst_NoAuction_ZScore_CF_7.txt",
     ),
-    # Carved 15% validation split. The Test_ names are kept as a fallback for
-    # older mirrors that mapped validation onto the held-out Test file.
+    # Carved 15% validation split; the Test_ names are a fallback for older mirrors that mapped validation onto the held-out Test file.
     "validation": (
         "Val_Dst_NoAuction_DecPre_CF_7.txt",
         "Val_Dst_NoAuction_ZScore_CF_7.txt",
@@ -70,22 +65,20 @@ FILENAMES_BY_SPLIT = {
 @dataclass
 class FI2010Sequence:
     sequence: LOBSequence
-    direction_labels: np.ndarray  # Shape (T,), int64 in {0, 1, 2}.
+    # Shape (T,), int64 in {0, 1, 2}.
+    direction_labels: np.ndarray
     horizon: int
 
 
 def _load_raw_matrix(path: Path) -> np.ndarray:
-    # FI-2010 files are space-separated 149 x N text. np.loadtxt handles either
-    # transposed orientation; we normalize to (N_events, 149) below.
+    # FI-2010 files are space-separated 149 x N text; np.loadtxt handles either orientation and we normalize to (N_events, 149).
     arr = np.loadtxt(path, dtype=np.float32)
     if arr.ndim != 2:
         raise ValueError(f"FI-2010 file {path} has unexpected ndim={arr.ndim}")
     if arr.shape[0] == 149:
         arr = arr.T
     if arr.shape[1] != 149:
-        raise ValueError(
-            f"FI-2010 file {path} must have 149 rows or columns; got shape {arr.shape}"
-        )
+        raise ValueError(f"FI-2010 file {path} must have 149 rows or columns; got shape {arr.shape}")
     return arr
 
 
@@ -111,12 +104,7 @@ def _resolve_split_path(data_dir: Path, split: str) -> Path:
     )
 
 
-def load_fi2010_split(
-    data_dir: Path,
-    split: str,
-    horizon: int = 10,
-    max_events: int | None = None,
-) -> FI2010Sequence:
+def load_fi2010_split(data_dir: Path, split: str, horizon: int = 10, max_events: int | None = None) -> FI2010Sequence:
     """Load one FI-2010 split as an LOBSequence plus direction labels.
 
     Returns raw (un-normalized) per_level and per_tick arrays so the trainer
@@ -127,16 +115,13 @@ def load_fi2010_split(
     if split not in FILENAMES_BY_SPLIT:
         raise ValueError(f"split must be one of {sorted(FILENAMES_BY_SPLIT)}, got {split!r}")
     if horizon not in _LABEL_ROW_BY_HORIZON:
-        raise ValueError(
-            f"horizon must be one of {sorted(_LABEL_ROW_BY_HORIZON)}, got {horizon}"
-        )
+        raise ValueError(f"horizon must be one of {sorted(_LABEL_ROW_BY_HORIZON)}, got {horizon}")
     path = _resolve_split_path(Path(data_dir), split)
     logger.info(f"loading FI-2010 split={split} horizon={horizon} from {path.name}")
     matrix = _load_raw_matrix(path)
     n_events = matrix.shape[0]
     if max_events is not None and 0 < max_events < n_events:
-        # Keep the most recent slice; LOB statistics drift, and the tail is
-        # closest to the validation split.
+        # Keep the most recent slice; LOB statistics drift, and the tail is closest to the validation split.
         matrix = matrix[-max_events:]
         n_events = matrix.shape[0]
     lob_flat = matrix[:, :40]

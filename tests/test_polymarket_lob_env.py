@@ -46,9 +46,7 @@ def _data():
     return BacktestData(
         timeline=ticks,
         lifecycles=[MarketLifecycle(slug, "5m", start_ts=0, end_ts=2)],
-        settlements={
-            slug: Settlement(slug, "5m", outcome=Token.YES, start_ts=0, end_ts=2)
-        },
+        settlements={slug: Settlement(slug, "5m", outcome=Token.YES, start_ts=0, end_ts=2)},
         start_ts=0,
         end_ts=3,
     )
@@ -56,6 +54,7 @@ def _data():
 
 @unittest.skipIf(PolymarketLOBEnv is None, f"Gymnasium unavailable: {IMPORT_ERROR}")
 class PolymarketLOBEnvTest(unittest.TestCase):
+
     def test_reset_step_latency_and_settlement(self):
         env = PolymarketLOBEnv(_data(), initial_cash=100.0, max_markets=1)
         obs, info = env.reset()
@@ -71,6 +70,7 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         _, _, _, _, info = env.step(0)
         self.assertEqual(len(info["settlements"]), 1)
         self.assertAlmostEqual(env.cash, 100.0 - 6.2 + 10.0)
+
     def test_invalid_sell_does_not_change_cash(self):
         env = PolymarketLOBEnv(_data(), initial_cash=100.0, max_markets=1)
         env.reset()
@@ -79,13 +79,13 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         self.assertTrue(info["invalid_action"])
         self.assertIsNone(info["fill"])
         self.assertAlmostEqual(env.cash, 100.0)
+
     def test_settlement_calibrated_reward_adds_realized_profit_term(self):
-        # Same trajectory under "default" and "settlement_calibrated"; the only reward
-        # difference on the settling step is the realized-profit shaping term, which the
-        # old getattr-on-Settlement path silently zeroed out (Settlement has no payoff field).
-        default_env = PolymarketLOBEnv(
-            _data(), initial_cash=100.0, max_markets=1, reward_kind="default"
-        )
+        """Same trajectory under "default" and "settlement_calibrated"; the only reward
+        difference on the settling step is the realized-profit shaping term, which the old
+        getattr-on-Settlement path silently zeroed out (Settlement has no payoff field).
+        """
+        default_env = PolymarketLOBEnv(_data(), initial_cash=100.0, max_markets=1, reward_kind="default")
         calibrated_env = PolymarketLOBEnv(
             _data(), initial_cash=100.0, max_markets=1,
             reward_kind="settlement_calibrated", reward_settlement_weight=1.0,
@@ -101,5 +101,7 @@ class PolymarketLOBEnvTest(unittest.TestCase):
         expected_term = math.tanh((10.0 - 6.2) / calibrated_env.vol_scale)
         self.assertGreater(expected_term, 0.0)
         self.assertAlmostEqual(calibrated_reward - default_reward, expected_term, places=5)
+
+
 if __name__ == "__main__":
     unittest.main()

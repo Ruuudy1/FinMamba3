@@ -30,7 +30,9 @@ import torch
 
 
 class Policy(Protocol):
+
     def reset(self) -> None: ...
+
     def act(self, observation: np.ndarray) -> int: ...
 
 
@@ -103,20 +105,16 @@ class GreedyDirectionPolicy:
     does not bias the metric.
     """
 
-    def __init__(
-        self,
-        world_model,
-        mid_index: int,
-        threshold: float = 0.005,
-        device: str = "cuda",
-    ) -> None:
+    def __init__(self, world_model, mid_index: int, threshold: float = 0.005, device: str = "cuda") -> None:
         self.world_model = world_model
         self.mid_index = int(mid_index)
         self.threshold = float(threshold)
         self.device = device
         self._latent = None
+
     def reset(self) -> None:
         self._latent = None
+
     @torch.no_grad()
     def act(self, observation: np.ndarray) -> int:
         if self.world_model.direction_head is None:
@@ -126,15 +124,10 @@ class GreedyDirectionPolicy:
             return 0
         x = torch.from_numpy(flat).to(self.device).reshape(1, 1, -1)
         # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-        with torch.autocast(
-            device_type="cuda", dtype=torch.bfloat16, enabled=self.world_model.use_amp
-        ):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=self.world_model.use_amp):
             latent = self.world_model.encode_obs(x)
             last = latent[:, -1:]
-            seq = self.world_model.sequence_model(
-                last,
-                torch.zeros((1, 1), dtype=torch.long, device=self.device),
-            )
+            seq = self.world_model.sequence_model(last, torch.zeros((1, 1), dtype=torch.long, device=self.device))
             logits = self.world_model.direction_head(seq)
         cls = int(logits.argmax(dim=-1).item())
         if cls == 2:

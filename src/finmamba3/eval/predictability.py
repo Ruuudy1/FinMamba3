@@ -107,16 +107,14 @@ def predictability_from_timeline(
 
 @dataclass
 class PredictabilityWindowSplit:
-    reference_windows: list[tuple[int, int]]  # High-ER (forecastable) windows; the reference regime.
-    shifted_windows: list[tuple[int, int]]    # Low-ER (random-walk) windows; the shifted regime.
+    # High-ER (forecastable) windows; the reference regime.
+    reference_windows: list[tuple[int, int]]
+    # Low-ER (random-walk) windows; the shifted regime.
+    shifted_windows: list[tuple[int, int]]
     description: str
 
 
-def window_predictability_split(
-    midprice: np.ndarray,
-    window_len: int,
-    quantile: float = 0.5,
-) -> PredictabilityWindowSplit:
+def window_predictability_split(midprice: np.ndarray, window_len: int, quantile: float = 0.5) -> PredictabilityWindowSplit:
     """Split one concatenated LOB stream into forecastable (high-ER) and random-walk (low-ER) windows.
 
     The Efficiency Ratio over each non-overlapping window measures how forecastable that window is:

@@ -1,8 +1,11 @@
+"""The class-balanced direction gap came back positive while FiLM was inert, so the suspicion is that
+the "robustness" is a label-distribution artifact: if the high-vol windows simply carry more up/down
+ticks, an over-predicting balanced head scores a higher macro-F1 there regardless of conditioning.
+This dumps the next-tick label balance inside the low-vol vs high-vol windows to test that directly.
+"""
 # region imports
 from pathlib import Path
-
 import numpy as np
-
 from finmamba3.envs.fi2010_loader import load_fi2010_split
 from finmamba3.envs.lob_features import apply_normalization, load_normalization
 from finmamba3.eval.compare_direction import _label_directions
@@ -10,10 +13,6 @@ from finmamba3.eval.regime_split import window_volatility_split
 # endregion
 
 
-# The class-balanced direction gap came back positive while FiLM was inert, so the suspicion is that
-# the "robustness" is a label-distribution artifact: if the high-vol windows simply carry more up/down
-# ticks, an over-predicting balanced head scores a higher macro-F1 there regardless of conditioning.
-# This dumps the next-tick label balance inside the low-vol vs high-vol windows to test that directly.
 def _regime_label_fractions(midprice: np.ndarray, windows: list, level_width: int) -> np.ndarray:
     counts = np.zeros(3, dtype=np.int64)
     for start, end in windows:

@@ -212,27 +212,23 @@ class RegimeFiLMModulator(nn.Module):
         self.num_regimes = num_regimes
         self.condition_on_vol = condition_on_vol
         self.vol_window = vol_window
-        # With an adaptive optimizer, up-weighting the supervision loss does not proportionally move the
-        # shared router params, so the reconstruction gradient flowing back through the FiLM path keeps the
-        # router uniform regardless of supervision weight. decouple_router detaches the router logits on the
-        # path into the hypernetwork, so reconstruction can no longer push the router toward uniform: the
-        # router is driven purely by the supervision CE while the hypernetwork still adapts the per-regime
-        # modulation to minimize reconstruction. This is the clean test of whether a genuinely
-        # regime-discriminative FiLM helps, isolated from the optimizer's preference for a constant bias.
+        # With an adaptive optimizer, up-weighting the supervision loss does not proportionally move the shared router params, so the reconstruction gradient flowing back through the FiLM path keeps the router uniform regardless of supervision weight.
+        # `decouple_router` detaches the router logits on the path into the hypernetwork, so reconstruction can no longer push the router toward uniform:
+        # The router is driven purely by the supervision CE while the hypernetwork still adapts the per-regime modulation to minimize reconstruction.
+        # This is the clean test of whether a genuinely regime-discriminative FiLM helps, isolated from the optimizer's preference for a constant bias.
         self.decouple_router = decouple_router
         cond_dim = 1 if condition_on_vol else 0
         self.regime_head = RegimeHead(hidden_dim + cond_dim, num_regimes, embed_dim, **factory)
-        # Dropout on the soft regime embedding is the overfitting guard on the hypernetwork's added
-        # capacity; it stays a no-op at the default rate of zero.
+        # Dropout on the soft regime embedding is the overfitting guard on the hypernetwork's added capacity; it stays a no-op at the default rate of zero.
         self.embedding_dropout = nn.Dropout(dropout)
         self.hyper = nn.Linear(embed_dim, 2 * n_layer * hidden_dim, **factory)
-        # A positive init_scale seeds the hypernetwork weights with a small Gaussian so FiLM departs
-        # from identity immediately; the default of zero preserves the exact identity-at-init baseline.
+        # A positive init_scale seeds the hypernetwork weights with a small Gaussian so FiLM departs from identity immediately; the default of zero preserves the exact identity-at-init baseline.
         if init_scale > 0.0:
             nn.init.normal_(self.hyper.weight, mean=0.0, std=init_scale)
         else:
             nn.init.zeros_(self.hyper.weight)
         nn.init.zeros_(self.hyper.bias)
+
     def _causal_latent_volatility(self, hidden_summary: torch.Tensor) -> torch.Tensor:
         """Per-step latent speed smoothed into a causal volatility proxy of shape [B, L, 1].
 
@@ -247,16 +243,14 @@ class RegimeFiLMModulator(nn.Module):
         padded_speed = F.pad(speed, (self.vol_window - 1, 0))
         rolling = padded_speed.unfold(dimension=1, size=self.vol_window, step=1)
         return torch.log1p(rolling.std(dim=-1, unbiased=False)).unsqueeze(-1)
+
     def forward(
         self, hidden_summary: torch.Tensor, external_vol: torch.Tensor | None = None
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.condition_on_vol:
-            # external_vol is the realized volatility measured directly from the observation midprice,
-            # the same axis the generalization eval splits on and the regime-supervision label derives
-            # from. When the caller supplies it the router reads a faithful, linearly-bucketable vol
-            # signal so supervision can make the router discriminate; the latent-speed proxy is the
-            # caller-free fallback (it tracks obs volatility only weakly). The proxy/feature is cast back
-            # to the summary dtype so the concat stays valid under bf16 autocast.
+            # `external_vol` is the realized volatility measured directly from the observation midprice, the same axis the generalization eval splits on and the regime-supervision label derives from.
+            # When the caller supplies it the router reads a faithful, linearly-bucketable vol signal so supervision can make the router discriminate; the latent-speed proxy is the caller-free fallback (it tracks obs volatility only weakly).
+            # The proxy/feature is cast back to the summary dtype so the concat stays valid under bf16 autocast.
             if external_vol is not None:
                 vol_feature = external_vol.to(hidden_summary.dtype)
             else:
@@ -264,9 +258,8 @@ class RegimeFiLMModulator(nn.Module):
             router_input = torch.cat([hidden_summary, vol_feature], dim=-1)
         else:
             router_input = hidden_summary
-        # regime_logits feeds the supervision CE and the load-balance diagnostic with full gradient. The
-        # embedding handed to the hypernetwork softmaxes a detached copy when decoupled, so reconstruction
-        # adapts the per-regime modulation without dragging the router back to uniform.
+        # `regime_logits` feeds the supervision CE and the load-balance diagnostic with full gradient.
+        # The embedding handed to the hypernetwork softmaxes a detached copy when decoupled, so reconstruction adapts the per-regime modulation without dragging the router back to uniform.
         regime_logits = self.regime_head.logits(router_input)
         embedding_logits = regime_logits.detach() if self.decouple_router else regime_logits
         regime_emb = torch.softmax(embedding_logits, dim=-1) @ self.regime_head.embedding.weight
@@ -275,8 +268,7 @@ class RegimeFiLMModulator(nn.Module):
         seq_len = hidden_summary.shape[1]
         film = self.hyper(regime_emb)
         film = film.reshape(batch_size, seq_len, self.n_layer, 2, self.hidden_dim)
-        # Tanh keeps gamma in (0, 2) and beta in (-1, 1) for bf16 stability; both
-        # equal the identity (gamma=1, beta=0) while the zero-init hypernetwork warms up.
+        # Tanh keeps gamma in (0, 2) and beta in (-1, 1) for bf16 stability; both equal the identity (gamma=1, beta=0) while the zero-init hypernetwork warms up.
         gammas = 1.0 + torch.tanh(film[..., 0, :])
         betas = torch.tanh(film[..., 1, :])
         return gammas, betas, regime_logits

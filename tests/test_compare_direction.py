@@ -8,11 +8,7 @@ during the diagnose/eval workflow rather than under unit tests.
 # region imports
 from __future__ import annotations
 import numpy as np
-from finmamba3.eval.compare_direction import (
-    _format_table,
-    _label_directions,
-    classification_metrics,
-)
+from finmamba3.eval.compare_direction import _format_table, _label_directions, classification_metrics
 # endregion
 
 
@@ -44,8 +40,7 @@ def test_classification_metrics_uniform_predictor():
 
 
 def test_macro_f1_penalizes_majority_class_collapse():
-    # A predictor that always picks the dominant flat class scores high accuracy but low
-    # macro-F1; that gap is exactly why the benchmark reports macro-F1, not accuracy.
+    # Always predicting the dominant flat class scores high accuracy but low macro-F1, the gap the benchmark reports.
     labels = np.array([1, 1, 1, 1, 1, 1, 0, 2], dtype=np.int64)
     always_flat = np.eye(3)[np.ones(labels.size, dtype=np.int64)]
     metrics = classification_metrics(always_flat, labels)

@@ -17,6 +17,7 @@ RMSNorm = nn.RMSNorm
 
 
 class ActorCriticAgent(nn.Module):
+
     def __init__(self, conf, action_dim, device) -> None:
         super().__init__()
         feat_dim=conf.Models.WorldModel.CategoricalDim*conf.Models.WorldModel.ClassDim+conf.Models.WorldModel.HiddenStateDim
@@ -37,39 +38,28 @@ class ActorCriticAgent(nn.Module):
         actor = [
             VecNormalize(feat_dim, device=device),
             layer_init(nn.Linear(feat_dim, actor_hidden_dim, bias=True)),
-            RMSNorm(actor_hidden_dim),
-            act()
+            RMSNorm(actor_hidden_dim), act(),
         ]
         for i in range(num_layers - 1):
             actor.extend([
                 layer_init(nn.Linear(actor_hidden_dim, actor_hidden_dim, bias=True)),
-                RMSNorm(actor_hidden_dim),
-                act()
+                RMSNorm(actor_hidden_dim), act(),
             ])
-        self.actor = nn.Sequential(
-            *actor,
-            layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)
-        ).to(device)
-        critic = [
-            layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
-            RMSNorm(critic_hidden_dim),
-            act()
-        ]
+        self.actor = nn.Sequential(*actor, layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)).to(device)
+        critic = [layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)), RMSNorm(critic_hidden_dim), act()]
         for i in range(num_layers - 1):
             critic.extend([
                 layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
-                RMSNorm(critic_hidden_dim),
-                act()
+                RMSNorm(critic_hidden_dim), act(),
             ])
-        self.critic = nn.Sequential(
-            *critic,
-            layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)
-        ).to(device)
+        self.critic = nn.Sequential(*critic, layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)).to(device)
         self.slow_critic = copy.deepcopy(self.critic)
         self.lowerbound_ema = EMAScalar(decay=0.99)
         self.upperbound_ema = EMAScalar(decay=0.99)
         if conf.Models.Agent.AC.Optimiser == 'Laprop':
-            self.optimizer = LaProp(self.parameters(), lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon)
+            self.optimizer = LaProp(
+                self.parameters(), lr=conf.Models.Agent.AC.Laprop.LearningRate, eps=conf.Models.Agent.AC.Laprop.Epsilon,
+            )
         elif conf.Models.Agent.AC.Optimiser == 'Adam':
             self.optimizer = torch.optim.Adam(
                 self.parameters(),
@@ -78,30 +68,37 @@ class ActorCriticAgent(nn.Module):
             )
         else:
             raise ValueError(f"Unknown optimiser: {conf.Models.Agent.AC.Optimiser}")
-        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)  # No-op schedule; required to drive the warmup scheduler.
+        # No-op schedule; required to drive the warmup scheduler.
+        self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.AC.Warmup_steps)
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
         for slow_param, param in zip(self.slow_critic.parameters(), self.critic.parameters()):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
+
     def policy(self, x):
         logits = self.actor(x)
         logits = self.unimix(logits)
         return logits
+
     def value(self, x):
         value = self.critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
+
     @torch.no_grad()
     def slow_value(self, x):
         value = self.slow_critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
+
     def get_logits_raw_value(self, x):
         logits = self.actor(x)
         raw_value = self.critic(x)
         return logits, raw_value
+
     def unimix(self, logits):
         # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
@@ -110,6 +107,7 @@ class ActorCriticAgent(nn.Module):
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
+
     @torch.no_grad()
     def sample(self, latent, greedy=False):
         self.eval()
@@ -121,10 +119,15 @@ class ActorCriticAgent(nn.Module):
             else:
                 action = dist.sample()
         return action, logits
+
     def sample_as_env_action(self, latent, greedy=False):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
-    def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
+
+    def update(
+        self, latent, action, old_logits, context_latent, context_reward, context_termination,
+        reward, termination, logger, global_step,
+    ):
         """Update policy and value model."""
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -143,14 +146,16 @@ class ActorCriticAgent(nn.Module):
             lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
             upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
             S = upper_bound-lower_bound
-            norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # Clip to 1 per the paper's max(1, S) formulation.
+            # Clip to 1 per the paper's max(1, S) formulation.
+            norm_ratio = torch.max(torch.ones(1, device=reward.device), S)
             norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
             policy_loss = -(log_prob * norm_advantage.detach()).mean()
             entropy_loss = entropy.mean()
             loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
         # Apply gradient descent step.
         self.scaler.scale(loss).backward()
-        self.scaler.unscale_(self.optimizer)  # Unscale before grad clipping.
+        # Unscale before grad clipping.
+        self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=self.max_grad_norm)
         self.scaler.step(self.optimizer)
         self.scaler.update()

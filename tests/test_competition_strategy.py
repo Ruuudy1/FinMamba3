@@ -6,12 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 from finmamba3.envs.lob_features import F_TICK_BINARY, NormalizationStats  # noqa: E402
 from finmamba3.eval.competition_strategy import FinMamba3CompetitionStrategy  # noqa: E402
-from finmamba3.backtester.strategy import (  # noqa: E402
-    MarketState,
-    MarketView,
-    OrderBookLevel,
-    OrderBookSnapshot,
-)
+from finmamba3.backtester.strategy import MarketState, MarketView, OrderBookLevel, OrderBookSnapshot  # noqa: E402
 # endregion
 
 
@@ -50,6 +45,7 @@ class CompetitionStrategyFeatureTest(unittest.TestCase):
         self.assertEqual(vector.shape, (80 + F_TICK_BINARY,))
         self.assertTrue(np.isfinite(vector).all())
         self.assertLessEqual(float(np.abs(vector).max()), 8.0 + 1e-4)
+
     def test_missing_direction_head_raises(self):
         stats = NormalizationStats(
             per_level_mean=np.zeros(8, dtype=np.float32),
@@ -59,9 +55,6 @@ class CompetitionStrategyFeatureTest(unittest.TestCase):
             clip_value=8.0,
         )
         with self.assertRaises(ValueError):
-            FinMamba3CompetitionStrategy(
-                world_model=SimpleNamespace(direction_head=None),
-                stats=stats, mid_index=80, device="cpu",
-            )
+            FinMamba3CompetitionStrategy(world_model=SimpleNamespace(direction_head=None), stats=stats, mid_index=80, device="cpu")
 if __name__ == "__main__":
     unittest.main()

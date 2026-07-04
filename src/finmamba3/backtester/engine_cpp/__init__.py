@@ -5,6 +5,9 @@ The compiled extension is NOT built by ``pip install``; build it explicitly with
 CUDA image). The timeline is flattened once into a sparse CSR over the present (tick, market) cells
 (``marshal_timeline``) and the whole tick loop runs in C++ (``run_marshalled``), callback-free. The
 pure-Python ``finmamba3.backtester.engine`` stays the canonical reference and is the default; this is opt-in.
+The compiled module is imported only when it has been built, without a try/except: a glob of the package
+directory for ``_engine*.pyd`` / ``_engine*.so`` tells us whether the build command above has produced
+the binary.
 
 The dense (T, M) grid is ~99% empty (markets are short-lived) and its ask-ladder dimension reaches
 hundreds of levels, which is infeasible at headline scale; the sparse CSR lists only the active cells
@@ -26,8 +29,7 @@ import numpy as np
 from finmamba3.backtester.engine import MAX_SHARES_PER_TOKEN
 from finmamba3.backtester.strategy import Token
 # endregion
-# Import the compiled module only when it has been built, without a try/except: a glob of the package
-# directory tells us whether `python -m finmamba3.backtester.engine_cpp.build` has produced the binary.
+# Detected by a directory glob rather than a try/except (see the module docstring).
 _BUILT_EXTENSIONS = list(Path(__file__).parent.glob("_engine*.pyd")) + list(Path(__file__).parent.glob("_engine*.so"))
 if _BUILT_EXTENSIONS:
     from . import _engine
@@ -52,8 +54,10 @@ class MarshalledTimeline:
     """Sparse CSR timeline arrays + the slug->index map, built once and reused across runs."""
     arrays: tuple
     market_index_by_slug: dict
-    settlement_by_slug: dict  # Scoped slug -> Settlement, to rebuild the run's settled set for per_trade_pnls.
-    cell_ts: np.ndarray  # Each cell's tick second, to align per-run (slug, ts) signals onto the cell order.
+    # Scoped slug -> Settlement, to rebuild the run's settled set for per_trade_pnls.
+    settlement_by_slug: dict
+    # Each cell's tick second, to align per-run (slug, ts) signals onto the cell order.
+    cell_ts: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -77,9 +81,12 @@ class CppBacktestResult:
     settlements, snapshots), so per_trade_pnls and _sharpe_from_snapshots consume it unchanged."""
     total_pnl: float
     total_trades: int
-    fills: list  # list[_CppFill]
-    settlements: list  # The scoped Settlements, for per_trade_pnls' outcome lookup.
-    portfolio_snapshots: list  # list[_CppSnapshot], for _sharpe_from_snapshots.
+    # Each element is a _CppFill.
+    fills: list
+    # The scoped Settlements, for per_trade_pnls' outcome lookup.
+    settlements: list
+    # Each element is a _CppSnapshot, for _sharpe_from_snapshots.
+    portfolio_snapshots: list
 
 
 @dataclass
@@ -99,8 +106,8 @@ class AlignedSignals:
 
 
 def _align_scalar(marshalled: MarshalledTimeline, by_slug_ts: dict, default: float) -> np.ndarray:
-    # Map a per-(slug, ts) signal dict onto the marshalled cell order (one value per present cell), so a
-    # gate the strategy reads by (slug, ts) becomes a flat per-cell array the native engine indexes.
+    """Map a per-(slug, ts) signal dict onto the marshalled cell order (one value per present cell), so a
+    gate the strategy reads by (slug, ts) becomes a flat per-cell array the native engine indexes."""
     cell_market = marshalled.arrays[6]
     cell_ts = marshalled.cell_ts
     slug_by_index = {index: slug for slug, index in marshalled.market_index_by_slug.items()}
@@ -114,8 +121,8 @@ def _align_scalar(marshalled: MarshalledTimeline, by_slug_ts: dict, default: flo
 
 
 def _align_pair(marshalled: MarshalledTimeline, by_slug_ts: dict) -> tuple:
-    # Map a per-(slug, ts) (yes, no) EV pair dict onto the cell order; NaN marks a cell with no EV, which
-    # the native engine skips exactly as the Python strategy skips a (slug, ts) absent from ev_by_slug_ts.
+    """Map a per-(slug, ts) (yes, no) EV pair dict onto the cell order; NaN marks a cell with no EV, which
+    the native engine skips exactly as the Python strategy skips a (slug, ts) absent from ev_by_slug_ts."""
     cell_market = marshalled.arrays[6]
     cell_ts = marshalled.cell_ts
     slug_by_index = {index: slug for slug, index in marshalled.market_index_by_slug.items()}
@@ -131,9 +138,9 @@ def _align_pair(marshalled: MarshalledTimeline, by_slug_ts: dict) -> tuple:
 
 
 def _append_truncated_asks(asks, price_out: list, size_out: list) -> None:
-    # Copy ask levels into the flat ladders until cumulative size reaches the per-token share cap, then
-    # stop: walk-the-book never consumes more than that on one book per tick (each strategy issues at most
-    # one buy per market per tick, so there is no same-tick depletion), making the deeper tail unreachable.
+    """Copy ask levels into the flat ladders until cumulative size reaches the per-token share cap, then stop:
+    walk-the-book never consumes more than that on one book per tick (each strategy issues at most one buy per
+    market per tick, so there is no same-tick depletion), making the deeper tail unreachable."""
     cumulative = 0.0
     for level in asks:
         price_out.append(level.price)

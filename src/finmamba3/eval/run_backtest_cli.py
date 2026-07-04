@@ -37,10 +37,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--data-val", required=True, type=Path)
     p.add_argument("--hours-val", type=float, default=1.0)
     p.add_argument("--max-steps", type=int, default=5000)
-    p.add_argument("--threshold", type=float, default=0.005,
-                   help="Direction threshold passed to GreedyDirectionPolicy")
-    p.add_argument("--regime-split", default="none",
-                   help="One of: none, time:<unix_ts>, volatility:<quantile>")
+    p.add_argument("--threshold", type=float, default=0.005, help="Direction threshold passed to GreedyDirectionPolicy")
+    p.add_argument("--regime-split", default="none", help="One of: none, time:<unix_ts>, volatility:<quantile>")
     p.add_argument("--out", type=Path, default=Path("reports/backtest.json"))
     p.add_argument("--device", default=None)
     return p.parse_args()
@@ -70,8 +68,7 @@ def _filter_backtest_data(bt, spec: str):
         return bt, result.description
     if spec.startswith("volatility:"):
         quantile = float(spec.split(":", 1)[1])
-        # Vol is measured per market from the loaded books; the test half is the
-        # high-vol tail above the quantile, isolating the regime-shift split.
+        # Vol is measured per market from the loaded books; the test half is the high-vol tail above the quantile, isolating the regime-shift split.
         realized_vol = realized_vol_from_timeline(bt.timeline)
         result = volatility_split(bt.lifecycles, realized_vol=realized_vol, quantile=quantile)
         keep_by_slug = {m.market_slug: True for m in result.test_markets}
@@ -104,9 +101,7 @@ def main() -> int:
     bt, regime_desc = _filter_backtest_data(bt, args.regime_split)
     logger.info(f"loaded backtest data: regime={regime_desc}, lifecycles={len(bt.lifecycles)}")
     env = PolymarketLOBEnv(bt)
-    policy = GreedyDirectionPolicy(
-        wm, mid_index=80, threshold=args.threshold, device=str(device)
-    )
+    policy = GreedyDirectionPolicy(wm, mid_index=80, threshold=args.threshold, device=str(device))
     metrics = run_backtest(env, policy, max_steps=args.max_steps)
     logger.info(
         f"backtest done: total_return={metrics.total_return:.4f} "
