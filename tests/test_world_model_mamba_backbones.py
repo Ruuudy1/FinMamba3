@@ -102,6 +102,8 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
     def test_mamba3_mimo_sequence_shape_and_update(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
+        # MIMO defaults to False repo-wide (it segfaults on the 4080's shared-memory limit), so this MIMO-specific test must opt in explicitly.
+        config.Models.WorldModel.Mamba3.is_mimo = True
         model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
         self.assertEqual(model.model, "Mamba3")
         self.assertTrue(model.sequence_model.layers[0].kwargs["is_mimo"])
