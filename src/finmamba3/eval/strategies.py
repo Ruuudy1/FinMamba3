@@ -86,7 +86,7 @@ class WorldModelStrategy(BaseStrategy):
         self.edge_threshold = float(edge_threshold)
         self.order_size = float(order_size)
         self.max_tte_frac = float(max_tte_frac)
-        # min_tte_frac excludes near-expiry trades (where the book has converged to the outcome and the oracle-lag edge reverses); the edge concentrates early, when the book is least informed.
+        # `min_tte_frac` excludes near-expiry trades (where the book has converged to the outcome and the oracle-lag edge reverses); the edge concentrates early, when the book is least informed.
         self.min_tte_frac = float(min_tte_frac)
         self.use_cusum = bool(use_cusum)
         self.sizing = sizing

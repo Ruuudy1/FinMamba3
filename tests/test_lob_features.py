@@ -182,9 +182,7 @@ class SpotFeatureTest(unittest.TestCase):
         ticks, slug = _spot_timeline("BTC", "chainlink_btc", 1000, 1300, 12, rising=True)
         with self.assertRaises(ValueError):
             extract_features(ticks, slug, include_spot_features=True)
-        seq = extract_features(
-            ticks, slug, asset="BTC", start_ts=1000, end_ts=1300, include_spot_features=True,
-        )
+        seq = extract_features(ticks, slug, asset="BTC", start_ts=1000, end_ts=1300, include_spot_features=True)
         stats = fit_normalization(seq, clip_value=8.0)
         self.assertEqual(stats.per_tick_mean.shape[0], F_TICK_SPOT)
         self.assertEqual(len(stats.to_json()["tick_feature_names"]), F_TICK_SPOT)

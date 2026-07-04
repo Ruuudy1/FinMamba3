@@ -34,10 +34,7 @@ from finmamba3.backtester.strategy import (  # noqa: E402
 
 
 def _book(bid, ask):
-    return OrderBookSnapshot(
-        bids=(OrderBookLevel(float(bid), 100.0),),
-        asks=(OrderBookLevel(float(ask), 100.0),),
-    )
+    return OrderBookSnapshot(bids=(OrderBookLevel(float(bid), 100.0),), asks=(OrderBookLevel(float(ask), 100.0),))
 
 
 def _data():

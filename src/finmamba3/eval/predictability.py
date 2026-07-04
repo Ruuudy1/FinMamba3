@@ -129,11 +129,7 @@ def window_predictability_split(midprice: np.ndarray, window_len: int, quantile:
     num_events = int(midprice.shape[0])
     mid = np.asarray(midprice, dtype=np.float64)
     bounds = window_bounds(num_events, window_len)
-    efficiency = np.fromiter(
-        (efficiency_ratio(mid[start:end]) for start, end in bounds),
-        dtype=np.float64,
-        count=len(bounds),
-    )
+    efficiency = np.fromiter((efficiency_ratio(mid[start:end]) for start, end in bounds), dtype=np.float64, count=len(bounds))
     threshold = float(np.quantile(efficiency, quantile))
     reference_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] >= threshold]
     shifted_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] < threshold]

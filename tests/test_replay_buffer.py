@@ -96,7 +96,7 @@ def test_supervision_channels_roundtrip_and_legacy_arity():
     assert torch.isfinite(spot_dist).all()
     assert torch.isfinite(event_counts).all()
     assert torch.all((tte_frac >= 0.0) & (tte_frac <= 1.0))
-    # yes_ask/no_ask/yes_mid/book_depth were not provided in append(), so NaN-initialized.
+    # `yes_ask`/`no_ask`/`yes_mid`/`book_depth` were not provided in append(), so NaN-initialized.
     assert torch.isnan(yes_ask).all()
     assert torch.isnan(no_ask).all()
     assert torch.isnan(yes_mid).all()

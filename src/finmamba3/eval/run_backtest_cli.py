@@ -52,11 +52,7 @@ def _device_from_arg(arg: str | None) -> torch.device:
 
 def _filter_backtest_data(bt, spec: str):
     """Apply a regime split to the BacktestData lifecycle list."""
-    from finmamba3.eval.regime_split import (
-        realized_vol_from_timeline,
-        time_split,
-        volatility_split,
-    )
+    from finmamba3.eval.regime_split import realized_vol_from_timeline, time_split, volatility_split
     if spec == "none":
         return bt, "all"
     if spec.startswith("time:"):

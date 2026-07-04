@@ -113,7 +113,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        # update() now returns detached tensors so callers can defer GPU-CPU sync.
+        # `update()` now returns detached tensors so callers can defer GPU-CPU sync.
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
 
     def test_mamba2_fallback_constructs(self):

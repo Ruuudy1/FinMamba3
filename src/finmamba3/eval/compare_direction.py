@@ -444,9 +444,7 @@ def _format_table(rows: list[dict]) -> str:
     head = "| method | threshold | accuracy | macro_f1 | brier |\n|---|---:|---:|---:|---:|"
     lines = [head]
     for r in rows:
-        lines.append(
-            f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['macro_f1']:.4f} | {r['brier']:.4f} |"
-        )
+        lines.append(f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['macro_f1']:.4f} | {r['brier']:.4f} |")
     return "\n".join(lines)
 
 

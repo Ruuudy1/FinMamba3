@@ -77,11 +77,7 @@ def window_volatility_split(midprice: np.ndarray, window_len: int, quantile: flo
     num_events = int(midprice.shape[0])
     mid = np.asarray(midprice, dtype=np.float64)
     bounds = window_bounds(num_events, window_len)
-    vols = np.fromiter(
-        (float(np.std(np.diff(mid[start:end]))) for start, end in bounds),
-        dtype=np.float64,
-        count=len(bounds),
-    )
+    vols = np.fromiter((float(np.std(np.diff(mid[start:end]))) for start, end in bounds), dtype=np.float64, count=len(bounds))
     threshold = float(np.quantile(vols, quantile))
     low_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] <= threshold]
     high_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] > threshold]

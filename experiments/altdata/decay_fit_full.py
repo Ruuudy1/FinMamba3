@@ -38,8 +38,7 @@ def decay(t, a, tau, c):
 
 
 def fit_one(steps, values, c_lower):
-    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1500.0, 0.0],
-                        bounds=([0.0, 1.0, c_lower], [1.0, 1e6, 0.3]), maxfev=40000)
+    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1500.0, 0.0], bounds=([0.0, 1.0, c_lower], [1.0, 1e6, 0.3]), maxfev=40000)
     a, tau, c = popt
     residual = values - decay(steps, *popt)
     r2 = 1.0 - np.sum(residual ** 2) / np.sum((values - values.mean()) ** 2)

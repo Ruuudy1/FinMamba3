@@ -29,8 +29,7 @@ def fit(name, path):
     steps, film_g = parse(path)
     keep = film_g > 0.0
     steps, film_g = steps[keep], film_g[keep]
-    popt, _ = curve_fit(decay, steps, film_g, p0=[0.2, 1500.0, 0.0],
-                        bounds=([0.0, 1.0, -0.05], [1.0, 1e6, 0.3]), maxfev=20000)
+    popt, _ = curve_fit(decay, steps, film_g, p0=[0.2, 1500.0, 0.0], bounds=([0.0, 1.0, -0.05], [1.0, 1e6, 0.3]), maxfev=20000)
     a, tau, c = popt
     residual = film_g - decay(steps, *popt)
     r2 = 1.0 - np.sum(residual ** 2) / np.sum((film_g - film_g.mean()) ** 2)

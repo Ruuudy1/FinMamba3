@@ -64,10 +64,7 @@ def bootstrap_survivability(
     trades within a market are correlated, bootstrap_survivability_by_market is the honest test.
     """
     if not trade_pnls:
-        return {
-            "n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0,
-            "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0,
-        }
+        return {"n_trades": 0, "frac_profitable": 0.0, "drawdown_p95": 0.0, "ci_low": 0.0, "ci_high": 0.0, "mean_terminal": 0.0}
     pnls = np.asarray(trade_pnls, dtype=np.float64)
     rng = np.random.default_rng(seed)
     sampled = rng.choice(pnls, size=(n_paths, pnls.shape[0]), replace=True)

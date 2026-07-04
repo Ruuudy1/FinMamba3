@@ -130,8 +130,7 @@ def fit_decay(film_g_by_step):
     paper applies to the LOB escalations so the language trajectory is summarised on the same footing."""
     steps = np.array(sorted(film_g_by_step), dtype=float)
     values = np.array([film_g_by_step[int(s)] for s in steps])
-    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1000.0, 0.0],
-                        bounds=([0.0, 1.0, -0.1], [2.0, 1e6, 1.0]), maxfev=40000)
+    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1000.0, 0.0], bounds=([0.0, 1.0, -0.1], [2.0, 1e6, 1.0]), maxfev=40000)
     a, tau, c = popt
     residual = values - decay(steps, *popt)
     r2 = 1.0 - np.sum(residual ** 2) / np.sum((values - values.mean()) ** 2)

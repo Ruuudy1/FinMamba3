@@ -65,7 +65,7 @@ def _read_kaggle_frame(csv_path: Path, max_rows: int | None) -> pandas.DataFrame
         needed.append(f"asks_limit_notional_{k}")
         needed.append(f"bids_market_notional_{k}")
         needed.append(f"asks_market_notional_{k}")
-    # nrows caps the read for an --hours slice; dropna removes gap snapshots so the finiteness check guards genuine bugs.
+    # `nrows` caps the read for an --hours slice; dropna removes gap snapshots so the finiteness check guards genuine bugs.
     frame = pandas.read_csv(csv_path, usecols=needed, nrows=max_rows)
     frame = frame[needed].dropna(axis=0, how="any").reset_index(drop=True)
     if frame.shape[0] < 2:
