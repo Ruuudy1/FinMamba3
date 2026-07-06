@@ -19,12 +19,7 @@ from finmamba3.envs.kaggle_lob_loader import (
     load_kaggle_lob,
     max_rows_for_hours,
 )
-from finmamba3.envs.lob_features import (
-    apply_normalization,
-    fit_normalization,
-    LEVEL_FEATURE_NAMES,
-    TICK_FEATURE_NAMES,
-)
+from finmamba3.envs.lob_features import apply_normalization, fit_normalization, LEVEL_FEATURE_NAMES, TICK_FEATURE_NAMES
 # endregion
 
 # A controlled midprice path so direction labels can be hand-verified.
@@ -64,10 +59,7 @@ def kaggle_csv(tmp_path) -> Path:
     return path
 
 
-# ===========================================================================
-# 1. Schema constants
-# ===========================================================================
-
+# Schema constants.
 def test_feature_dim_is_94():
     assert KAGGLE_FEATURE_DIM == 94, "Kaggle flat dim must be 10 * 8 + 14 = 94 (Polymarket base schema)."
 
@@ -85,10 +77,7 @@ def test_schema_reuses_lob_feature_names():
     assert len(TICK_FEATURE_NAMES) == KAGGLE_F_TICK
 
 
-# ===========================================================================
-# 2. Load shapes and finiteness
-# ===========================================================================
-
+# Load shapes and finiteness.
 def test_load_returns_kaggle_sequence_type(kaggle_csv):
     bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min")
     assert isinstance(bundle, KaggleLOBSequence)
@@ -138,10 +127,7 @@ def test_load_market_slug(kaggle_csv):
     assert bundle.sequence.market_slug == "kaggle_btc_1min"
 
 
-# ===========================================================================
-# 3. Feature semantics
-# ===========================================================================
-
+# Feature semantics.
 def test_mid_channel_equals_midpoint(kaggle_csv):
     bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min")
     np.testing.assert_allclose(bundle.sequence.per_tick[:, 0], _MID_PATH.astype(np.float32), rtol=1e-5)
@@ -174,13 +160,10 @@ def test_level_index_channel_is_symmetric(kaggle_csv):
     np.testing.assert_allclose(bundle.sequence.per_level[0, KAGGLE_LEVELS_PER_SIDE:, 5], expected)
 
 
-# ===========================================================================
-# 4. Direction labels
-# ===========================================================================
-
+# Direction labels.
 def test_direction_labels_match_hand_computed(kaggle_csv):
     bundle = load_kaggle_lob(kaggle_csv, "BTC", "1min", flat_threshold=0.0)
-    # mid = [100, 101, 100.5, 100.5, 102, 101.5, 103] -> up, down, flat, up, down, up, flat-filled.
+    # `mid` = [100, 101, 100.5, 100.5, 102, 101.5, 103] -> up, down, flat, up, down, up, flat-filled.
     expected = np.array([2, 0, 1, 2, 0, 2, 1], dtype=np.int64)
     np.testing.assert_array_equal(bundle.direction_labels, expected)
 
@@ -197,10 +180,7 @@ def test_direction_labels_length_matches(kaggle_csv):
     assert bundle.direction_labels.dtype == np.int64
 
 
-# ===========================================================================
-# 5. Helper functions
-# ===========================================================================
-
+# Helper functions.
 def test_rolling_std_first_is_zero_and_matches_numpy():
     series = np.array([1.0, 3.0, 2.0, 8.0, 5.0], dtype=np.float64)
     rolling = _rolling_std(series, window=3)
@@ -239,10 +219,7 @@ def test_max_rows_for_hours_invalid_resolution_raises():
         max_rows_for_hours(1.0, "2min")
 
 
-# ===========================================================================
-# 6. Validation and slicing
-# ===========================================================================
-
+# Validation and slicing.
 def test_invalid_asset_raises(kaggle_csv):
     with pytest.raises(ValueError, match="asset"):
         load_kaggle_lob(kaggle_csv, "DOGE", "1min")
@@ -281,10 +258,7 @@ def test_dropna_removes_gap_rows(tmp_path):
     assert bundle.sequence.per_level.shape[0] == 4, "The NaN snapshot must be dropped."
 
 
-# ===========================================================================
-# 7. End-to-end normalization (loader -> fit -> apply -> within clip)
-# ===========================================================================
-
+# End-to-end normalization: loader, fit, apply, within clip.
 def test_e2e_normalization_within_clip(tmp_path):
     mid = 100.0 + np.cumsum(np.random.default_rng(1).normal(0.0, 0.5, 400))
     mid = np.clip(mid, 1.0, None)
@@ -300,10 +274,7 @@ def test_e2e_normalization_within_clip(tmp_path):
     assert float(np.abs(flat).max()) <= 8.0 + 1e-4
 
 
-# ===========================================================================
-# 8. build_kaggle_sequences chronological train/val split
-# ===========================================================================
-
+# `build_kaggle_sequences` chronological train/val split.
 def _write_kaggle_data_dir(tmp_path, num_rows: int = 300) -> Path:
     mid = 100.0 + np.cumsum(np.random.default_rng(3).normal(0.0, 0.4, num_rows))
     mid = np.clip(mid, 1.0, None)

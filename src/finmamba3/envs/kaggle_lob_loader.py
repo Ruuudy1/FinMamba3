@@ -24,16 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
 import pandas
-from finmamba3.envs.lob_features import (
-    F_LEVEL,
-    F_TICK,
-    K_LEVELS,
-    LOBSequence,
-)
+from finmamba3.envs.lob_features import F_LEVEL, F_TICK, K_LEVELS, LOBSequence
 # endregion
 logger = logging.getLogger(__name__)
-# The encoder default is K=10 single-sided tokens; a two-sided spot book splits that into the
-# five best bid levels then the five best ask levels so both sides reach the encoder.
+# The encoder's K=10 tokens are split into five bid then five ask levels so both sides reach the encoder (module docstring).
 KAGGLE_K_LEVELS = K_LEVELS
 KAGGLE_LEVELS_PER_SIDE = K_LEVELS // 2
 # The CSV ships 15 raw levels per side; the deepest five are dropped to match the encoder's K=10.
@@ -41,12 +35,10 @@ KAGGLE_BOOK_DEPTH = 15
 KAGGLE_F_LEVEL = F_LEVEL
 KAGGLE_F_TICK = F_TICK
 KAGGLE_FEATURE_DIM = KAGGLE_K_LEVELS * KAGGLE_F_LEVEL + KAGGLE_F_TICK
-# Rows per hour by resolution, so an --hours slice maps to a pandas nrows cap without parsing the
-# timestamp column; the 1sec files are ~1.8 GB, so reading only the needed rows is load-bearing.
+# Rows per hour by resolution maps an --hours slice to a pandas nrows cap; the 1sec files are ~1.8 GB, so this is load-bearing.
 ROWS_PER_HOUR_BY_RESOLUTION = {"1sec": 3600, "1min": 60, "5min": 12}
 ASSET_NAMES = ("BTC", "ETH", "ADA")
-# Pure-sign next-tick direction by default; training and the regime eval bucket direction on the
-# normalized-mid channel with their own threshold, so this only labels the loader's diagnostic array.
+# Pure-sign next-tick direction by default; training buckets direction itself, so this only labels the diagnostic array.
 DEFAULT_FLAT_THRESHOLD = 0.0
 DEFAULT_VOL_WINDOW = 20
 
@@ -54,14 +46,14 @@ DEFAULT_VOL_WINDOW = 20
 @dataclass
 class KaggleLOBSequence:
     sequence: LOBSequence
-    direction_labels: np.ndarray  # Shape (T,), int64 in {0=down, 1=flat, 2=up}; next-tick mid direction.
+    # Shape (T,), int64 in {0=down, 1=flat, 2=up}; next-tick mid direction.
+    direction_labels: np.ndarray
     asset: str
     resolution: str
 
 
 def _read_kaggle_frame(csv_path: Path, max_rows: int | None) -> pandas.DataFrame:
-    # Read only the columns the 8/14 schema consumes; usecols keeps the 1sec files from
-    # materializing their order-flow-decomposition columns, which this spot schema does not use.
+    # Read only the columns the 8/14 schema consumes; usecols keeps the 1sec files from materializing unused columns.
     needed = ["midpoint", "spread", "buys", "sells"]
     for k in range(KAGGLE_LEVELS_PER_SIDE):
         needed.append(f"bids_distance_{k}")
@@ -73,8 +65,7 @@ def _read_kaggle_frame(csv_path: Path, max_rows: int | None) -> pandas.DataFrame
         needed.append(f"asks_limit_notional_{k}")
         needed.append(f"bids_market_notional_{k}")
         needed.append(f"asks_market_notional_{k}")
-    # nrows caps the read for an --hours slice; dropna removes the occasional gap snapshot so the
-    # downstream finiteness assertion guards genuine bugs rather than known missing rows.
+    # `nrows` caps the read for an --hours slice; dropna removes gap snapshots so the finiteness check guards genuine bugs.
     frame = pandas.read_csv(csv_path, usecols=needed, nrows=max_rows)
     frame = frame[needed].dropna(axis=0, how="any").reset_index(drop=True)
     if frame.shape[0] < 2:
@@ -271,9 +262,4 @@ def load_kaggle_lob(
         f"per_tick={per_tick.shape}, direction {{0,1,2}} -> "
         f"{np.bincount(direction_labels, minlength=3).tolist()}"
     )
-    return KaggleLOBSequence(
-        sequence=sequence,
-        direction_labels=direction_labels,
-        asset=asset,
-        resolution=resolution,
-    )
+    return KaggleLOBSequence(sequence=sequence, direction_labels=direction_labels, asset=asset, resolution=resolution)

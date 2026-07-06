@@ -31,4 +31,13 @@ RUN pip install --no-cache-dir -e .[cpp,test]
 RUN python -m finmamba3.backtester.engine_cpp.build
 RUN python -m pytest tests/test_engine_cpp_parity.py -q
 
+# Profiling + parallel-parity harnesses (synthetic probs, no GPU/checkpoint). Copied last so editing a
+# benchmark does not invalidate the engine-build cache layer. Override the entrypoint to run one, e.g.
+#   docker run --rm -v "$PWD/data:/app/data" finmamba3-backtest \
+#     python benchmarks/engine/sweep_profile.py 6 10
+COPY benchmarks ./benchmarks
+# Model configs are read at runtime (`--config configs/...`) and by the world-model test suite, which
+# stubs mamba_ssm but still loads a real config. Copied last alongside benchmarks for cache friendliness.
+COPY configs ./configs
+
 ENTRYPOINT ["python", "-m", "finmamba3.eval.pnl_backtest"]

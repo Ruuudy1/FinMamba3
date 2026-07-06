@@ -23,6 +23,13 @@ RMSNorm = nn.RMSNorm
 class LOBEncoder(nn.Module):
     """Transformer over K depth-curve tokens plus a CLS token carrying the
     tick-level scalar features.
+
+    The transformer runs over (B*L) flattened snapshots, each a length-(K+1)
+    sequence. At large batch*length the fused/flash SDPA backend maps
+    batch*heads onto a CUDA grid dimension capped at 65535 and crashes with
+    "invalid configuration argument". The sequence is only K+1 tokens, so
+    flash's S^2 saving is irrelevant; forward forces the math backend, which
+    has no grid cap, to keep the encoder robust at any batch size.
     """
 
     def __init__(
@@ -55,11 +62,7 @@ class LOBEncoder(nn.Module):
         nn.init.normal_(self.level_pos, std=0.02)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, d_model, **factory))
         nn.init.normal_(self.cls_token, std=0.02)
-        self.tick_proj = nn.Sequential(
-            nn.Linear(f_tick, d_model, **factory),
-            nn.SiLU(),
-            nn.Linear(d_model, d_model, **factory),
-        )
+        self.tick_proj = nn.Sequential(nn.Linear(f_tick, d_model, **factory), nn.SiLU(), nn.Linear(d_model, d_model, **factory))
         enc_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=num_heads,
@@ -70,17 +73,16 @@ class LOBEncoder(nn.Module):
             norm_first=True,
             **factory,
         )
-        # norm_first makes the nested-tensor fast path a no-op anyway; disable it to silence the startup warning.
+        # `norm_first` makes the nested-tensor fast path a no-op anyway; disable it to silence the startup warning.
         self.transformer = nn.TransformerEncoder(enc_layer, num_layers=num_layers, enable_nested_tensor=False)
         self.norm = RMSNorm(d_model, **factory)
         self.out_proj = nn.Linear(d_model, output_flatten_dim, **factory)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         level_flat_dim = self.k_levels * self.f_level
         levels_flat = x[..., :level_flat_dim]
         tick = x[..., level_flat_dim:]
-        levels = rearrange(
-            levels_flat, "b l (k f) -> b l k f", k=self.k_levels, f=self.f_level
-        )
+        levels = rearrange(levels_flat, "b l (k f) -> b l k f", k=self.k_levels, f=self.f_level)
         if self.aggregate_only:
             levels = torch.zeros_like(levels)
         B, L = levels.shape[:2]
@@ -90,11 +92,7 @@ class LOBEncoder(nn.Module):
         tick_emb = rearrange(self.tick_proj(tick), "b l d -> (b l) 1 d")
         cls = cls + tick_emb
         seq = torch.cat([cls, tok], dim=1)
-        # The transformer runs over (B*L) flattened snapshots, each a length-(K+1) sequence.
-        # At large batch*length the fused/flash SDPA backend maps batch*heads onto a CUDA grid
-        # dimension capped at 65535 and crashes with "invalid configuration argument". The
-        # sequence is only K+1 tokens, so flash's S^2 saving is irrelevant; force the math
-        # backend, which has no grid cap, to keep the encoder robust at any batch size.
+        # Force the math SDPA backend to stay under the CUDA grid cap that crashes flash here (see class docstring).
         with sdpa_kernel(SDPBackend.MATH):
             if self.gradient_checkpointing and self.training:
                 for layer in self.transformer.layers:
@@ -132,8 +130,11 @@ class LOBDecoder(nn.Module):
             in_dim = hidden_dim
         layers.append(nn.Linear(in_dim, out_dim, **factory))
         self.backbone = nn.Sequential(*layers)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.backbone(x)
+
+
 DEFAULT_LEVEL_SIZE_INDICES = (1, 2, 3)
 DEFAULT_TICK_SIZE_INDICES = (6, 7, 11, 12)
 
@@ -175,6 +176,7 @@ class LOBReconstructionLoss(nn.Module):
         weight = torch.cat([level_w.repeat(k_levels), tick_w], dim=0)
         weight = weight * (weight.numel() / weight.sum())
         self.register_buffer("feature_weight", weight, persistent=False)
+
     def forward(self, obs_hat: torch.Tensor, obs: torch.Tensor) -> torch.Tensor:
         w = self.feature_weight.to(dtype=obs.dtype)
         sq = (obs_hat - obs) ** 2 * w
@@ -226,14 +228,14 @@ class StudentTLOBDecoder(nn.Module):
         else:
             self.register_buffer("log_nu", nu.log(), persistent=False)
         self.learnable_nu = bool(learnable_nu)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         feat = self.backbone(x)
         mean = self.mean_head(feat)
         log_scale = self.log_scale_head(feat).clamp(min=-6.0, max=4.0)
         return mean, log_scale
-    def log_prob(
-        self, mean: torch.Tensor, log_scale: torch.Tensor, target: torch.Tensor
-    ) -> torch.Tensor:
+
+    def log_prob(self, mean: torch.Tensor, log_scale: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Per-element Student-t log-likelihood.
 
         Returns a tensor with the same shape as `target`.
@@ -242,11 +244,7 @@ class StudentTLOBDecoder(nn.Module):
         scale = log_scale.exp()
         z = (target - mean) / scale
         # Compute the log Student-t density.
-        log_const = (
-            torch.lgamma((nu + 1.0) / 2.0)
-            - torch.lgamma(nu / 2.0)
-            - 0.5 * torch.log(nu * math.pi)
-        )
+        log_const = torch.lgamma((nu + 1.0) / 2.0) - torch.lgamma(nu / 2.0) - 0.5 * torch.log(nu * math.pi)
         return log_const - log_scale - ((nu + 1.0) / 2.0) * torch.log1p(z * z / nu)
 
 
@@ -272,6 +270,7 @@ class StudentTReconstructionLoss(nn.Module):
         weight = torch.cat([level_w.repeat(k_levels), tick_w], dim=0)
         weight = weight * (weight.numel() / weight.sum())
         self.register_buffer("feature_weight", weight, persistent=False)
+
     def forward(
         self,
         decoder: "StudentTLOBDecoder",
@@ -325,12 +324,10 @@ class MultiScaleEncoder(nn.Module):
             nn.Linear(output_flatten_dim, output_flatten_dim, **factory),
         )
         self.output_flatten_dim = int(output_flatten_dim)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.dim() != 4:
-            raise ValueError(
-                "MultiScaleEncoder expects (B, L, R, F); got shape "
-                f"{tuple(x.shape)}"
-            )
+            raise ValueError(f"MultiScaleEncoder expects (B, L, R, F); got shape {tuple(x.shape)}")
         outs = []
         for r, enc in enumerate(self.encoders):
             outs.append(enc(x[:, :, r]))

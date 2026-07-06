@@ -5,6 +5,7 @@ import torch
 
 
 class ReplayBuffer():
+
     def __init__(self, config, device="cuda") -> None:
         self.store_on_gpu = config.BasicSettings.ReplayBufferOnGPU
         max_length = config.JointTrainAgent.BufferMaxLength
@@ -23,21 +24,17 @@ class ReplayBuffer():
             # NaN sentinel: unresolved-market ticks must be visible to the loss path so BCE can mask them out instead of treating uninitialized memory as outcome=0.
             self.outcome_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.event_count_buffer = torch.full((max_length, 2), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
-            # Raw per-tick settlement-supervision channels (Phase 0.3): tte_frac in [0, 1] weights the
-            # outcome BCE toward expiry; the signed spot distance gives the observable running spot-sign
-            # target. NaN until populated so a buffer with no spot features contributes neither term.
+            # Settlement-supervision channels (Phase 0.3): tte_frac in [0, 1] weights the outcome BCE toward expiry, the signed spot distance is the observable running spot-sign target, and both stay NaN until populated so a buffer with no spot features contributes neither term.
             self.tte_frac_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.spot_dist_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
-            # Book-relative edge supervision channels (Phase 2): YES/NO ask prices, YES mid, YES depth.
-            # NaN until populated; BookRelativeEdgeHead masks rows where any of these is NaN or depth==0.
+            # Book-relative edge supervision channels (Phase 2) stay NaN until populated; BookRelativeEdgeHead masks rows where any of them is NaN or depth==0.
             self.yes_ask_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.no_ask_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.yes_mid_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.book_depth_buffer = torch.full((max_length,), float('nan'), dtype=torch.float32, device=device, requires_grad=False)
             self.sampled_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
             self.imagined_counter = torch.zeros((max_length), dtype=torch.int32, device=device, requires_grad=False)
-            # Marks the final tick of each market. A dedicated buffer keeps the
-            # sampling-boundary constraint separate from RL termination semantics.
+            # A dedicated final-tick marker keeps the sampling-boundary constraint separate from RL termination semantics.
             self.segment_end_buffer = torch.zeros((max_length), dtype=torch.float32, device=device, requires_grad=False)
         else:
             self.obs_buffer = np.empty((max_length, *obs_shape), dtype=obs_np_dtype)
@@ -58,19 +55,19 @@ class ReplayBuffer():
         self.length = 0
         self.last_pointer = -1
         self.max_length = max_length
-        # Cache the boundary-aware start mask keyed by (length, batch_length). The
-        # buffer is static after population, so each mask is built exactly once.
+        # The buffer is static after population, so each boundary-aware start mask keyed by (length, batch_length) is built exactly once.
         self.valid_start_mask_by_key = {}
         self.tau = config.JointTrainAgent.Tau
         self.imagination_tau = config.JointTrainAgent.ImaginationTau
         self.alpha = config.JointTrainAgent.Alpha
         self.beta = config.JointTrainAgent.Beta
         self.batch_scale_factor = config.JointTrainAgent.ImagineBatchSize / config.JointTrainAgent.BatchSize
+
     def _valid_start_mask(self, batch_length):
-        # A window [s, s + batch_length - 1] is valid iff no segment boundary falls
-        # strictly inside it; a boundary at the final index is fine because the next
-        # market starts past the window. With an all-zero segment buffer (single
-        # market, FI-2010) every start is valid, so behavior matches the legacy path.
+        """A window [s, s + batch_length - 1] is valid iff no segment boundary falls
+        strictly inside it; a boundary at the final index is fine because the next
+        market starts past the window. With an all-zero segment buffer (single
+        market, FI-2010) every start is valid, so behavior matches the legacy path."""
         key = (self.length, batch_length)
         cached_mask = self.valid_start_mask_by_key.get(key)
         if cached_mask is not None:
@@ -87,11 +84,12 @@ class ReplayBuffer():
             mask = (crossings == 0).astype(np.float64)
         self.valid_start_mask_by_key[key] = mask
         return mask
+
     @torch.no_grad()
     def sample(self, batch_size, batch_length, imagine=False, with_supervision=False):
-        # with_supervision additionally returns per-tick supervision channels: tte_frac, spot_dist,
-        # event_counts (settlement/Hawkes), plus the four book-relative edge channels (yes_ask,
-        # no_ask, yes_mid, book_depth). Legacy five-tuple callers pass with_supervision=False.
+        """with_supervision additionally returns per-tick supervision channels: tte_frac, spot_dist,
+        event_counts (settlement/Hawkes), plus the four book-relative edge channels (yes_ask,
+        no_ask, yes_mid, book_depth). Legacy five-tuple callers pass with_supervision=False."""
         tte_frac = None
         spot_dist = None
         event_counts = None
@@ -103,8 +101,7 @@ class ReplayBuffer():
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             counts = self.sampled_counter[:self.length + 1 - batch_length]
             imagine_counts = self.imagined_counter[:self.length + 1 - batch_length] / self.batch_scale_factor
-            # Sample with replacement when the batch exceeds the number of valid (boundary-free)
-            # start positions, so a large batch over short markets cannot crash multinomial.
+            # Sample with replacement when the batch exceeds the number of valid boundary-free start positions, so a large batch over short markets cannot crash multinomial.
             valid_mask = self._valid_start_mask(batch_length)
             replacement = batch_size > int(valid_mask.sum().item())
             if imagine:
@@ -113,9 +110,7 @@ class ReplayBuffer():
                 score = score / self.imagination_tau
                 probabilities = torch.softmax(score, dim=0)
             else:
-                # Numerically stable softmax over visit counts. The manual exp/sum form
-                # underflows to all-zeros (then NaN) once counts grow large on big batches,
-                # which crashes multinomial mid-training with a device-side assert.
+                # Use torch.softmax because the manual exp/sum form underflows to all-zeros (then NaN) once counts grow large, crashing multinomial mid-training with a device-side assert.
                 probabilities = torch.softmax(-counts / self.tau, dim=0)
             # Drop starts whose window would straddle a market boundary, then renormalize.
             probabilities = probabilities * valid_mask
@@ -227,6 +222,7 @@ class ReplayBuffer():
         if with_supervision:
             return obs, action, reward, termination, outcome, tte_frac, spot_dist, event_counts, yes_ask, no_ask, yes_mid, book_depth
         return obs, action, reward, termination, outcome
+
     def append(self, obs, action, reward, termination, outcome=float('nan'),
                event_counts=None, tte_frac=float('nan'), spot_signed_distance=float('nan'),
                yes_ask=float('nan'), no_ask=float('nan'), yes_mid=float('nan'), book_depth=float('nan'),
@@ -268,5 +264,6 @@ class ReplayBuffer():
             self.segment_end_buffer[self.last_pointer] = float(segment_end)
         if len(self) < self.max_length:
             self.length += 1
+
     def __len__(self):
         return self.length

@@ -65,8 +65,7 @@ def cross_interval_context_block(bt, hourly_slug: str, ts_sec_array: np.ndarray)
         lc.start_ts >= hourly_lifecycle.start_ts and
         lc.end_ts <= hourly_lifecycle.end_ts
     ]
-    # Sort the resolved short markets by end time with their YES outcome so a searchsorted per tick
-    # yields how many have settled and their cumulative YES count without rescanning the list.
+    # Sort the resolved short markets by end time with their YES outcome so a searchsorted per tick yields how many have settled and their cumulative YES count without rescanning the list.
     resolved = []
     for slug in short_slugs:
         outcome = _settlement_yes_outcome(bt.settlements.get(slug))
@@ -75,8 +74,7 @@ def cross_interval_context_block(bt, hourly_slug: str, ts_sec_array: np.ndarray)
     resolved.sort(key=lambda pair: pair[0])
     end_ts_sorted = np.fromiter((end for end, _ in resolved), dtype=np.int64, count=len(resolved))
     yes_cumsum = np.concatenate([[0.0], np.cumsum([out for _, out in resolved], dtype=np.float64)])
-    # The active short mids live on the very timeline tick the hourly book lives on, so one pass over
-    # the wanted timestamps reads them directly without a separate per-market mid series.
+    # The active short mids live on the very timeline tick the hourly book lives on, so one pass over the wanted timestamps reads them directly without a separate per-market mid series.
     row_by_ts = {int(ts): i for i, ts in enumerate(ts_sec_array)}
     active_mean_mid = np.full(len(ts_sec_array), 0.5, dtype=np.float64)
     for tick in bt.timeline:
@@ -100,8 +98,7 @@ def cross_interval_context_block(bt, hourly_slug: str, ts_sec_array: np.ndarray)
 
 
 def _append_cross_interval(bt, slug: str, seq: LOBSequence, lifecycle_by_slug: dict) -> LOBSequence:
-    # Hourly markets get the real contemporaneous-short summary; others get a zero block so the buffer
-    # feature width is uniform across intervals, which the fixed-size encoder requires.
+    # Hourly markets get the real contemporaneous-short summary; others get a zero block so the buffer feature width is uniform across intervals, which the fixed-size encoder requires.
     if lifecycle_by_slug[slug].interval == "hourly":
         block = cross_interval_context_block(bt, slug, seq.ts_sec)
     else:
@@ -110,9 +107,11 @@ def _append_cross_interval(bt, slug: str, seq: LOBSequence, lifecycle_by_slug: d
 
 
 def _spot_feature_kwargs(slug: str, settlement, lifecycle_by_slug: dict) -> dict:
-    # The spot block is anchored to the market's lifecycle bounds and its open Chainlink
-    # reference. start_ts/end_ts come from the slug-parsed lifecycle (always present); the open
-    # reference reuses the settlement's chainlink_open when computed, else extract_features scans.
+    """Anchor the spot block to the market's lifecycle bounds and its open Chainlink reference.
+
+    start_ts/end_ts come from the slug-parsed lifecycle (always present); the open
+    reference reuses the settlement's chainlink_open when computed, else extract_features scans.
+    """
     lifecycle = lifecycle_by_slug.get(slug)
     if lifecycle is None:
         raise RuntimeError(f"No lifecycle for market {slug!r}; cannot build spot features.")
@@ -221,16 +220,12 @@ def build_sequences(
             include_spot_features=include_spot_features, **spot_kwargs,
         )
     except RuntimeError:
-        # Requested slug has no usable ticks in this split; fall back to the
-        # longest market available in this split.
+        # Requested slug has no usable ticks in this split; fall back to the longest market available in this split.
         slug = pick_longest_market(bt)
         settlement = bt.settlements.get(slug)
         yes_outcome = _settlement_yes_outcome(settlement)
         spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
-        logger.warning(
-            f"Market {market_slug!r} has no usable ticks in {data_dir}; "
-            f"falling back to {slug!r}"
-        )
+        logger.warning(f"Market {market_slug!r} has no usable ticks in {data_dir}; falling back to {slug!r}")
         seq = extract_features(
             bt.timeline, slug, yes_outcome=yes_outcome,
             include_binary_features=include_binary_features,
@@ -291,8 +286,7 @@ def build_market_sequences(
     if include_cross_interval:
         raw_seqs = [_append_cross_interval(bt, slug, seq, lifecycle_by_slug) for slug, seq in zip(slugs, raw_seqs)]
     if fit_stats:
-        # The temp sequence only feeds fit_normalization, which reads per_level and
-        # per_tick; concatenating the other fields keeps it internally consistent.
+        # The temp sequence only feeds fit_normalization, which reads per_level and per_tick; concatenating the other fields keeps it internally consistent.
         concat_seq = LOBSequence(
             market_slug="__concat__",
             per_level=np.concatenate([seq.per_level for seq in raw_seqs], axis=0),
@@ -375,8 +369,7 @@ def build_kaggle_sequences(
                 f"Kaggle CSV {csv_path} has {total_rows} rows but the train slice alone wants {rows_train}; "
                 f"lower HoursTrain or point at a longer file so the validation tail is non-empty."
             )
-        # A row-aligned slice of every field is a valid shorter sequence; the Kaggle val split is the
-        # tail carved out of the same stream the train split heads, so no future tick leaks back.
+        # A row-aligned slice of every field is a valid shorter sequence; the Kaggle val split is the tail carved out of the same stream the train split heads, so no future tick leaks back.
         full_seq = bundle.sequence
         seq = LOBSequence(
             market_slug=full_seq.market_slug,

@@ -29,17 +29,14 @@ def fit(name, path):
     steps, film_g = parse(path)
     keep = film_g > 0.0
     steps, film_g = steps[keep], film_g[keep]
-    popt, _ = curve_fit(decay, steps, film_g, p0=[0.2, 1500.0, 0.0],
-                        bounds=([0.0, 1.0, -0.05], [1.0, 1e6, 0.3]), maxfev=20000)
+    popt, _ = curve_fit(decay, steps, film_g, p0=[0.2, 1500.0, 0.0], bounds=([0.0, 1.0, -0.05], [1.0, 1e6, 0.3]), maxfev=20000)
     a, tau, c = popt
     residual = film_g - decay(steps, *popt)
     r2 = 1.0 - np.sum(residual ** 2) / np.sum((film_g - film_g.mean()) ** 2)
-    linear_slope = np.polyfit(steps, film_g, 1)[0]
     print(f"=== {name} ({len(steps)} pts, {steps[0]}->{steps[-1]}) ===")
     print(f"  exp-decay fit: a={a:.4f} tau={tau:.0f} steps  asymptote c={c:.4f}  R^2={r2:.4f}")
-    verdict = "approaches identity" if c < 0.02 else "near-identity plateau"
-    print(f"  -> extrapolated end-state film_g = {c:.4f} ({verdict})")
-    print(f"  linear slope = {linear_slope:.2e}/step (monotone-decreasing check)")
+    print(f"  -> extrapolated end-state film_g = {c:.4f} ({'approaches identity' if c < 0.02 else 'near-identity plateau'})")
+    print(f"  linear slope = {np.polyfit(steps, film_g, 1)[0]:.2e}/step (monotone-decreasing check)")
 
 
 def main():

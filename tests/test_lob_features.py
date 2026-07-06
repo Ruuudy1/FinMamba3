@@ -25,8 +25,7 @@ from finmamba3.envs.lob_features import (  # noqa: E402
 
 
 def _spot_timeline(asset: str, attr: str, start_ts: int, end_ts: int, n: int, rising: bool):
-    # A tiny single-market timeline whose Chainlink price for the chosen asset rises linearly,
-    # so the spot block's signed distance is a known monotone ramp the test can check exactly.
+    # A tiny single-market timeline whose Chainlink price for the chosen asset rises linearly, so the spot block's signed distance is a known monotone ramp the test can check exactly.
     slug = "btc-updown-5m-1000"
     ticks = []
     for i in range(n):
@@ -44,6 +43,7 @@ def _spot_timeline(asset: str, attr: str, start_ts: int, end_ts: int, n: int, ri
 
 
 class LOBFeatureNormalizationTest(unittest.TestCase):
+
     def test_normalization_is_finite_clipped_and_preserves_token_metadata(self):
         t = 8
         per_level = np.zeros((t, K_LEVELS, F_LEVEL), dtype=np.float32)
@@ -83,6 +83,7 @@ class LOBFeatureNormalizationTest(unittest.TestCase):
 
 
 class BinaryMarketFeatureTest(unittest.TestCase):
+
     def test_append_binary_features_shapes_and_values(self):
         num_ticks = 12
         per_tick = np.zeros((num_ticks, F_TICK), dtype=np.float32)
@@ -101,6 +102,7 @@ class BinaryMarketFeatureTest(unittest.TestCase):
         self.assertEqual(float(out[0, F_TICK + 2]), 0.0)
         self.assertEqual(float(out[0, F_TICK + 3]), 0.0)
         self.assertTrue(np.isfinite(out).all())
+
     def test_binary_features_normalization_roundtrip(self):
         num_ticks = 16
         per_level = np.zeros((num_ticks, K_LEVELS, F_LEVEL), dtype=np.float32)
@@ -129,7 +131,10 @@ class BinaryMarketFeatureTest(unittest.TestCase):
         restored = NormalizationStats.from_json(stats.to_json())
         self.assertEqual(restored.per_tick_std.shape[0], F_TICK_BINARY)
         self.assertEqual(len(stats.to_json()["tick_feature_names"]), F_TICK_BINARY)
+
+
 class SpotFeatureTest(unittest.TestCase):
+
     def test_spot_block_shape_channels_and_raw_arrays(self):
         ticks, slug = _spot_timeline("BTC", "chainlink_btc", 1000, 1300, 11, rising=True)
         seq = extract_features(
@@ -158,6 +163,7 @@ class SpotFeatureTest(unittest.TestCase):
         np.testing.assert_allclose(seq.per_tick[:, spot_start + 7], 0.0)
         self.assertTrue(np.isfinite(seq.per_tick).all())
         self.assertTrue((seq.per_tick[:, spot_start + 1] >= 0.0).all())
+
     def test_spot_block_after_binary_and_asset_onehot_eth(self):
         ticks, slug = _spot_timeline("ETH", "chainlink_eth", 2000, 2900, 9, rising=False)
         seq = extract_features(
@@ -171,13 +177,12 @@ class SpotFeatureTest(unittest.TestCase):
         np.testing.assert_allclose(seq.per_tick[:, spot_start + 5], 0.0)
         np.testing.assert_allclose(seq.per_tick[:, spot_start + 6], 1.0)
         np.testing.assert_allclose(seq.per_tick[:, spot_start + 7], 0.0)
+
     def test_spot_features_require_lifecycle_and_normalize_finite(self):
         ticks, slug = _spot_timeline("BTC", "chainlink_btc", 1000, 1300, 12, rising=True)
         with self.assertRaises(ValueError):
             extract_features(ticks, slug, include_spot_features=True)
-        seq = extract_features(
-            ticks, slug, asset="BTC", start_ts=1000, end_ts=1300, include_spot_features=True,
-        )
+        seq = extract_features(ticks, slug, asset="BTC", start_ts=1000, end_ts=1300, include_spot_features=True)
         stats = fit_normalization(seq, clip_value=8.0)
         self.assertEqual(stats.per_tick_mean.shape[0], F_TICK_SPOT)
         self.assertEqual(len(stats.to_json()["tick_feature_names"]), F_TICK_SPOT)
@@ -190,6 +195,7 @@ class SpotFeatureTest(unittest.TestCase):
 
 
 class PickTopMarketsAssetFilterTest(unittest.TestCase):
+
     def test_assets_filter_restricts_market_pool_to_requested_symbols(self):
         from finmamba3.backtester import BacktestData
         from finmamba3.envs.lob_features import pick_top_markets
@@ -202,7 +208,7 @@ class PickTopMarketsAssetFilterTest(unittest.TestCase):
             ticks.append(tick)
         bt = BacktestData(timeline=ticks, lifecycles=[], settlements={}, start_ts=0, end_ts=200)
         self.assertEqual(pick_top_markets(bt, 10, assets=["ETH"]), ["eth-updown-5m-2"])
-        self.assertEqual(set(pick_top_markets(bt, 10)), {"btc-updown-5m-1", "eth-updown-5m-2", "sol-updown-5m-3"})
+        self.assertEqual(sorted(pick_top_markets(bt, 10)), ["btc-updown-5m-1", "eth-updown-5m-2", "sol-updown-5m-3"])
 
 
 if __name__ == "__main__":

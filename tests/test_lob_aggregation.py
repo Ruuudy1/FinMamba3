@@ -70,7 +70,4 @@ def test_sum_indices_actually_sum_within_a_bar():
 def test_unknown_bar_kind_raises():
     feats, ts = _toy_features(20)
     with pytest.raises(ValueError):
-        aggregate_array(
-            feats, ts, DEFAULT_MID_INDEX, DEFAULT_BID_VOL_INDEX,
-            DEFAULT_SUM_INDICES, BarConfig(kind="not-a-real-bar"),
-        )
+        aggregate_array(feats, ts, DEFAULT_MID_INDEX, DEFAULT_BID_VOL_INDEX, DEFAULT_SUM_INDICES, BarConfig(kind="not-a-real-bar"))

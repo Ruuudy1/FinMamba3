@@ -171,27 +171,23 @@ def main() -> int:
     stats = load_normalization(args.norm_path)
     assets = [a.strip().upper() for a in args.assets.split(",")]
     intervals = [s.strip() for s in args.intervals.split(",")] if args.intervals else None
-
     bt_train = build_timeline(data_dir=args.data_train, hours=args.hours_train, assets=assets, intervals=intervals)
     train_count = _usable_tick_count_by_slug(bt_train)
     train_slugs = [lc.market_slug for lc in bt_train.lifecycles if train_count.get(lc.market_slug, 0) >= args.window]
     features, labels, weights = _collect_supervised(bt_train, stats, train_slugs, include_binary, include_spot, include_cross, args.window, args.train_stride)
     logger.info(f"[baseline] train: {len(train_slugs)} markets, {features.shape[0]} ticks (stride={args.train_stride}), {features.shape[1]} features, YES rate {labels.mean():.3f}")
-    # The train timeline is unused past feature collection, so release it before the val timeline is built.
-    # Holding both resident exceeds the 15 GiB WSL cap (the OOM that killed the first stride run mid val build).
+    # Release the train timeline before the val timeline is built; holding both resident exceeds the 15 GiB WSL cap.
     del bt_train, train_count, train_slugs
     gc.collect()
     logistic = LogisticRegression(max_iter=2000, C=1.0)
     logistic.fit(features, labels, sample_weight=weights)
     gbt = HistGradientBoostingClassifier(max_iter=300, learning_rate=0.05, max_depth=4, random_state=0)
     gbt.fit(features, labels, sample_weight=weights)
-
     bt_val = build_timeline(data_dir=args.data_val, hours=args.hours_val, assets=assets, intervals=intervals)
     val_count = _usable_tick_count_by_slug(bt_val)
     tradeable_val = [lc for lc in bt_val.lifecycles if val_count.get(lc.market_slug, 0) >= args.window]
     val_slugs = [lc.market_slug for lc in tradeable_val]
-    # The same predictability split the world-model evaluator uses, so the high/low-pred PnL is comparable
-    # to the EV-head table: high_pred is the forecastable (reference) half, low_pred the random-walk half.
+    # The same predictability split the world-model evaluator uses: high_pred is the forecastable half, low_pred the random-walk half.
     score_by_slug = predictability_from_timeline(bt_val.timeline, tradeable_val, metric="efficiency_ratio")
     split = volatility_split(tradeable_val, realized_vol=score_by_slug, quantile=0.5)
     high_pred_slugs = [m.market_slug for m in split.test_markets]

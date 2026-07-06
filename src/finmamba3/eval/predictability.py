@@ -107,16 +107,14 @@ def predictability_from_timeline(
 
 @dataclass
 class PredictabilityWindowSplit:
-    reference_windows: list[tuple[int, int]]  # High-ER (forecastable) windows; the reference regime.
-    shifted_windows: list[tuple[int, int]]    # Low-ER (random-walk) windows; the shifted regime.
+    # High-ER (forecastable) windows; the reference regime.
+    reference_windows: list[tuple[int, int]]
+    # Low-ER (random-walk) windows; the shifted regime.
+    shifted_windows: list[tuple[int, int]]
     description: str
 
 
-def window_predictability_split(
-    midprice: np.ndarray,
-    window_len: int,
-    quantile: float = 0.5,
-) -> PredictabilityWindowSplit:
+def window_predictability_split(midprice: np.ndarray, window_len: int, quantile: float = 0.5) -> PredictabilityWindowSplit:
     """Split one concatenated LOB stream into forecastable (high-ER) and random-walk (low-ER) windows.
 
     The Efficiency Ratio over each non-overlapping window measures how forecastable that window is:
@@ -131,11 +129,7 @@ def window_predictability_split(
     num_events = int(midprice.shape[0])
     mid = np.asarray(midprice, dtype=np.float64)
     bounds = window_bounds(num_events, window_len)
-    efficiency = np.fromiter(
-        (efficiency_ratio(mid[start:end]) for start, end in bounds),
-        dtype=np.float64,
-        count=len(bounds),
-    )
+    efficiency = np.fromiter((efficiency_ratio(mid[start:end]) for start, end in bounds), dtype=np.float64, count=len(bounds))
     threshold = float(np.quantile(efficiency, quantile))
     reference_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] >= threshold]
     shifted_windows = [bounds[i] for i in range(len(bounds)) if efficiency[i] < threshold]

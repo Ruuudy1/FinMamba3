@@ -18,16 +18,14 @@ def _repo_src_dir() -> Path:
 
 
 def _is_local_mamba_module(module) -> bool:
-    # sys.modules can hold a None sentinel for a failed import, so these two reads keep
-    # getattr-with-default (vars() would raise on None), unlike the rest of this module.
+    # `sys.modules` can hold a None sentinel for a failed import, so these two reads keep getattr-with-default (vars() would raise on None), unlike the rest of this module.
     module_file = getattr(module, "__file__", None)
     candidates = []
     if module_file is not None:
         candidates.append(module_file)
     candidates.extend(getattr(module, "__path__", []))
     for candidate in candidates:
-        # Path.resolve() touches the filesystem and can raise OSError or ValueError on a
-        # malformed candidate path, so skip those rather than fail the whole scan.
+        # Path.resolve() touches the filesystem and can raise OSError or ValueError on a malformed candidate path, so skip those rather than fail the whole scan.
         try:
             if Path(candidate).resolve().is_relative_to(_repo_src_dir() / "mamba_ssm"):
                 return True
@@ -46,18 +44,17 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
     original_path = list(sys.path)
     def _points_to_repo_src(path: str) -> bool:
         candidate = Path.cwd() if path == "" else Path(path)
-        # resolve() is a filesystem call that can raise OSError on a stale sys.path entry.
+        # `resolve()` is a filesystem call that can raise OSError on a stale sys.path entry.
         try:
             return candidate.resolve() == src_dir
         except OSError:
             return False
     sys.path = [path for path in sys.path if not _points_to_repo_src(path)]
-    # triton is an optional CUDA dependency; absence is fine on a CPU host.
+    # `triton` is an optional CUDA dependency; absence is fine on a CPU host.
     try:
         import triton as _triton
         if "set_allocator" not in vars(_triton):
-            # Pytorch-triton omits triton.set_allocator; mamba3_siso_fwd.py calls it at module level.
-            # The no-op stub is safe because pytorch-triton manages TMA descriptor memory internally.
+            # Pytorch-triton omits triton.set_allocator, which mamba3_siso_fwd.py calls at module level; the no-op stub is safe because pytorch-triton manages TMA descriptor memory internally.
             _triton.set_allocator = lambda fn: None
     except ImportError:
         pass
@@ -75,8 +72,7 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
         sys.path = original_path
     module_file = vars(module).get("__file__")
     if module_file is not None:
-        # is_relative_to compares resolved paths and raises ValueError on unrelated roots
-        # (for example a different drive on Windows); treat that as "not vendored".
+        # `is_relative_to` compares resolved paths and raises ValueError on unrelated roots (for example a different drive on Windows); treat that as "not vendored".
         try:
             if Path(module_file).resolve().is_relative_to(src_dir / "mamba_ssm"):
                 raise ImportError(
@@ -89,15 +85,10 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
     cache_key = f"{module_name}:{class_name}"
     if cache_key not in _LOGGED_MAMBA_CLASSES:
         _LOGGED_MAMBA_CLASSES.append(cache_key)
-        logger.info(
-            "[mamba] resolved %s.%s from %s",
-            module_name, class_name, module_file or "<unknown>",
-        )
+        logger.info("[mamba] resolved %s.%s from %s", module_name, class_name, module_file or "<unknown>")
         if module_name.endswith("mamba3") and module_file is not None:
             try:
-                tilelang_mod = importlib.import_module(
-                    "mamba_ssm.ops.tilelang.mamba3.mamba3_mimo"
-                )
+                tilelang_mod = importlib.import_module("mamba_ssm.ops.tilelang.mamba3.mamba3_mimo")
                 logger.info(
                     "[mamba] TileLang Mamba3 MIMO kernel available at %s",
                     vars(tilelang_mod).get("__file__", "<unknown>"),
@@ -110,8 +101,7 @@ def _load_upstream_mamba_class(module_name: str, class_name: str):
                     "MIMO requires this kernel and will raise at model "
                     "construction without it."
                 )
-    # class_name is a runtime string (for example "Mamba3"); the class lives in the
-    # imported module's namespace, so look it up there and fail fast if it is absent.
+    # `class_name` is a runtime string (for example "Mamba3"); the class lives in the imported module's namespace, so look it up there and fail fast if it is absent.
     return vars(module)[class_name]
 
 
@@ -179,12 +169,7 @@ class FinMambaSequenceModel(nn.Module):
         self.norms = nn.ModuleList([nn.RMSNorm(d_model, **factory) for _ in range(n_layer)])
         layers = []
         for i in range(n_layer):
-            layer_kwargs = {
-                "d_model": d_model,
-                "layer_idx": i,
-                **ssm_cfg,
-                **factory,
-            }
+            layer_kwargs = {"d_model": d_model, "layer_idx": i, **ssm_cfg, **factory}
             if block_type == "Mamba3":
                 layer_kwargs["n_layer"] = n_layer
                 layer_kwargs["dropout"] = dropout_p
@@ -193,9 +178,7 @@ class FinMambaSequenceModel(nn.Module):
         self.dropout = nn.Dropout(dropout_p)
         self.norm_f = nn.RMSNorm(d_model, **factory)
         self.use_regime_film = bool(use_regime_film)
-        # apply_after_scan moves the FiLM gate from each block's input to its output. An input-side affine
-        # folds into the block's own Delta, B and C projections, so it is the gauge direction joint training
-        # returns to identity; gating the output past the selective scan is the non-gauge control.
+        # `apply_after_scan` moves the FiLM gate from each block's input to its output. An input-side affine folds into the block's own Delta, B and C projections, so it is the gauge direction joint training returns to identity; gating the output past the selective scan is the non-gauge control.
         self.apply_after_scan = bool(regime_apply_after_scan)
         if self.use_regime_film:
             self.regime_modulator = RegimeFiLMModulator(
@@ -213,18 +196,13 @@ class FinMambaSequenceModel(nn.Module):
             )
         else:
             self.regime_modulator = None
-    def forward(self, samples, action, inference_params=None, return_regime=False,
-                regime_vol=None, **mixer_kwargs):
+    def forward(self, samples, action, inference_params=None, return_regime=False, regime_vol=None, **mixer_kwargs):
         if self.use_action_input:
             action = F.one_hot(action.long(), self.action_dim).to(dtype=samples.dtype)
             hidden_states = self.stem(torch.cat([samples, action], dim=-1))
         else:
             hidden_states = self.stem(samples)
-        # Infer the latent regime from the stem summary, optionally steered by a volatility feature, and
-        # emit per-block FiLM so the regime modulates each block's input and thus its input-dependent
-        # Delta, B and C. regime_vol, when supplied, is the realized volatility measured from the
-        # observation midprice (shape [B, L, 1]); it gives the router the same axis the supervision label
-        # and the eval split use. When omitted the modulator falls back to its caller-free latent proxy.
+        # Infer the latent regime from the stem summary, optionally steered by a volatility feature, and emit per-block FiLM so the regime modulates each block's input and thus its input-dependent Delta, B and C. regime_vol, when supplied, is the realized volatility measured from the observation midprice (shape [B, L, 1]); it gives the router the same axis the supervision label and the eval split use. When omitted the modulator falls back to its caller-free latent proxy.
         regime_logits = None
         gammas = None
         betas = None
@@ -243,20 +221,14 @@ class FinMambaSequenceModel(nn.Module):
             if inference_params is None:
                 layer_out = layer(layer_input, **mixer_kwargs)
             else:
-                layer_out = layer(
-                    layer_input,
-                    inference_params=inference_params,
-                    **mixer_kwargs,
-                )
+                layer_out = layer(layer_input, inference_params=inference_params, **mixer_kwargs)
             if self.use_regime_film and self.apply_after_scan:
-                # Non-gauge control: gate the block output past the selective scan, on the residual stream,
-                # where the next block's RMSNorm cannot fold the modulation back into the host projections.
+                # Non-gauge control: gate the block output past the selective scan, on the residual stream, where the next block's RMSNorm cannot fold the modulation back into the host projections.
                 layer_out = gammas[:, :, layer_index, :] * layer_out + betas[:, :, layer_index, :]
             hidden_states = residual + self.dropout(layer_out)
         output = self.norm_f(hidden_states)
         if return_regime:
-            # gamma_dev and beta_mag report how far FiLM has moved off its identity init; they are
-            # zero when FiLM is disabled so the caller can log them unconditionally.
+            # `gamma_dev` and beta_mag report how far FiLM has moved off its identity init; they are zero when FiLM is disabled so the caller can log them unconditionally.
             gamma_dev = (gammas - 1.0).abs().mean() if gammas is not None else output.new_zeros(())
             beta_mag = betas.abs().mean() if betas is not None else output.new_zeros(())
             return output, RegimeAux(regime_logits=regime_logits, gamma_dev=gamma_dev, beta_mag=beta_mag)

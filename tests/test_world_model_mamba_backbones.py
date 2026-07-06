@@ -19,10 +19,12 @@ def _install_fake_mamba_modules():
     modules = types.ModuleType("mamba_ssm.modules")
     modules.__path__ = []
     class FakeMambaBlock(torch.nn.Module):
+
         def __init__(self, d_model, **kwargs):
             super().__init__()
             self.kwargs = kwargs
             self.proj = torch.nn.Linear(d_model, d_model)
+
         def forward(self, x, **kwargs):
             return self.proj(x)
     mamba3 = types.ModuleType("mamba_ssm.modules.mamba3")
@@ -71,14 +73,14 @@ def _small_config(backbone="Mamba3"):
     wm["Mamba3"]["d_state"] = 8
     wm["Mamba3"]["headdim"] = 16
     wm["Mamba3"]["chunk_size"] = 4
-    # Disable optional auxiliary heads for backbone unit tests; they are
-    # exercised end-to-end in the integration smoke test.
+    # Disable optional auxiliary heads for backbone unit tests; they are exercised end-to-end in the integration smoke test.
     wm.setdefault("Direction", {})["Enabled"] = False
     from finmamba3.config import DotDict
     return DotDict(config)
 
 
 class WorldModelMambaBackboneTest(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls):
         try:
@@ -86,17 +88,22 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         except ModuleNotFoundError:
             warmup = types.ModuleType("pytorch_warmup")
             class LinearWarmup:
+
                 def __init__(self, optimizer, warmup_period):
                     self.optimizer = optimizer
                     self.warmup_period = warmup_period
+
                 def dampen(self):
                     return None
             warmup.LinearWarmup = LinearWarmup
             sys.modules["pytorch_warmup"] = warmup
         _install_fake_mamba_modules()
+
     def test_mamba3_mimo_sequence_shape_and_update(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
+        # MIMO defaults to False repo-wide (it segfaults on the 4080's shared-memory limit), so this MIMO-specific test must opt in explicitly.
+        config.Models.WorldModel.Mamba3.is_mimo = True
         model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
         self.assertEqual(model.model, "Mamba3")
         self.assertTrue(model.sequence_model.layers[0].kwargs["is_mimo"])
@@ -108,8 +115,9 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         reward = torch.zeros(2, 4)
         termination = torch.zeros(2, 4)
         losses = model.update(obs, action, reward, termination, 0, 0)
-        # update() now returns detached tensors so callers can defer GPU-CPU sync.
+        # `update()` now returns detached tensors so callers can defer GPU-CPU sync.
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
     def test_mamba2_fallback_constructs(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba2")
@@ -119,6 +127,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         action = torch.zeros(1, 3)
         out = model.sequence_model(latent, action)
         self.assertEqual(tuple(out.shape), (1, 3, config.Models.WorldModel.HiddenStateDim))
+
     def test_episodic_memory_path_runs_finite(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
@@ -139,6 +148,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         self.assertGreater(len(model.episodic_memory), 0)
         losses = model.update(obs, action, reward, termination, 1, 0)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
     def test_direction_head_path_runs_finite(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
@@ -157,6 +167,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         # 8 base losses + direction + hawkes + settlement + regime + 3 FiLM diagnostics + 2 edge = 17 total.
         self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
     def test_direction_class_balanced_weights_and_update_finite(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
@@ -168,8 +179,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         config.Models.WorldModel.Direction.ClassBalanced = True
         model = WorldModel(action_dim=1, config=config, device=torch.device("cpu"))
         self.assertTrue(model.direction_class_balanced)
-        # A majority-flat batch must yield inverse-frequency weights, so the rare up/down classes
-        # outweigh the flat majority and the head can no longer minimize loss by predicting flat.
+        # A majority-flat batch must yield inverse-frequency weights, so the rare up/down classes outweigh the flat majority and the head can no longer minimize loss by predicting flat.
         targets = torch.tensor([1, 1, 1, 1, 0, 2])
         weight = model._direction_class_weight(targets, torch.float32)
         torch.testing.assert_close(weight, torch.tensor([1.0, 0.25, 1.0]))
@@ -185,6 +195,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         losses = model.update(obs, action, reward, termination, 0, 0)
         self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
     def test_regime_film_identity_at_init_and_update_finite(self):
         from finmamba3.models.world_model import WorldModel
         config = _small_config("Mamba3")
@@ -203,8 +214,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
             out_off = model.sequence_model(latent, action)
             model.sequence_model.use_regime_film = True
             out_again, regime_aux = model.sequence_model(latent, action, return_regime=True)
-        # At init the hypernetwork emits gamma=1, beta=0, so FiLM is the identity and the
-        # regime-on output must exactly match the regime-off output (clean baseline parity).
+        # At init the hypernetwork emits gamma=1, beta=0, so FiLM is the identity and the regime-on output must exactly match the regime-off output (clean baseline parity).
         torch.testing.assert_close(out_on, out_off, rtol=1e-4, atol=1e-5)
         self.assertEqual(tuple(regime_aux.regime_logits.shape), (2, 4, 4))
         # The identity init means gamma sits at one and beta at zero, so both diagnostics start at zero.
@@ -216,5 +226,7 @@ class WorldModelMambaBackboneTest(unittest.TestCase):
         losses = model.update(obs, action, reward, termination, 0, 0)
         self.assertEqual(len(losses), 17)
         self.assertTrue(all(torch.isfinite(v).item() for v in losses))
+
+
 if __name__ == "__main__":
     unittest.main()

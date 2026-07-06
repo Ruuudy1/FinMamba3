@@ -72,8 +72,7 @@ def main() -> int:
     cfg = _load_config(args.config, _arch_overrides(True, False, None) + regime_overrides)
     wm = load_world_model(cfg, args.checkpoint, device)
     assert wm.use_regime_film, "checkpoint has no regime-FiLM router to diagnose."
-    # The router was supervised toward (and conditioned on) either the realized-vol or the predictability
-    # bucket; read the axis off the checkpoint so the diagnostic scores agreement against the same target.
+    # Read the supervised axis off the checkpoint so agreement is scored against the target it trained on.
     axis = wm.regime_film_supervise_axis
     bucket_labels_fn = efficiency_ratio_bucket_labels if axis == "predictability" else realized_vol_bucket_labels
     conditioning_fn = efficiency_ratio_conditioning_feature if axis == "predictability" else realized_vol_conditioning_feature
@@ -91,8 +90,7 @@ def main() -> int:
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
         flattened_sample = wm.flatten_sample(sample)
-        # Feed the same obs-vol conditioning feature the checkpoint trained on so the router state the
-        # diagnostic reads matches training; a non-FeedObsVol checkpoint passes None and uses its proxy.
+        # Feed the obs-vol feature the checkpoint trained on; non-FeedObsVol checkpoints pass None and use their proxy.
         regime_vol = None
         if wm.regime_film_feed_obs_vol:
             regime_vol = conditioning_fn(obs[..., wm.midprice_index], wm.regime_film_vol_window)

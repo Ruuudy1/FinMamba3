@@ -42,8 +42,8 @@ def _stored(yes_mid):
 
 
 def _scenario(yes_mid, chainlink_series, outcome):
-    # Build a 1-market scoped BacktestData: a fresh book every tick (so it is never stale), the given
-    # Chainlink path, and a market that settles to `outcome`. start_ts=0, end_ts=5 over 7 ticks.
+    """Build a 1-market scoped BacktestData: a fresh book every tick (so it is never stale), the given
+    Chainlink path, and a market that settles to `outcome`. start_ts=0, end_ts=5 over 7 ticks."""
     timeline = []
     for tick_index, spot in enumerate(chainlink_series):
         tick = TickData(ts_sec=tick_index, btc_mid=50_000.0, chainlink_btc=spot)
@@ -60,9 +60,9 @@ def _scenario(yes_mid, chainlink_series, outcome):
 
 
 def _assert_parity(python_result, cpp_result) -> None:
-    # The native result must match the reference on every figure the PnL report reads: total PnL and
-    # trades, the snapshot Sharpe, and the per-trade bootstrap (sensitive to fill order and the settled-
-    # market set, not just the PnL total), so the result adapter and ported gates cannot silently drift.
+    """The native result must match the reference on every figure the PnL report reads: total PnL and
+    trades, the snapshot Sharpe, and the per-trade bootstrap (sensitive to fill order and the
+    settled-market set, not just the PnL total), so the result adapter and ported gates cannot silently drift."""
     assert cpp_result.total_trades == python_result.total_trades
     assert abs(cpp_result.total_pnl - python_result.total_pnl) < 1e-6
     cpp_sharpe = _sharpe_from_snapshots(cpp_result.portfolio_snapshots)

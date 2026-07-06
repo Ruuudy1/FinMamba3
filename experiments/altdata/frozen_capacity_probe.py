@@ -30,8 +30,10 @@ def parse_args():
     p.add_argument("--num-windows", type=int, default=400)
     p.add_argument("--vol-window", type=int, default=16)
     p.add_argument("--num-buckets", type=int, default=4)
-    p.add_argument("--bucket", choices=("predictability", "vol"), default="predictability",
-                   help="Which regime to decode: the ER (predictability) bucket or the realized-vol bucket.")
+    p.add_argument(
+        "--bucket", choices=("predictability", "vol"), default="predictability",
+        help="Which regime to decode: the ER (predictability) bucket or the realized-vol bucket."
+    )
     p.add_argument("--device", default=None)
     return p.parse_args()
 

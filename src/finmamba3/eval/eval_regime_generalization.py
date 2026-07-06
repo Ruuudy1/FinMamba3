@@ -57,11 +57,7 @@ from finmamba3.eval.compare_direction import (
     world_model_prediction_mse,
     world_model_settlement_logloss,
 )
-from finmamba3.eval.regime_split import (
-    realized_vol_from_timeline,
-    spot_realized_vol_from_timeline,
-    volatility_split,
-)
+from finmamba3.eval.regime_split import realized_vol_from_timeline, spot_realized_vol_from_timeline, volatility_split
 from finmamba3.sequence_builder import _settlement_yes_outcome, _spot_feature_kwargs
 # endregion
 logger = logging.getLogger(__name__)
@@ -71,10 +67,8 @@ LEVEL_FLAT = K_LEVELS * F_LEVEL
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Measure the regime-FiLM generalization gap")
     p.add_argument("--config", required=True, type=Path)
-    p.add_argument("--baseline-checkpoint", required=True, type=Path,
-                   help="world_model_*.pth from the RegimeFiLM-off run")
-    p.add_argument("--treatment-checkpoint", required=True, type=Path,
-                   help="world_model_*.pth from the RegimeFiLM-on run")
+    p.add_argument("--baseline-checkpoint", required=True, type=Path, help="world_model_*.pth from the RegimeFiLM-off run")
+    p.add_argument("--treatment-checkpoint", required=True, type=Path, help="world_model_*.pth from the RegimeFiLM-on run")
     p.add_argument("--data-val", required=True, type=Path)
     p.add_argument("--norm-path", type=Path,
                    default=Path("saved_models") / "lob" / "normalization.json",
@@ -94,14 +88,11 @@ def parse_args() -> argparse.Namespace:
                         "non-degenerate); direction_macro_f1 = 3-class direction (collapses on Polymarket).")
     p.add_argument("--label-mode", choices=("next_tick", "triple_barrier"), default="triple_barrier",
                    help="Direction labelling for the direction_macro_f1 metric; triple_barrier is the denoised target.")
-    p.add_argument("--threshold", type=float, default=0.01,
-                   help="Profit/stop barrier (triple_barrier) or next-tick threshold.")
-    p.add_argument("--tb-horizon", type=int, default=32,
-                   help="Forward horizon in ticks for triple-barrier labelling.")
+    p.add_argument("--threshold", type=float, default=0.01, help="Profit/stop barrier (triple_barrier) or next-tick threshold.")
+    p.add_argument("--tb-horizon", type=int, default=32, help="Forward horizon in ticks for triple-barrier labelling.")
     p.add_argument("--windows-per-market", type=int, default=256,
                    help="Random windows scored per market; higher trims the per-regime macro-F1 noise.")
-    p.add_argument("--is-mimo", action="store_true",
-                   help="Rebuild both arms as MIMO to match an H100 MIMO A/B; default SISO.")
+    p.add_argument("--is-mimo", action="store_true", help="Rebuild both arms as MIMO to match an H100 MIMO A/B; default SISO.")
     p.add_argument("--n-layer", type=int, default=None,
                    help="Override Mamba3.n_layer to match a non-default-depth training run.")
     p.add_argument("--out", type=Path, default=Path("reports/regime_generalization.md"))
@@ -169,8 +160,7 @@ def _regime_sequences(bt, slugs: list[str], stats, aggregate_only: bool, include
     lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
     seqs = []
     for slug in slugs:
-        # Carry each held-out market's realized settlement so the settlement_logloss metric can score
-        # calibration; the direction and MSE metrics ignore yes_outcome, so this is harmless for them.
+        # Carry the market's realized settlement for settlement_logloss; the other metrics ignore yes_outcome.
         settlement = bt.settlements.get(slug)
         yes_outcome = _settlement_yes_outcome(settlement)
         spot_kwargs = _spot_feature_kwargs(slug, settlement, lifecycle_by_slug) if include_spot_features else {}
@@ -284,6 +274,12 @@ def _format_table(rows: list[dict], gap_value: float, regime_desc: str, metric: 
 
 
 def main() -> int:
+    """Run the two-arm A/B and write the per-regime degradation table.
+
+    Both models are built before the held-out timeline is loaded. The mamba_ssm import pulls in a
+    heavy transformers/dynamo chain whose transient allocation spike must land while host RAM
+    is free; loading the large timeline first then importing was OSError(Errno 12) on the 4080.
+    """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args()
     device = _device_from_arg(args.device)
@@ -291,9 +287,7 @@ def main() -> int:
     aggregate_only = base_cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
     include_binary_features = base_cfg.Models.WorldModel.Encoder.get("BinaryMarketFeatures", False)
     include_spot_features = base_cfg.Models.WorldModel.Encoder.get("SpotFeatures", False)
-    # Build both models before the held-out timeline is loaded. The mamba_ssm import pulls in a
-    # heavy transformers/dynamo chain whose transient allocation spike must land while host RAM
-    # is free; loading the large timeline first then importing was OSError(Errno 12) on the 4080.
+    # Build both arms before the timeline load; see the docstring's OOM ordering constraint.
     arms = []
     for arm_name, regime_film_enabled, checkpoint in (
         ("baseline", False, args.baseline_checkpoint),
@@ -301,9 +295,7 @@ def main() -> int:
     ):
         cfg = _load_config(args.config, _arch_overrides(regime_film_enabled, args.is_mimo, args.n_layer))
         wm = load_world_model(cfg, checkpoint, device)
-        assert wm.use_direction_head, (
-            f"{arm_name} checkpoint has no direction head; cannot score direction macro-F1."
-        )
+        assert wm.use_direction_head, f"{arm_name} checkpoint has no direction head; cannot score direction macro-F1."
         arms.append((arm_name, wm))
     # One timeline load serves both the volatility split and the per-market feature source.
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val)

@@ -57,8 +57,7 @@ def test_window_predictability_split_fails_fast_on_short_stream():
 
 
 def test_window_predictability_split_non_degenerate_on_random_walk():
-    # A real-ish random walk must still produce two non-empty regimes at the median, so the Kaggle
-    # eval never silently scores an empty regime.
+    # A real-ish random walk must still produce two non-empty regimes at the median, so the Kaggle eval never silently scores an empty regime.
     rng = np.random.default_rng(7)
     mid = 100.0 + np.cumsum(rng.normal(0.0, 0.5, 4000))
     result = window_predictability_split(mid, window_len=128, quantile=0.5)

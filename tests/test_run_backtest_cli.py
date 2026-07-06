@@ -34,10 +34,7 @@ from finmamba3.backtester.strategy import (  # noqa: E402
 
 
 def _book(bid, ask):
-    return OrderBookSnapshot(
-        bids=(OrderBookLevel(float(bid), 100.0),),
-        asks=(OrderBookLevel(float(ask), 100.0),),
-    )
+    return OrderBookSnapshot(bids=(OrderBookLevel(float(bid), 100.0),), asks=(OrderBookLevel(float(ask), 100.0),))
 
 
 def _data():
@@ -57,17 +54,17 @@ def _data():
     return BacktestData(
         timeline=ticks,
         lifecycles=[MarketLifecycle(slug, "5m", start_ts=0, end_ts=2)],
-        settlements={
-            slug: Settlement(slug, "5m", outcome=Token.YES, start_ts=0, end_ts=2)
-        },
+        settlements={slug: Settlement(slug, "5m", outcome=Token.YES, start_ts=0, end_ts=2)},
         start_ts=0,
         end_ts=3,
     )
 
 
 class _NoopPolicy:
+
     def reset(self) -> None:
         pass
+
     def act(self, observation: np.ndarray) -> int:
         return 0
 

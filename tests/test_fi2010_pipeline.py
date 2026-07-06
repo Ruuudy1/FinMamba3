@@ -5,12 +5,9 @@ import os
 import sys
 import types
 from pathlib import Path
-
 import numpy as np
 import pytest
 import torch
-
-
 from finmamba3.envs.fi2010_loader import (
     FI2010Sequence,
     FI2010_FEATURE_DIM,
@@ -30,14 +27,10 @@ from finmamba3.envs.lob_features import (
     make_aggregate_only,
 )
 # endregion
-
 # Events written to synthetic split files used by the split_dir fixture.
 _N_EVENTS = 60
+# Helpers.
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _synthetic_raw_matrix(n_events: int = _N_EVENTS, seed: int = 0) -> np.ndarray:
     """Return a valid synthetic (n_events, 149) FI-2010 raw matrix."""
@@ -68,9 +61,8 @@ def _make_lobsequence(n_events: int = 80) -> LOBSequence:
     )
 
 
-# ---------------------------------------------------------------------------
 # Fake Mamba installation (used by WorldModel tests).
-# ---------------------------------------------------------------------------
+
 
 def _install_fake_mamba() -> None:
     for name in list(sys.modules):
@@ -84,7 +76,6 @@ def _install_fake_mamba() -> None:
         def __init__(self, d_model, **kwargs):
             super().__init__()
             self.proj = torch.nn.Linear(d_model, d_model)
-
         def forward(self, x, **kwargs):
             return self.proj(x)
     for sub in ("mamba3", "mamba2", "mamba_simple"):
@@ -102,14 +93,11 @@ def _ensure_pytorch_warmup() -> None:
         import pytorch_warmup  # noqa: F401
     except ModuleNotFoundError:
         stub = types.ModuleType("pytorch_warmup")
-
         class _LW:
             def __init__(self, optimizer, warmup_period):
                 pass
-
             def dampen(self):
                 pass
-
         stub.LinearWarmup = _LW
         sys.modules["pytorch_warmup"] = stub
 
@@ -121,9 +109,8 @@ def _module_setup():
     _install_fake_mamba()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+# Fixtures.
+
 
 @pytest.fixture
 def split_dir(tmp_path):
@@ -230,9 +217,8 @@ def _fi2010_world_model_config():
     })
 
 
-# ===========================================================================
-# 1. Constants
-# ===========================================================================
+# 1. Constants.
+
 
 def test_feature_dim_is_46():
     assert FI2010_FEATURE_DIM == 46, "FI-2010 flat dim must be 10 * 4 + 6 = 46."
@@ -253,9 +239,8 @@ def test_flat_feature_names_first_last():
     assert FLAT_FEATURE_NAMES_FI2010[FI2010_K_LEVELS * FI2010_F_LEVEL] == "tick.mid"
 
 
-# ===========================================================================
-# 2. Label remapping
-# ===========================================================================
+# 2. Label remapping.
+
 
 def test_remap_up():
     out = _remap_labels(np.array([1.0, 1.0], dtype=np.float32))
@@ -282,9 +267,8 @@ def test_remap_output_dtype_is_int64():
     assert out.dtype == np.int64
 
 
-# ===========================================================================
-# 3. Raw matrix loading
-# ===========================================================================
+# 3. Raw matrix loading.
+
 
 def test_load_raw_matrix_row_major(tmp_path):
     mat = _synthetic_raw_matrix(n_events=30)
@@ -311,9 +295,8 @@ def test_load_raw_matrix_wrong_columns_raises(tmp_path):
         _load_raw_matrix(path)
 
 
-# ===========================================================================
-# 4. compute_basic_tick_features
-# ===========================================================================
+# 4. compute_basic_tick_features.
+
 
 def test_compute_basic_tick_features_output_shape():
     per_level = np.random.default_rng(1).uniform(0.1, 10.0, (20, 10, 4)).astype(np.float32)
@@ -328,8 +311,10 @@ def test_compute_basic_tick_features_wrong_shape_raises():
 
 def test_compute_basic_tick_features_mid_equals_half_sum():
     per_level = np.zeros((3, 10, 4), dtype=np.float32)
-    per_level[:, 0, 0] = 1.1  # best ask
-    per_level[:, 0, 2] = 0.9  # best bid
+    # Best ask.
+    per_level[:, 0, 0] = 1.1
+    # Best bid.
+    per_level[:, 0, 2] = 0.9
     out = compute_basic_tick_features(per_level)
     np.testing.assert_allclose(out[:, 0], 0.5 * (1.1 + 0.9), rtol=1e-5)
 
@@ -344,8 +329,10 @@ def test_compute_basic_tick_features_spread():
 
 def test_compute_basic_tick_features_imbalance_defaults_to_half_when_zero_size():
     per_level = np.zeros((2, 10, 4), dtype=np.float32)
-    per_level[:, 0, 0] = 1.0  # ask price
-    per_level[:, 0, 2] = 0.9  # bid price, sizes are zero
+    # Ask price.
+    per_level[:, 0, 0] = 1.0
+    # Bid price; the sizes stay zero.
+    per_level[:, 0, 2] = 0.9
     out = compute_basic_tick_features(per_level)
     np.testing.assert_allclose(out[:, 3], 0.5, rtol=1e-5,
                                err_msg="Imbalance must default to 0.5 when top-of-book size sum is zero.")
@@ -357,9 +344,8 @@ def test_compute_basic_tick_features_all_finite():
     assert np.isfinite(out).all()
 
 
-# ===========================================================================
-# 5. load_fi2010_split
-# ===========================================================================
+# 5. load_fi2010_split.
+
 
 def test_load_returns_fi2010sequence_type(split_dir):
     bundle = load_fi2010_split(split_dir, split="train", horizon=10)
@@ -402,7 +388,7 @@ def test_load_direction_labels_in_valid_range(split_dir):
     labels = bundle.direction_labels
     assert labels.shape == (_N_EVENTS,)
     assert labels.dtype == np.int64
-    assert set(labels).issubset({0, 1, 2})
+    assert all(label in (0, 1, 2) for label in labels)
 
 
 def test_load_label_remap_applied_correctly(split_dir):
@@ -473,9 +459,8 @@ def test_load_flat_all_finite(split_dir):
     assert np.isfinite(bundle.sequence.to_flat()).all()
 
 
-# ===========================================================================
-# 6. Normalization with FI-2010 schema
-# ===========================================================================
+# 6. Normalization with FI-2010 schema.
+
 
 def test_fit_normalization_stats_finite():
     seq = _make_lobsequence()
@@ -524,9 +509,8 @@ def test_make_aggregate_only_zeros_per_level():
     np.testing.assert_array_equal(agg.per_tick, seq.per_tick)
 
 
-# ===========================================================================
-# 7. LOBEncoder with FI-2010 config
-# ===========================================================================
+# 7. LOBEncoder with FI-2010 config.
+
 
 def _fi2010_encoder():
     from finmamba3.models.lob_encoder import LOBEncoder
@@ -566,9 +550,8 @@ def test_lob_encoder_fi2010_batch_independence():
     torch.testing.assert_close(out_full[:2], out_first, atol=1e-5, rtol=1e-5)
 
 
-# ===========================================================================
-# 8. LOBReconstructionLoss and StudentTReconstructionLoss with FI-2010 indices
-# ===========================================================================
+# 8. LOBReconstructionLoss and StudentTReconstructionLoss with FI-2010 indices.
+
 
 def test_lob_reconstruction_loss_fi2010_scalar_finite():
     from finmamba3.models.lob_encoder import LOBReconstructionLoss
@@ -646,9 +629,8 @@ def test_studentt_reconstruction_loss_fi2010_scalar_finite():
     assert torch.isfinite(loss)
 
 
-# ===========================================================================
-# 9. WorldModel with FI-2010 config (CPU, fake Mamba, 46-dim obs)
-# ===========================================================================
+# 9. WorldModel with FI-2010 config (CPU, fake Mamba, 46-dim obs).
+
 
 def test_world_model_fi2010_constructs():
     from finmamba3.models.world_model import WorldModel
@@ -702,8 +684,7 @@ def test_world_model_fi2010_direction_head_enabled_loss_finite():
     B, L = 2, 8
     obs = torch.randn(B, L, FI2010_FEATURE_DIM)
     action = torch.zeros(B, L, dtype=torch.long)
-    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
-                       global_step=1, epoch_step=0)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L), global_step=1, epoch_step=0)
     assert len(losses) == 17
     direction_loss = losses[7]
     assert torch.isfinite(direction_loss)
@@ -720,8 +701,7 @@ def test_world_model_fi2010_regime_head_enabled_loss_finite():
     B, L = 2, 8
     obs = torch.randn(B, L, FI2010_FEATURE_DIM)
     action = torch.zeros(B, L, dtype=torch.long)
-    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
-                       global_step=1, epoch_step=0)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L), global_step=1, epoch_step=0)
     assert all(torch.isfinite(t).all() for t in losses)
 
 
@@ -729,8 +709,7 @@ def test_world_model_fi2010_regime_film_knobs_train_and_log_diagnostics():
     from finmamba3.config import DotDict
     from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
-    # Exercise every new FiLM knob at once: vol conditioning, a non-zero init that breaks identity,
-    # embedding dropout, and a separate optimizer group via LRMult and a weight-decay override.
+    # Exercise every new FiLM knob at once: vol conditioning, a non-zero init that breaks identity, embedding dropout, and a separate optimizer group via LRMult and a weight-decay override.
     cfg.Models.WorldModel.RegimeFiLM = DotDict({
         "Enabled": True,
         "NumRegimes": 4,
@@ -751,21 +730,19 @@ def test_world_model_fi2010_regime_film_knobs_train_and_log_diagnostics():
     B, L = 2, 8
     obs = torch.randn(B, L, FI2010_FEATURE_DIM)
     action = torch.zeros(B, L, dtype=torch.long)
-    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
-                       global_step=1, epoch_step=0)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L), global_step=1, epoch_step=0)
     assert len(losses) == 17
     assert all(torch.isfinite(t).all() for t in losses)
     film_gamma_dev, film_beta_mag, regime_entropy = losses[11], losses[12], losses[13]
-    # A non-zero init means FiLM has already left identity, so gamma deviation is strictly positive,
-    # and the load-balanced router keeps a positive assignment entropy.
+    # A non-zero init means FiLM has already left identity, so gamma deviation is strictly positive, and the load-balanced router keeps a positive assignment entropy.
     assert float(film_gamma_dev) > 0.0
     assert float(film_beta_mag) > 0.0
     assert float(regime_entropy) > 0.0
 
 
 def test_world_model_fi2010_regime_supervision_trains_finite_loss():
-    # Regime supervision adds a vol-bucket cross-entropy on the regime logits; the update must stay
-    # finite and the regime_loss diagnostic must be strictly positive (the CE term is nonzero at init).
+    """Regime supervision adds a vol-bucket cross-entropy on the regime logits; the update must stay
+    finite and the regime_loss diagnostic must be strictly positive (the CE term is nonzero at init)."""
     from finmamba3.config import DotDict
     from finmamba3.models.world_model import WorldModel
     cfg = _fi2010_world_model_config()
@@ -782,8 +759,7 @@ def test_world_model_fi2010_regime_supervision_trains_finite_loss():
     B, L = 2, 8
     obs = torch.randn(B, L, FI2010_FEATURE_DIM)
     action = torch.zeros(B, L, dtype=torch.long)
-    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
-                       global_step=1, epoch_step=0)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L), global_step=1, epoch_step=0)
     assert len(losses) == 17
     assert all(torch.isfinite(t).all() for t in losses)
     regime_loss = losses[10]
@@ -798,15 +774,14 @@ def test_world_model_fi2010_studentt_decoder_loss_finite():
     B, L = 2, 8
     obs = torch.randn(B, L, FI2010_FEATURE_DIM)
     action = torch.zeros(B, L, dtype=torch.long)
-    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L),
-                       global_step=1, epoch_step=0)
+    losses = wm.update(obs, action, torch.zeros(B, L), torch.zeros(B, L), global_step=1, epoch_step=0)
     assert all(torch.isfinite(t).all() for t in losses)
 
 
 def test_validation_metrics_studentt_reconstruction_loss_finite():
-    # The validation path must decode the studentt (mean, log_scale) and score the NLL, not call the
-    # MSE reconstruction signature; this regression locks the fix that lets a studentt run reach a
-    # checkpoint (an unfixed path crashed at the first validation with a missing-positional TypeError).
+    """The validation path must decode the studentt (mean, log_scale) and score the NLL, not call the
+    MSE reconstruction signature; this regression locks the fix that lets a studentt run reach a
+    checkpoint (an unfixed path crashed at the first validation with a missing-positional TypeError)."""
     from finmamba3.models.world_model import WorldModel
     from finmamba3.train import validate
     cfg = _fi2010_world_model_config()
@@ -821,8 +796,8 @@ def test_validation_metrics_studentt_reconstruction_loss_finite():
 
 
 def test_imagine_rollout_studentt_decodes_finite_trajectory():
-    # imagine_rollout must take the studentt mean for the decoded trajectory rather than unpacking a
-    # tuple into numpy; this locks the matching fix on the autoregressive rollout path.
+    """imagine_rollout must take the studentt mean for the decoded trajectory rather than unpacking a
+    tuple into numpy; this locks the matching fix on the autoregressive rollout path."""
     from finmamba3.models.world_model import WorldModel
     from finmamba3.train import imagine_rollout
     cfg = _fi2010_world_model_config()
@@ -834,9 +809,8 @@ def test_imagine_rollout_studentt_decodes_finite_trajectory():
     assert np.isfinite(decoded).all()
 
 
-# ===========================================================================
-# 10. End-to-end normalization pipeline (loader → fit → apply → flat)
-# ===========================================================================
+# 10. End-to-end normalization pipeline (loader to fit to apply to flat).
+
 
 def test_e2e_loader_to_normalized_flat(split_dir, tmp_path):
     from finmamba3.envs.lob_features import save_normalization, load_normalization

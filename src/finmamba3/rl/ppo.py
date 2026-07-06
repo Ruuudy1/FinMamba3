@@ -18,6 +18,7 @@ RMSNorm = nn.RMSNorm
 
 
 class PPOAgent(nn.Module):
+
     def __init__(self, conf, action_dim, device):
         super().__init__()
         feat_dim=conf.Models.WorldModel.CategoricalDim*conf.Models.WorldModel.ClassDim+conf.Models.WorldModel.HiddenStateDim
@@ -48,30 +49,12 @@ class PPOAgent(nn.Module):
             act()
         ]
         for i in range(num_layers - 1):
-            actor.extend([
-                layer_init(nn.Linear(actor_hidden_dim, actor_hidden_dim, bias=True)),
-                RMSNorm(actor_hidden_dim),
-                act()
-            ])
-        self.actor = nn.Sequential(
-            *actor,
-            layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)
-        ).to(device)
-        critic = [
-            layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)),
-            RMSNorm(critic_hidden_dim),
-            act()
-        ]
+            actor.extend([layer_init(nn.Linear(actor_hidden_dim, actor_hidden_dim, bias=True)), RMSNorm(actor_hidden_dim), act()])
+        self.actor = nn.Sequential(*actor, layer_init(nn.Linear(actor_hidden_dim, action_dim), std=0.001)).to(device)
+        critic = [layer_init(nn.Linear(feat_dim, critic_hidden_dim, bias=True)), RMSNorm(critic_hidden_dim), act()]
         for i in range(num_layers - 1):
-            critic.extend([
-                layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)),
-                RMSNorm(critic_hidden_dim),
-                act()
-            ])
-        self.critic = nn.Sequential(
-            *critic,
-            layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)
-        ).to(device)
+            critic.extend([layer_init(nn.Linear(critic_hidden_dim, critic_hidden_dim, bias=True)), RMSNorm(critic_hidden_dim), act()])
+        self.critic = nn.Sequential(*critic, layer_init(nn.Linear(critic_hidden_dim, 255), std=0.001)).to(device)
         self.slow_critic = copy.deepcopy(self.critic)
         self.lowerbound_ema = EMAScalar(decay=0.99)
         self.upperbound_ema = EMAScalar(decay=0.99)
@@ -88,6 +71,7 @@ class PPOAgent(nn.Module):
         self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda=lambda step: 1.0)  # No-op schedule; required to drive the warmup scheduler.
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=conf.Models.Agent.PPO.Warmup_steps)
         self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+
     def get_logp_val_entr(self, latent, action, longer_value=True):
         if longer_value:
             logits = self.actor(latent[:, :-1])
@@ -98,6 +82,7 @@ class PPOAgent(nn.Module):
         logp_prob = dist.log_prob(action)
         entropy = dist.entropy()
         return logp_prob, value, entropy
+
     def unimix(self, logits):
         # Mix action logits with uniform noise for exploration.
         if self.unimix_ratio > 0:
@@ -106,9 +91,11 @@ class PPOAgent(nn.Module):
             mixed_probs = self.unimix_ratio * uniform + (1-self.unimix_ratio) * probs
             logits = torch.log(mixed_probs)
         return logits
+
     def sample_as_env_action(self, latent, greedy=False):
-            action, _ = self.sample(latent, greedy)
-            return action.detach().cpu().squeeze(-1).numpy()
+        action, _ = self.sample(latent, greedy)
+        return action.detach().cpu().squeeze(-1).numpy()
+
     def compute_loss(self, latent, action, logp_old, advs, rtgs, slow_return):
         logp, raw_values, entropy = self.get_logp_val_entr(latent, action, longer_value=False)
         ratio = torch.exp(logp - logp_old)
@@ -121,6 +108,7 @@ class PPOAgent(nn.Module):
         critic_loss = self.symlog_twohot_loss(raw_values, rtgs.detach())
         entropy_loss = entropy.mean()
         return actor_loss, critic_loss, slow_critic_loss, entropy_loss, kl_apx
+
     def calc_gae_and_reward_to_go(self, rewards, values, termination):
         # Invert termination to have 0 if the episode ended and 1 otherwise.
         inv_termination = (termination * -1) + 1
@@ -138,19 +126,23 @@ class PPOAgent(nn.Module):
         # Add value estimates to advantages to recover the lambda returns.
         returns = advantages[:, :-1] + values[:, :-1]
         return advantages[:, :-1], returns
+
     def value(self, x):
         value = self.critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
+
     @torch.no_grad()
     def slow_value(self, x):
         value = self.slow_critic(x)
         value = self.symlog_twohot_loss.decode(value)
         return value
+
     @torch.no_grad()
     def update_slow_critic(self, decay=0.98):
         for slow_param, param in zip(self.slow_critic.parameters(), self.critic.parameters()):
             slow_param.data.copy_(slow_param.data * decay + param.data * (1 - decay))
+
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
@@ -217,6 +209,7 @@ class PPOAgent(nn.Module):
             logger.log('ActorCritic/S', S.item(), global_step=global_step)
             logger.log('ActorCritic/norm_ratio', norm_ratio.item(), global_step=global_step)
             logger.log('ActorCritic/total_loss', np.mean(total_loss_list), global_step=global_step)
+
     @torch.no_grad()
     def sample(self, latent, greedy=False):
         self.eval()

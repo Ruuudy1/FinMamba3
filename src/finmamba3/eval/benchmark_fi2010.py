@@ -53,8 +53,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def _windows_and_labels(per_level_norm: np.ndarray, labels: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray]:
-    # Each window predicts the published trend label at its last observation, matching
-    # the FI-2010 single-label-per-observation convention the paper evaluates.
+    """Window the flat features so each window predicts the published trend label at its
+    last observation, matching the FI-2010 single-label-per-observation convention the
+    paper evaluates.
+    """
     T = per_level_norm.shape[0]
     flat = per_level_norm.reshape(T, -1)
     starts = np.arange(0, T - window)
@@ -64,8 +66,10 @@ def _windows_and_labels(per_level_norm: np.ndarray, labels: np.ndarray, window: 
 
 
 def _eval_majority(ytr: np.ndarray, yva: np.ndarray) -> dict[str, float]:
-    # The trivial floor predicts the train-majority class everywhere. Its macro-F1 is the
-    # bar a real model must clear; the gap to it is what the paper finds collapses on unseen data.
+    """Trivial floor that predicts the train-majority class everywhere; its macro-F1 is the
+    bar a real model must clear, and the gap to it is what the paper finds collapses on
+    unseen data.
+    """
     majority_class = int(np.bincount(ytr, minlength=3).argmax())
     probs = np.zeros((yva.shape[0], 3), dtype=np.float64)
     probs[:, majority_class] = 1.0
@@ -99,9 +103,10 @@ def _train_eval_deeplob(args, Xtr, ytr, Xva, yva, k_levels, f_level, device) -> 
 
 
 def _world_model_features(wm, windows: np.ndarray, batch: int, device) -> np.ndarray:
-    # Frozen-representation probe: take the sequence-model output at each window's last
-    # tick as the learned feature, so the benchmark scores representation quality rather
-    # than the pretraining direction head (which targets next-tick, not horizon-k, trends).
+    """Frozen-representation probe: take the sequence-model output at each window's last
+    tick as the learned feature, so the benchmark scores representation quality rather
+    than the pretraining direction head (which targets next-tick, not horizon-k, trends).
+    """
     feature_chunks = []
     with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         for start in range(0, windows.shape[0], batch):

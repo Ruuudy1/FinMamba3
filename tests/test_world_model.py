@@ -49,10 +49,12 @@ def test_settlement_bce_ttf_weighted_handles_nan():
 
 
 def test_settlement_logloss_pooling_masks_and_weights_by_resolved_count():
-    # world_model_settlement_logloss returns (sum_bce, count) so a regime pools many markets into one
-    # position-weighted log-loss. This checks that contract directly: the summed masked BCE divided by
-    # the resolved-position count equals the mean BCE over only the finite-outcome positions, with the
-    # nan (unresolved) positions contributing nothing to either numerator or denominator.
+    """world_model_settlement_logloss returns (sum_bce, count) so a regime pools many markets into
+    one position-weighted log-loss. This checks that contract directly: the summed masked BCE
+    divided by the resolved-position count equals the mean BCE over only the finite-outcome
+    positions, with the nan (unresolved) positions contributing nothing to either numerator or
+    denominator.
+    """
     logits = torch.tensor([[0.5, -0.5, 0.0], [1.0, -1.0, 0.2]])
     outcome = torch.tensor([[1.0, float('nan'), 0.0], [float('nan'), 1.0, 0.0]])
     finite = torch.isfinite(outcome)

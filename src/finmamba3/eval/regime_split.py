@@ -47,10 +47,7 @@ def window_bounds(num_events: int, window_len: int) -> list[tuple[int, int]]:
     comparison. Fails fast on a stream too short to yield two windows, the minimum for a median split.
     """
     assert window_len >= 2, "window_len must be at least 2 to estimate a per-window statistic."
-    bounds = [
-        (start, start + window_len)
-        for start in range(0, num_events - window_len + 1, window_len)
-    ]
+    bounds = [(start, start + window_len) for start in range(0, num_events - window_len + 1, window_len)]
     assert len(bounds) >= 2, (
         f"stream of {num_events} events yields fewer than two full windows at "
         f"window_len={window_len}; lower window_len or pass a longer stream."
@@ -58,11 +55,7 @@ def window_bounds(num_events: int, window_len: int) -> list[tuple[int, int]]:
     return bounds
 
 
-def window_volatility_split(
-    midprice: np.ndarray,
-    window_len: int,
-    quantile: float = 0.5,
-) -> WindowSplitResult:
+def window_volatility_split(midprice: np.ndarray, window_len: int, quantile: float = 0.5) -> WindowSplitResult:
     """Split one concatenated LOB stream into low- and high-volatility windows.
 
     FI-2010 ships as a single event stream with no market or day boundaries, so the
@@ -84,11 +77,7 @@ def window_volatility_split(
     num_events = int(midprice.shape[0])
     mid = np.asarray(midprice, dtype=np.float64)
     bounds = window_bounds(num_events, window_len)
-    vols = np.fromiter(
-        (float(np.std(np.diff(mid[start:end]))) for start, end in bounds),
-        dtype=np.float64,
-        count=len(bounds),
-    )
+    vols = np.fromiter((float(np.std(np.diff(mid[start:end]))) for start, end in bounds), dtype=np.float64, count=len(bounds))
     threshold = float(np.quantile(vols, quantile))
     low_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] <= threshold]
     high_vol_windows = [bounds[i] for i in range(len(bounds)) if vols[i] > threshold]
@@ -126,10 +115,7 @@ def realized_vol_from_timeline(timeline: list[TickData]) -> dict[str, float]:
     return vol_by_slug
 
 
-def market_spot_series(
-    timeline: list["TickData"],
-    lifecycles: list[MarketLifecycle],
-) -> dict[str, np.ndarray]:
+def market_spot_series(timeline: list["TickData"], lifecycles: list[MarketLifecycle]) -> dict[str, np.ndarray]:
     """Per-market underlying Chainlink-spot price series over its [start_ts, end_ts] window.
 
     Forward-filled repeats are dropped so idle seconds do not distort downstream estimators; a
@@ -159,10 +145,7 @@ def market_spot_series(
     return series_by_slug
 
 
-def spot_realized_vol_from_timeline(
-    timeline: list["TickData"],
-    lifecycles: list[MarketLifecycle],
-) -> dict[str, float]:
+def spot_realized_vol_from_timeline(timeline: list["TickData"], lifecycles: list[MarketLifecycle]) -> dict[str, float]:
     """Realized underlying-spot return volatility per market (Phase 0.5, the honest regime axis).
 
     The prior split measured volatility on the YES-mid (the implied probability), which
@@ -176,18 +159,11 @@ def spot_realized_vol_from_timeline(
     return vol_by_slug
 
 
-def time_split(
-    markets: list[MarketLifecycle],
-    cutoff_ts: float,
-) -> RegimeSplitResult:
+def time_split(markets: list[MarketLifecycle], cutoff_ts: float) -> RegimeSplitResult:
     """Split markets by their end_ts against a Unix-second cutoff."""
     train = [m for m in markets if m.end_ts < cutoff_ts]
     test = [m for m in markets if m.end_ts >= cutoff_ts]
-    return RegimeSplitResult(
-        train_markets=train,
-        test_markets=test,
-        description=f"time<{cutoff_ts}",
-    )
+    return RegimeSplitResult(train_markets=train, test_markets=test, description=f"time<{cutoff_ts}")
 
 
 def volatility_split(
@@ -203,24 +179,11 @@ def volatility_split(
     """
     if not markets:
         return RegimeSplitResult(train_markets=[], test_markets=[], description="empty")
-    vol_by_market = realized_vol
-    vols = np.fromiter(
-        (vol_by_market.get(m.market_slug, np.nan) for m in markets),
-        dtype=np.float64,
-        count=len(markets),
-    )
+    vols = np.fromiter((realized_vol.get(m.market_slug, np.nan) for m in markets), dtype=np.float64, count=len(markets))
     finite = vols[np.isfinite(vols)]
     if finite.size == 0:
-        return RegimeSplitResult(
-            train_markets=list(markets),
-            test_markets=[],
-            description="vol-undefined",
-        )
+        return RegimeSplitResult(train_markets=list(markets), test_markets=[], description="vol-undefined")
     threshold = float(np.quantile(finite, quantile))
     train = [m for m, v in zip(markets, vols) if np.isfinite(v) and v <= threshold]
     test = [m for m, v in zip(markets, vols) if np.isfinite(v) and v > threshold]
-    return RegimeSplitResult(
-        train_markets=train,
-        test_markets=test,
-        description=f"vol>{threshold:.5f}",
-    )
+    return RegimeSplitResult(train_markets=train, test_markets=test, description=f"vol>{threshold:.5f}")

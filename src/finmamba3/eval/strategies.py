@@ -27,6 +27,7 @@ class CusumGate:
         self.threshold = float(threshold)
         self.pos = 0.0
         self.neg = 0.0
+
     def update(self, spot_return: float) -> int:
         self.pos = max(0.0, self.pos + spot_return)
         self.neg = min(0.0, self.neg + spot_return)
@@ -73,26 +74,19 @@ class WorldModelStrategy(BaseStrategy):
         ev_by_slug_ts: dict | None = None,
     ) -> None:
         self.prob_by_slug_ts = prob_by_slug_ts
-        # When ev_by_slug_ts is provided, the strategy trades from predicted book-relative EV directly
-        # rather than from probability divergence. All other gates are unchanged so the comparison is fair.
+        # When ev_by_slug_ts is provided, the strategy trades from predicted book-relative EV directly rather than from probability divergence, and all other gates stay unchanged so the comparison is fair.
         self.ev_by_slug_ts = ev_by_slug_ts
-        # Optional book-depth band: trade only when two-sided depth is within [min, max]. The min floor
-        # tests asset-identity vs depth; the max ceiling (0 = none) excludes the most-liquid/efficient
-        # books where the within-BTC probe found the oracle-lag edge reverses, so the pair trades the
-        # liquidity *band* the campaign identified rather than just "deep enough".
+        # Optional book-depth band trading only within [min, max] two-sided depth, where the min floor tests asset-identity vs depth and the max ceiling (0 = none) excludes the most-liquid/efficient books where the within-BTC probe found the oracle-lag edge reverses, so the pair trades the liquidity *band* the campaign identified rather than just "deep enough".
         self.min_book_depth = float(min_book_depth)
         self.max_book_depth = float(max_book_depth)
-        # When provided, the gate reads each market's asset-correct precomputed ER per tick, so the
-        # strategy generalizes beyond BTC; when None it falls back to the live BTC spot-window below.
+        # When provided, the gate reads each market's asset-correct precomputed ER per tick, so the strategy generalizes beyond BTC; when None it falls back to the live BTC spot-window below.
         self.gate_er_by_slug_ts = gate_er_by_slug_ts
-        # Post-hoc temperature scaling of the (over-confident) settlement probability; T > 1 softens it
-        # toward 0.5. Fit on the train split and frozen, it is what makes Kelly sizing viable.
+        # Post-hoc temperature scaling of the (over-confident) settlement probability (T > 1 softens it toward 0.5) is fit on the train split and frozen, which is what makes Kelly sizing viable.
         self.calibration_temperature = float(calibration_temperature)
         self.edge_threshold = float(edge_threshold)
         self.order_size = float(order_size)
         self.max_tte_frac = float(max_tte_frac)
-        # min_tte_frac excludes near-expiry trades (where the book has converged to the outcome and the
-        # oracle-lag edge reverses); the edge concentrates early, when the book is least informed.
+        # `min_tte_frac` excludes near-expiry trades (where the book has converged to the outcome and the oracle-lag edge reverses); the edge concentrates early, when the book is least informed.
         self.min_tte_frac = float(min_tte_frac)
         self.use_cusum = bool(use_cusum)
         self.sizing = sizing
@@ -101,17 +95,17 @@ class WorldModelStrategy(BaseStrategy):
         self.bankroll = float(bankroll)
         self.cusum = CusumGate(cusum_threshold)
         self.prev_spot = None
-        # The causal predictability gate is the convex selective-participation mechanism: trade only when
-        # the underlying spot has been trending recently (rolling efficiency ratio above threshold), so the
-        # strategy sits out random-walk windows where the model's edge is absent. It uses spot-so-far only.
+        # The causal predictability gate is the convex selective-participation mechanism that trades only when the underlying spot has been trending recently (rolling efficiency ratio above threshold), so the strategy sits out random-walk windows where the model's edge is absent, using spot-so-far only.
         self.use_predictability_gate = bool(use_predictability_gate)
         self.predictability_threshold = float(predictability_threshold)
         self.predictability_window = int(predictability_window)
         self.spot_window = []
+
     def _size(self, model_prob: float, book_prob: float, side, price: float) -> float:
         if self.sizing == "kelly":
             return kelly_shares(model_prob, book_prob, side, self.bankroll, price, self.kelly_fraction, self.kelly_cap)
         return self.order_size
+
     def on_tick(self, state) -> list:
         spot = state.chainlink_btc
         event = 0
@@ -122,12 +116,10 @@ class WorldModelStrategy(BaseStrategy):
             self.spot_window.append(spot)
             if len(self.spot_window) > self.predictability_window:
                 self.spot_window.pop(0)
-        # The CUSUM event gate restricts trading to genuine spot moves; without it the strategy acts
-        # on every tick with an edge, which the convexity frame treats as forecasting noise.
+        # The CUSUM event gate restricts trading to genuine spot moves; without it the strategy acts on every tick with an edge, which the convexity frame treats as forecasting noise.
         if self.use_cusum and event == 0:
             return []
-        # The asset-level live gate (BTC spot-window) applies only when no per-market ER was precomputed;
-        # with a precompute the gate is applied per market below so each asset gates on its own trend.
+        # The asset-level live gate (BTC spot-window) applies only when no per-market ER was precomputed; with a precompute the gate is applied per market below so each asset gates on its own trend.
         if self.use_predictability_gate and self.gate_er_by_slug_ts is None and len(self.spot_window) >= 2 and efficiency_ratio(np.asarray(self.spot_window, dtype=np.float64)) < self.predictability_threshold:
             return []
         orders = []
@@ -166,8 +158,7 @@ class WorldModelStrategy(BaseStrategy):
                     continue
                 if self.calibration_temperature != 1.0:
                     clipped = min(max(model_prob, 1e-6), 1.0 - 1e-6)
-                    logit = float(np.log(clipped / (1.0 - clipped)))
-                    model_prob = float(1.0 / (1.0 + np.exp(-logit / self.calibration_temperature)))
+                    model_prob = float(1.0 / (1.0 + np.exp(-float(np.log(clipped / (1.0 - clipped))) / self.calibration_temperature)))
                 book_prob = view.yes_book.mid
                 if book_prob <= 0.0 or book_prob >= 1.0:
                     continue
@@ -175,8 +166,7 @@ class WorldModelStrategy(BaseStrategy):
                 if abs(edge) < self.edge_threshold:
                     continue
                 if edge > 0.0 and view.yes_book.best_ask > 0.0:
-                    # Clip the (possibly Kelly-sized) order to the remaining 500-share capacity rather than
-                    # dropping it, so a conviction size larger than the cap still trades up to the limit.
+                    # Clip the (possibly Kelly-sized) order to the remaining 500-share capacity rather than dropping it, so a conviction size larger than the cap still trades up to the limit.
                     size = min(self._size(model_prob, book_prob, Token.YES, view.yes_book.best_ask), MAX_SHARES_PER_TOKEN - held_yes)
                     if size > 0.0:
                         orders.append(Order(market_slug=slug, token=Token.YES, side=Side.BUY, size=size))
@@ -197,30 +187,35 @@ class NaiveLagStrategy(BaseStrategy):
     the architecture result is a null, the economic analogue of the film_g gate.
     """
 
-    def __init__(self, cusum_threshold: float = 0.003, order_size: float = 50.0, max_tte_frac: float = 1.0,
-                 use_predictability_gate: bool = False, predictability_threshold: float = 0.3, predictability_window: int = 120,
-                 gate_er_by_slug_ts: dict | None = None, gate_dir_by_slug_ts: dict | None = None,
-                 min_book_depth: float = 0.0, max_book_depth: float = 0.0) -> None:
+    def __init__(
+        self,
+        cusum_threshold: float = 0.003,
+        order_size: float = 50.0,
+        max_tte_frac: float = 1.0,
+        use_predictability_gate: bool = False,
+        predictability_threshold: float = 0.3,
+        predictability_window: int = 120,
+        gate_er_by_slug_ts: dict | None = None,
+        gate_dir_by_slug_ts: dict | None = None,
+        min_book_depth: float = 0.0,
+        max_book_depth: float = 0.0,
+    ) -> None:
         self.order_size = float(order_size)
         self.max_tte_frac = float(max_tte_frac)
         self.cusum = CusumGate(cusum_threshold)
         self.prev_spot = None
-        # The same book-depth band as the world model, so the comparison is fair: both trade only within
-        # [min, max] depth, isolating whether the model's edge over trend-following survives in the band.
+        # The same book-depth band as the world model, so the comparison is fair: both trade only within [min, max] depth, isolating whether the model's edge over trend-following survives in the band.
         self.min_book_depth = float(min_book_depth)
         self.max_book_depth = float(max_book_depth)
-        # The predictability-gate mode makes the naive a *fair* baseline for the gated world-model
-        # strategy: it uses the identical selective gate and buys the observable spot-trend direction
-        # with no model, so the world model must beat it to show its calibrated probability adds value
-        # over a dumb "buy the trend in trending markets" rule.
+        # The predictability-gate mode makes the naive a *fair* baseline for the gated world-model strategy: it uses the identical selective gate and buys the observable spot-trend direction with no model, so the world model must beat it to show its calibrated probability adds value over a dumb "buy the trend in trending markets" rule.
         self.use_predictability_gate = bool(use_predictability_gate)
         self.predictability_threshold = float(predictability_threshold)
         self.predictability_window = int(predictability_window)
         self.spot_window = []
-        # When provided, the gate and trend direction are read per market from each asset's own spot, so
-        # the baseline is asset-correct across BTC/ETH/SOL; when None it falls back to the live BTC path.
+        # When provided, the gate and trend direction are read per market from each asset's own spot, so the baseline is asset-correct across BTC/ETH/SOL; when None it falls back to the live BTC path.
         self.gate_er_by_slug_ts = gate_er_by_slug_ts
         self.gate_dir_by_slug_ts = gate_dir_by_slug_ts
+
     def on_tick(self, state) -> list:
         spot = state.chainlink_btc
         event = 0
@@ -258,10 +253,8 @@ class NaiveLagStrategy(BaseStrategy):
             if book_prob <= 0.0 or book_prob >= 1.0:
                 continue
             position = state.positions.get(slug)
-            held_yes = position.yes_shares if position is not None else 0.0
-            held_no = position.no_shares if position is not None else 0.0
-            if direction > 0 and book_prob < 0.5 and view.yes_book.best_ask > 0.0 and held_yes + self.order_size <= MAX_SHARES_PER_TOKEN:
+            if direction > 0 and book_prob < 0.5 and view.yes_book.best_ask > 0.0 and (position.yes_shares if position is not None else 0.0) + self.order_size <= MAX_SHARES_PER_TOKEN:
                 orders.append(Order(market_slug=slug, token=Token.YES, side=Side.BUY, size=self.order_size))
-            elif direction < 0 and book_prob > 0.5 and view.no_book.best_ask > 0.0 and held_no + self.order_size <= MAX_SHARES_PER_TOKEN:
+            elif direction < 0 and book_prob > 0.5 and view.no_book.best_ask > 0.0 and (position.no_shares if position is not None else 0.0) + self.order_size <= MAX_SHARES_PER_TOKEN:
                 orders.append(Order(market_slug=slug, token=Token.NO, side=Side.BUY, size=self.order_size))
         return orders

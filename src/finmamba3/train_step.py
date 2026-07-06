@@ -40,17 +40,16 @@ def train_world_model_step(
     accum_steps: int = 1,
     log_every: int = 1,
 ):
-    # Only sync losses to CPU and log on logging steps, so a host transfer does not stall the
-    # GPU every step. On non-logging steps the update runs with no GPU-to-CPU sync at all.
+    # Only sync losses to CPU and log on logging steps, so a host transfer does not stall the GPU every step; on non-logging steps the update runs with no GPU-to-CPU sync at all.
     should_log = logger is not None and global_step % log_every == 0
     epoch_means: dict[str, list[float]] = {name: [] for name in _LOSS_NAMES}
     for e in range(epoch):
         accum_stacks: list[list[torch.Tensor]] = [[] for _ in _LOSS_NAMES]
         for a in range(accum_steps):
-            obs, action, reward, termination, outcome, tte_frac, spot_dist, event_counts, \
-                yes_ask, no_ask, yes_mid, book_depth = replay_buffer.sample(
-                batch_size, batch_length, imagine=False, with_supervision=True
-            )
+            (
+                obs, action, reward, termination, outcome, tte_frac, spot_dist, event_counts,
+                yes_ask, no_ask, yes_mid, book_depth,
+            ) = replay_buffer.sample(batch_size, batch_length, imagine=False, with_supervision=True)
             losses = world_model.update(
                 obs,
                 action,
@@ -82,8 +81,7 @@ def train_world_model_step(
         mean_by_loss = {name: float(np.mean(values)) for name, values in epoch_means.items()}
         for name, mean_value in mean_by_loss.items():
             logger.log(f"WorldModel/{name}", mean_value, global_step=global_step)
-        # These per-step losses otherwise only reach wandb; echo the key terms to stdout so the
-        # trajectory is visible in the captured training log (and its HF logs/ upload) offline.
+        # These per-step losses otherwise only reach wandb; echo the key terms to stdout so the trajectory is visible in the captured training log (and its HF logs/ upload) offline.
         print(
             f"[loss] step={global_step} "
             f"total={mean_by_loss['total_loss']:.3f} "

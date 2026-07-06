@@ -65,15 +65,10 @@ FLAT_FEATURE_NAMES = tuple(
     for k in range(K_LEVELS)
     for name in LEVEL_FEATURE_NAMES
 ) + tuple(f"tick.{name}" for name in TICK_FEATURE_NAMES)
-FLAT_FEATURE_NAMES_BINARY = FLAT_FEATURE_NAMES + tuple(
-    f"tick.{name}" for name in BINARY_TICK_FEATURE_NAMES
-)
+FLAT_FEATURE_NAMES_BINARY = FLAT_FEATURE_NAMES + tuple(f"tick.{name}" for name in BINARY_TICK_FEATURE_NAMES)
 LEVEL_DETERMINISTIC_INDICES = (5, 6)
 DEFAULT_NORM_CLIP = 8.0
-DEFAULT_LEVEL_STD_FLOOR = np.asarray(
-    [1e-4, 5e-2, 5e-2, 2e-2, 1e-4, 1.0, 1.0, 1e-1],
-    dtype=np.float32,
-)
+DEFAULT_LEVEL_STD_FLOOR = np.asarray([1e-4, 5e-2, 5e-2, 2e-2, 1e-4, 1.0, 1.0, 1e-1], dtype=np.float32)
 DEFAULT_TICK_STD_FLOOR = np.asarray(
     [
         1e-2, 5e-3, 5e-3, 2e-2, 1e-2, 1e-4, 5e-2,
@@ -81,14 +76,8 @@ DEFAULT_TICK_STD_FLOOR = np.asarray(
     ],
     dtype=np.float32,
 )
-DEFAULT_BINARY_TICK_STD_FLOOR = np.asarray(
-    [1e-3, 1e-2, 1e-3, 1e-3, 1e-6, 1e-2],
-    dtype=np.float32,
-)
-# The spot/TTE/asset block (Phase 0.1/0.2/0.6) is the causal channels the prior pipeline
-# discarded: the underlying Chainlink-spot path that defines settlement, a time-to-expiry
-# clock, and a one-hot asset id. It is always appended last, so its flat offset is derivable
-# as FeatureDimTick - SPOT_BLOCK_WIDTH no matter whether the binary block is present.
+DEFAULT_BINARY_TICK_STD_FLOOR = np.asarray([1e-3, 1e-2, 1e-3, 1e-3, 1e-6, 1e-2], dtype=np.float32)
+# The spot/TTE/asset block (the causal Chainlink-spot path, TTE clock, and one-hot asset id) is always appended last, so its flat offset is FeatureDimTick - SPOT_BLOCK_WIDTH regardless of whether the binary block is present.
 SPOT_TICK_FEATURE_NAMES = (
     "spot_logret_since_open",
     "spot_realized_vol",
@@ -102,18 +91,12 @@ SPOT_TICK_FEATURE_NAMES = (
 SPOT_BLOCK_WIDTH = len(SPOT_TICK_FEATURE_NAMES)
 F_TICK_SPOT = F_TICK + SPOT_BLOCK_WIDTH
 F_TICK_BINARY_SPOT = F_TICK_BINARY + SPOT_BLOCK_WIDTH
-# Spot return/vol/distance are O(1e-3); the clock and one-hot are O(1). The floors keep a
-# near-constant channel (e.g. a single-asset slice's one-hot) from exploding under z-score.
-DEFAULT_SPOT_TICK_STD_FLOOR = np.asarray(
-    [1e-4, 1e-4, 1e-4, 1e-3, 1e-2, 1e-2, 1e-2, 1e-2],
-    dtype=np.float32,
-)
+# The floors keep a near-constant channel (e.g. a single-asset slice's one-hot) from exploding under z-score, since spot return/vol/distance are O(1e-3) but the clock and one-hot are O(1).
+DEFAULT_SPOT_TICK_STD_FLOOR = np.asarray([1e-4, 1e-4, 1e-4, 1e-3, 1e-2, 1e-2, 1e-2, 1e-2], dtype=np.float32)
 
 
 def _tick_std_floor_for_width(f_tick: int, eps: float) -> np.ndarray:
-    # The floor is composed from the same blocks that build the tick vector, so every
-    # Polymarket schema (base 14, +binary, +spot, +binary+spot) gets pinned floors; other
-    # widths such as FI-2010 fall back to a flat eps floor.
+    # Composed from the same blocks that build the tick vector, so every Polymarket schema (base 14, +binary, +spot, +binary+spot) gets pinned floors; other widths such as FI-2010 fall back to a flat eps floor.
     base = DEFAULT_TICK_STD_FLOOR
     binary = DEFAULT_BINARY_TICK_STD_FLOOR
     spot = DEFAULT_SPOT_TICK_STD_FLOOR
@@ -129,8 +112,7 @@ def _tick_std_floor_for_width(f_tick: int, eps: float) -> np.ndarray:
 
 
 def tick_feature_names_for_width(f_tick: int) -> tuple:
-    # Mirror _tick_std_floor_for_width so saved normalization and diagnostics label the
-    # channels with the schema that produced them.
+    # Mirrors _tick_std_floor_for_width so saved normalization and diagnostics label the channels with the schema that produced them.
     base = TICK_FEATURE_NAMES
     binary = BINARY_TICK_FEATURE_NAMES
     spot = SPOT_TICK_FEATURE_NAMES
@@ -145,12 +127,8 @@ def tick_feature_names_for_width(f_tick: int) -> tuple:
     return tuple(f"tick_{i}" for i in range(f_tick))
 
 
-FLAT_FEATURE_NAMES_SPOT = FLAT_FEATURE_NAMES + tuple(
-    f"tick.{name}" for name in SPOT_TICK_FEATURE_NAMES
-)
-FLAT_FEATURE_NAMES_BINARY_SPOT = FLAT_FEATURE_NAMES_BINARY + tuple(
-    f"tick.{name}" for name in SPOT_TICK_FEATURE_NAMES
-)
+FLAT_FEATURE_NAMES_SPOT = FLAT_FEATURE_NAMES + tuple(f"tick.{name}" for name in SPOT_TICK_FEATURE_NAMES)
+FLAT_FEATURE_NAMES_BINARY_SPOT = FLAT_FEATURE_NAMES_BINARY + tuple(f"tick.{name}" for name in SPOT_TICK_FEATURE_NAMES)
 
 
 @dataclass
@@ -162,14 +140,10 @@ class LOBSequence:
     ts_sec: np.ndarray     # Shape (T,) int64.
     yes_outcome: np.ndarray | None = None  # Shape (T,) float32 in {0, 1}, or nan if unknown.
     event_counts: np.ndarray | None = None  # Shape (T, 2) float32 buy/sell arrivals for Hawkes loss.
-    # Raw (unnormalized) supervision channels for the settlement loss (Phase 0.3): tte_frac in
-    # [0, 1] weights the outcome BCE toward expiry, and the signed spot distance supplies the
-    # observable running spot-sign target. None unless include_spot_features built them.
+    # Raw settlement-loss supervision (tte_frac in [0, 1] weights the outcome BCE toward expiry; spot_signed_distance is the observable running spot-sign target); both stay None unless include_spot_features built them.
     tte_frac: np.ndarray | None = None
     spot_signed_distance: np.ndarray | None = None
-    # Raw (unnormalized) book-relative edge supervision channels (Phase 2): best ask for YES/NO
-    # tokens, YES book mid, and total YES book depth. Populated by extract_features() for every
-    # usable tick; NaN when the NO book has no ask side. Used by BookRelativeEdgeHead.
+    # Raw book-relative edge supervision for BookRelativeEdgeHead (best ask for YES/NO, YES book mid, total YES book depth), populated by extract_features() for every usable tick; NaN when the NO book has no ask side.
     yes_ask: np.ndarray | None = None
     no_ask: np.ndarray | None = None
     yes_mid: np.ndarray | None = None
@@ -178,10 +152,7 @@ class LOBSequence:
     def to_flat(self) -> np.ndarray:
         # Use the array's own shape so FI-2010 (K, 4) works alongside Polymarket (K, 8).
         T, k, f_level = self.per_level.shape
-        return np.concatenate(
-            [self.per_level.reshape(T, k * f_level), self.per_tick],
-            axis=1,
-        ).astype(np.float32)
+        return np.concatenate([self.per_level.reshape(T, k * f_level), self.per_tick], axis=1).astype(np.float32)
 
 
 def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
@@ -218,11 +189,7 @@ def _encode_levels(book: OrderBookSnapshot, mid: float) -> np.ndarray:
     return out
 
 
-def append_binary_market_features(
-    per_tick: np.ndarray,
-    midprice: np.ndarray,
-    vol_window: int = 20,
-) -> np.ndarray:
+def append_binary_market_features(per_tick: np.ndarray, midprice: np.ndarray, vol_window: int = 20) -> np.ndarray:
     """Append six Polymarket-specific binary-market tick features.
 
     Polymarket prices are bounded probabilities in [0, 1], so the informative
@@ -273,8 +240,7 @@ def append_binary_market_features(
 
 
 def _asset_chainlink(tick: TickData, asset: str) -> float:
-    # The Chainlink oracle is the source of truth for settlement, so the spot path the model
-    # conditions on must read the same series compute_settlements resolves the outcome from.
+    # The Chainlink oracle is the source of truth for settlement, so the spot path the model conditions on must read the same series compute_settlements resolves the outcome from.
     if asset == "BTC":
         return float(tick.chainlink_btc)
     if asset == "ETH":
@@ -320,13 +286,10 @@ def extract_features(
     re-deriving them from z-scored obs.
     """
     if include_spot_features and (asset is None or start_ts is None or end_ts is None):
-        raise ValueError(
-            "extract_features(include_spot_features=True) requires asset, start_ts and end_ts."
-        )
+        raise ValueError("extract_features(include_spot_features=True) requires asset, start_ts and end_ts.")
     spot_open_ref = float(spot_open) if spot_open is not None else 0.0
     if include_spot_features and spot_open_ref <= 0.0:
-        # The Chainlink open is the value nearest start_ts; the series is per-second dense so a
-        # forward-filled tick at the boundary carries the open the settlement is defined against.
+        # The Chainlink open is the value nearest start_ts; the series is per-second dense so a forward-filled tick at the boundary carries the open the settlement is defined against.
         best_gap = None
         for tick in timeline:
             spot_at_tick = _asset_chainlink(tick, asset)
@@ -429,8 +392,7 @@ def extract_features(
         event_count_rows.append(np.array([buy_events, sell_events], dtype=np.float32))
         mids.append(mid)
         ts_list.append(int(tick.ts_sec))
-        # Book-relative edge supervision channels: YES ask/mid/depth always available (YES book is
-        # two-sided by the loop guard above); NO ask is NaN when the NO book has no ask levels.
+        # Book-relative edge supervision: YES ask/mid/depth are always available (two-sided by the loop guard above); NO ask is NaN when the NO book has no ask levels.
         no_book = sb.no_book
         yes_ask_raw_list.append(float(book.best_ask))
         yes_mid_raw_list.append(float(book.mid))
@@ -442,8 +404,7 @@ def extract_features(
                 spot_now = spot_open_ref
             spot_logret = math.log(spot_now / spot_open_ref)
             signed_distance = (spot_now - spot_open_ref) / spot_open_ref
-            # Realized vol is the rolling std of per-tick spot log-returns over the same window
-            # as the mid's rolling_vol, so the two volatilities share one cadence and definition.
+            # Realized vol is the rolling std of per-tick spot log-returns over the same window as the mid's rolling_vol, so the two volatilities share one cadence and definition.
             step_logret = math.log(spot_now / prev_spot) if prev_spot is not None and prev_spot > 0.0 else 0.0
             spot_logret_window.append(step_logret)
             if len(spot_logret_window) > vol_window:
@@ -497,14 +458,7 @@ def extract_features(
         yes_mid=np.asarray(yes_mid_raw_list, dtype=np.float32),
         book_depth=np.asarray(book_depth_raw_list, dtype=np.float32),
     )
-BASIC_TICK_FEATURE_NAMES = (
-    "mid",
-    "spread",
-    "log_spread",
-    "imbalance",
-    "microprice",
-    "log_total_vol",
-)
+BASIC_TICK_FEATURE_NAMES = ("mid", "spread", "log_spread", "imbalance", "microprice", "log_total_vol")
 
 
 def compute_basic_tick_features(per_level_fi2010: np.ndarray) -> np.ndarray:
@@ -515,10 +469,7 @@ def compute_basic_tick_features(per_level_fi2010: np.ndarray) -> np.ndarray:
     Pure function: no cross-tick state, so it works on already-shuffled data.
     """
     if per_level_fi2010.ndim != 3 or per_level_fi2010.shape[-1] != 4:
-        raise ValueError(
-            "compute_basic_tick_features expects shape (T, K, 4); got "
-            f"{tuple(per_level_fi2010.shape)}"
-        )
+        raise ValueError("compute_basic_tick_features expects shape (T, K, 4); got " f"{tuple(per_level_fi2010.shape)}")
     ask_prices = per_level_fi2010[:, :, 0]
     ask_sizes = per_level_fi2010[:, :, 1]
     bid_prices = per_level_fi2010[:, :, 2]
@@ -536,10 +487,7 @@ def compute_basic_tick_features(per_level_fi2010: np.ndarray) -> np.ndarray:
     microprice = np.where(top_sum > 0.0, microprice_num / np.maximum(top_sum, 1e-12), mid)
     total_vol = ask_sizes.sum(axis=1) + bid_sizes.sum(axis=1)
     log_total_vol = np.log1p(np.maximum(total_vol, 0.0))
-    return np.stack(
-        [mid, spread, log_spread, imbalance, microprice, log_total_vol],
-        axis=1,
-    ).astype(np.float32)
+    return np.stack([mid, spread, log_spread, imbalance, microprice, log_total_vol], axis=1).astype(np.float32)
 
 
 def _slug_asset(slug: str) -> str:
@@ -578,8 +526,7 @@ def pick_top_markets(data: BacktestData, n: int, min_ticks: int = 128, assets: l
 
 
 def pick_longest_market(data: BacktestData) -> str:
-    # min_ticks=1 keeps the original contract: return the single longest market
-    # regardless of length, raising only when no 2-sided book exists at all.
+    # `min_ticks=1` keeps the original contract: return the single longest market regardless of length, raising only when no 2-sided book exists at all.
     return pick_top_markets(data, 1, min_ticks=1)[0]
 # Normalization.
 
@@ -607,14 +554,14 @@ class NormalizationStats:
             "tick_std_floor": _tick_std_floor_for_width(f_tick, 1e-6).tolist(),
             "deterministic_level_indices": list(LEVEL_DETERMINISTIC_INDICES),
         }
+
     @classmethod
     def from_json(cls, d: dict) -> "NormalizationStats":
         per_level_mean = np.asarray(d["per_level_mean"], dtype=np.float32)
         per_level_std = np.asarray(d["per_level_std"], dtype=np.float32)
         per_tick_mean = np.asarray(d["per_tick_mean"], dtype=np.float32)
         per_tick_std = np.asarray(d["per_tick_std"], dtype=np.float32)
-        # Apply the canonical Polymarket floors and deterministic-index pins only
-        # when the saved stats match that schema's widths.
+        # Apply the canonical Polymarket floors and deterministic-index pins only when the saved stats match that schema's widths.
         if per_level_mean.shape[0] == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
             per_level_std = np.maximum(per_level_std, DEFAULT_LEVEL_STD_FLOOR)
             for idx in LEVEL_DETERMINISTIC_INDICES:
@@ -631,14 +578,8 @@ class NormalizationStats:
         )
 
 
-def fit_normalization(
-    seq: LOBSequence,
-    eps: float = 1e-6,
-    clip_value: float = DEFAULT_NORM_CLIP,
-) -> NormalizationStats:
-    # Infer per-level feature width from the array. Polymarket uses 8 (with the
-    # canonical std_floor and deterministic indices); FI-2010 and other schemas
-    # fall back to a flat eps floor and no deterministic pinning.
+def fit_normalization(seq: LOBSequence, eps: float = 1e-6, clip_value: float = DEFAULT_NORM_CLIP) -> NormalizationStats:
+    # Infer per-level feature width from the array: Polymarket uses 8 (canonical std_floor + deterministic indices); FI-2010 and other schemas fall back to a flat eps floor with no deterministic pinning.
     f_level = int(seq.per_level.shape[-1])
     f_tick = int(seq.per_tick.shape[-1])
     pl = seq.per_level.reshape(-1, f_level)
@@ -652,9 +593,7 @@ def fit_normalization(
     tick_floor = _tick_std_floor_for_width(f_tick, eps)
     pl_std = np.maximum(pl.std(axis=0), level_floor).astype(np.float32)
     pt_std = np.maximum(pt.std(axis=0), tick_floor).astype(np.float32)
-    # Polymarket level index and side are deterministic token metadata; pin them
-    # so tiny distribution shifts cannot blow up the z-score. Skip when the
-    # active schema does not have those slots.
+    # Polymarket level index and side are deterministic token metadata; pin them so tiny distribution shifts cannot blow up the z-score. Skip when the active schema lacks those slots.
     if f_level == DEFAULT_LEVEL_STD_FLOOR.shape[0]:
         for idx in LEVEL_DETERMINISTIC_INDICES:
             pl_mean[idx] = 0.0
@@ -744,18 +683,14 @@ def normalized_feature_diagnostics(seq: LOBSequence, clip_value: float | None = 
 
 
 def denormalize_flat(flat: np.ndarray, stats: NormalizationStats) -> np.ndarray:
-    # Infer the schema (K, F_level) from the normalization stats so the same code path
-    # handles Polymarket (8 per-level features) and FI-2010 (4 per-level features).
+    # Infer the schema (K, F_level) from the normalization stats so the same code path handles Polymarket (8 per-level features) and FI-2010 (4 per-level features).
     arr = np.asarray(flat, dtype=np.float32).copy()
     f_level = int(stats.per_level_mean.shape[0])
     f_tick = int(stats.per_tick_mean.shape[0])
     total = arr.shape[-1]
     level_dim = total - f_tick
     if level_dim % f_level != 0:
-        raise ValueError(
-            f"denormalize_flat: feature width {total} not divisible into "
-            f"(K * {f_level}) + {f_tick}"
-        )
+        raise ValueError(f"denormalize_flat: feature width {total} not divisible into " f"(K * {f_level}) + {f_tick}")
     k = level_dim // f_level
     levels = arr[..., :level_dim].reshape(*arr.shape[:-1], k, f_level)
     ticks = arr[..., level_dim:]
@@ -791,12 +726,10 @@ def _cli(argv: list[str] | None = None) -> None:
     seq = extract_features(bt.timeline, slug)
     print(f"per_level shape: {seq.per_level.shape}")
     print(f"per_tick  shape: {seq.per_tick.shape}")
-    print(f"midprice  range: [{seq.midprice.min():.4f}, {seq.midprice.max():.4f}], "
-          f"mean={seq.midprice.mean():.4f}")
+    print(f"midprice  range: [{seq.midprice.min():.4f}, {seq.midprice.max():.4f}], " f"mean={seq.midprice.mean():.4f}")
     print("per_tick  stats (mean, std):")
     for i in range(F_TICK):
-        print(f"  f{i:02d}  mean={seq.per_tick[:, i].mean():+.4f}  "
-              f"std={seq.per_tick[:, i].std():.4f}")
+        print(f"  f{i:02d}  mean={seq.per_tick[:, i].mean():+.4f}  " f"std={seq.per_tick[:, i].std():.4f}")
     if args.norm_out:
         stats = fit_normalization(seq, clip_value=args.norm_clip)
         save_normalization(stats, args.norm_out)

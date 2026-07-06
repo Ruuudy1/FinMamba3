@@ -90,9 +90,7 @@ class FiLMMambaLM(nn.Module):
         self.embed = nn.Embedding(vocab_size, D_MODEL)
         self.block0 = Mamba(d_model=D_MODEL)
         self.norm0 = nn.LayerNorm(D_MODEL)
-        # The regime is inferred from the CONTEXTUAL representation after the first block, not from a single
-        # character embedding (which cannot tell prose from code), so the router can actually discriminate the
-        # domain -- the precondition for a fair test of whether a decodable regime still collapses to identity.
+        # The router reads the contextual state after block0, not a single character embedding, so it can discriminate prose from code at all.
         self.router = nn.Linear(D_MODEL, num_regimes)
         self.regime_table = nn.Parameter(torch.zeros(num_regimes, 32))
         self.hyper = nn.Linear(32, 2 * D_MODEL)
@@ -100,9 +98,7 @@ class FiLMMambaLM(nn.Module):
         self.block1 = Mamba(d_model=D_MODEL)
         self.head_norm = nn.LayerNorm(D_MODEL)
         self.head = nn.Linear(D_MODEL, vocab_size)
-        # The hypernet bias is forced active at initialisation so the FiLM starts off identity (film_g ~ 0.12)
-        # with gamma = 1 + the gamma half of the output and beta = the beta half, exactly as in the paper's
-        # escalation; the FiLM gates the SECOND block's input, the gauge-absorbable input-affine placement.
+        # Zero weight + normal bias forces the FiLM active at init (film_g ~ 0.12) on block1's input, the gauge-absorbable placement the paper's escalation studies.
         nn.init.zeros_(self.hyper.weight)
         nn.init.normal_(self.hyper.bias, std=init_scale)
         self.last_film_g = 0.0
@@ -134,8 +130,7 @@ def fit_decay(film_g_by_step):
     paper applies to the LOB escalations so the language trajectory is summarised on the same footing."""
     steps = np.array(sorted(film_g_by_step), dtype=float)
     values = np.array([film_g_by_step[int(s)] for s in steps])
-    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1000.0, 0.0],
-                        bounds=([0.0, 1.0, -0.1], [2.0, 1e6, 1.0]), maxfev=40000)
+    popt, _ = curve_fit(decay, steps, values, p0=[0.2, 1000.0, 0.0], bounds=([0.0, 1.0, -0.1], [2.0, 1e6, 1.0]), maxfev=40000)
     a, tau, c = popt
     residual = values - decay(steps, *popt)
     r2 = 1.0 - np.sum(residual ** 2) / np.sum((values - values.mean()) ** 2)
@@ -148,9 +143,7 @@ def main():
     domain_streams, vocab_size = build_corpus()
     print(f"corpus: prose {len(domain_streams[0])} chars, code {len(domain_streams[1])} chars, vocab {vocab_size}")
     model = FiLMMambaLM(vocab_size, len(domain_streams), init_scale=0.15).to(DEVICE)
-    # The FiLM/router parameters get a higher learning rate (the LRMult analog) and weight decay, the same
-    # regime in which the LOB escalation drives the modulation to identity, so the comparison is on equal
-    # footing; the router is supervised on the true domain (the SupervisionWeight analog).
+    # The FiLM/router parameters get a higher LR (the LRMult analog), the same regime as the LOB escalation, for a fair comparison.
     film_modules = [model.router, model.hyper]
     film_params = [model.regime_table] + [p for module in film_modules for p in module.parameters()]
     film_ids = {id(p): True for p in film_params}

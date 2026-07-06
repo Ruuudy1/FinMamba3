@@ -7,17 +7,8 @@ filter that keeps the high-vol tail for the regime-shift A/B.
 # region imports
 from __future__ import annotations
 from finmamba3.backtester.data_loader import BacktestData, TickData
-from finmamba3.backtester.strategy import (
-    MarketLifecycle,
-    OrderBookLevel,
-    OrderBookSnapshot,
-    StoredBook,
-)
-from finmamba3.eval.regime_split import (
-    realized_vol_from_timeline,
-    spot_realized_vol_from_timeline,
-    volatility_split,
-)
+from finmamba3.backtester.strategy import MarketLifecycle, OrderBookLevel, OrderBookSnapshot, StoredBook
+from finmamba3.eval.regime_split import realized_vol_from_timeline, spot_realized_vol_from_timeline, volatility_split
 from finmamba3.eval.run_backtest_cli import _filter_backtest_data
 # endregion
 _CALM = "btc-updown-5m-0"
@@ -27,10 +18,7 @@ _WILD_MIDS = [0.50, 0.70, 0.40, 0.80, 0.30]
 
 
 def _book(mid):
-    return OrderBookSnapshot(
-        bids=(OrderBookLevel(mid - 0.01, 100.0),),
-        asks=(OrderBookLevel(mid + 0.01, 100.0),),
-    )
+    return OrderBookSnapshot(bids=(OrderBookLevel(mid - 0.01, 100.0),), asks=(OrderBookLevel(mid + 0.01, 100.0),))
 
 
 def _stored(mid, book_ts):
@@ -100,8 +88,9 @@ def test_filter_backtest_data_volatility_keeps_high_vol():
     kept = [m.market_slug for m in bt2.lifecycles]
     assert kept == [_WILD]
     assert desc.startswith("vol>")
-# Phase 0.5: the spot-vol split buckets markets by the underlying Chainlink realized vol over each
-# market window, the honest axis, instead of the YES-mid vol that is confounded with time-to-expiry.
+
+
+# Phase 0.5: the spot-vol split buckets markets by the underlying Chainlink realized vol over each market window, the honest axis, instead of the YES-mid vol that is confounded with time-to-expiry.
 _SPOT_CALM = "btc-updown-5m-0"
 _SPOT_WILD = "btc-updown-5m-10"
 _SPOT_LIFECYCLES = [
@@ -112,8 +101,7 @@ _SPOT_LIFECYCLES = [
 
 def _spot_timeline_two_markets():
     calm_prices = [50_000.0 + (ts % 2) for ts in range(10)]
-    wild_prices = [50_000.0, 51_000.0, 49_000.0, 52_000.0, 48_000.0,
-                   53_000.0, 47_000.0, 54_000.0, 46_000.0, 55_000.0]
+    wild_prices = [50_000.0, 51_000.0, 49_000.0, 52_000.0, 48_000.0, 53_000.0, 47_000.0, 54_000.0, 46_000.0, 55_000.0]
     ticks = []
     for ts in range(20):
         price = calm_prices[ts] if ts < 10 else wild_prices[ts - 10]

@@ -51,7 +51,13 @@ def make_filter_task(n_seq, seq_len, d_model, generator):
 class ReferenceSelectiveScan(nn.Module):
     """A tiny SISO selective state-space block on the pure-PyTorch reference recurrence (no fused kernel), with
     a switchable modulation placement so the input-affine (gauge) and in-kernel (non-gauge) forms run through
-    the identical scan and differ only in where the learned affine is applied."""
+    the identical scan and differ only in where the learned affine is applied.
+
+    The modulation is stored as a raw deviation g with the scale gamma = 1 + g and the shift beta = g, so that
+    the parameter zero is the identity exactly as in the paper's zero-initialised hypernet; this is what makes
+    weight decay pull the modulation toward identity rather than toward a zero scale. The deviations are forced
+    active at initialisation so we watch an active modulation either decay back to identity or persist, rather
+    than starting it at the identity it is supposed to leave."""
 
     def __init__(self, d_model, d_state, placement, init_scale):
         super().__init__()
@@ -63,11 +69,7 @@ class ReferenceSelectiveScan(nn.Module):
         self.w_b = nn.Linear(d_model, d_state)
         self.w_c = nn.Linear(d_model, d_state)
         self.readout = nn.Linear(d_model, d_model)
-        # The modulation is stored as a raw deviation g with the scale gamma = 1 + g and the shift beta = g,
-        # so that the parameter zero is the identity exactly as in the paper's zero-initialised hypernet; this
-        # is what makes weight decay pull the modulation toward identity rather than toward a zero scale. The
-        # deviations are forced active at initialisation so we watch an active modulation either decay back to
-        # identity or persist, rather than starting it at the identity it is supposed to leave.
+        # The deviations are forced active at init, not at identity, so training can be watched decaying back to it or persisting.
         self.g_input = nn.Parameter(init_scale * torch.linspace(-1.0, 1.0, d_model))
         self.beta_input = nn.Parameter(init_scale * torch.linspace(1.0, -1.0, d_model))
         self.g_delta = nn.Parameter(init_scale * torch.linspace(-1.0, 1.0, d_model))
@@ -122,8 +124,7 @@ def exact_fold_residual(model, x):
         folded.placement = "none"
         gamma = (1.0 + model.g_input).detach()
         beta = model.beta_input.detach()
-        # The input-affine scale folds into each projection as a right-multiplied diagonal and the shift into
-        # the bias, the lossless gauge move the paper describes; applying it must leave the output unchanged.
+        # The input-affine scale folds into each projection as a right-multiplied diagonal and the shift into the bias, the lossless gauge move the paper describes; applying it must leave the output unchanged.
         with torch.no_grad():
             folded.w_delta.weight.copy_(model.w_delta.weight * gamma.unsqueeze(0))
             folded.w_delta.bias.copy_(model.w_delta.bias + model.w_delta.weight @ beta)
@@ -204,10 +205,7 @@ def main():
             print(f"  {label:8s} {placement:14s} film_g {start:.4f} -> {end:.4f}  (end/start = {ratio:.3f})")
     fold_in = result_by_key["in_kernel_fold_residual"]
     fold_aff = result_by_key["input_affine_fold_residual"]
-    # The boundary the paper asserts rests on an absorbability asymmetry: the input-affine form is a gauge
-    # direction of the bounding projections and the in-kernel form is not. The folding test demonstrates
-    # exactly that asymmetry deterministically, so the verdict keys on it; the training trajectories are
-    # reported as context that also confirms the B1 reading (the gauge decay is driven by weight decay).
+    # The boundary the paper asserts rests on an absorbability asymmetry: the input-affine form is a gauge direction of the bounding projections and the in-kernel form is not. The folding test demonstrates exactly that asymmetry deterministically, so the verdict keys on it; the training trajectories are reported as context that also confirms the B1 reading (the gauge decay is driven by weight decay).
     supports = fold_aff < 1e-4 and fold_in > 1.0e-2
     result_by_key["verdict"] = "SUPPORTS" if supports else "CONTRADICTS"
     print(f"\nVerdict (boundary mechanism): {result_by_key['verdict']}")

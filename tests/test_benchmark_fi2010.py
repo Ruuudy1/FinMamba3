@@ -24,8 +24,8 @@ def _synthetic_fi2010_sequence(n_events: int, seed: int) -> LOBSequence:
 
 
 def test_windows_and_labels_uses_label_at_window_end():
-    # per_level[t] is filled with t so each window is identifiable; the label for a window
-    # is the published label at its last observation, per the FI-2010 convention.
+    """per_level[t] is filled with t so each window is identifiable; the label for a window
+    is the published label at its last observation, per the FI-2010 convention."""
     per_level = np.zeros((10, 2, 2), dtype=np.float32)
     for t in range(10):
         per_level[t] = t

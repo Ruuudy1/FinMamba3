@@ -44,19 +44,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--data-train", required=True, type=Path)
     p.add_argument("--data-val", required=True, type=Path)
-    p.add_argument("--norm-path", type=Path,
-                   default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
+    p.add_argument("--norm-path", type=Path, default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     p.add_argument("--market-slug", default=None)
     p.add_argument("--hours-train", type=float, default=6.0)
     p.add_argument("--hours-val", type=float, default=1.0)
-    p.add_argument("--thresholds", default="0.001,0.005,0.01",
-                   help="Comma-separated direction thresholds")
+    p.add_argument("--thresholds", default="0.001,0.005,0.01", help="Comma-separated direction thresholds")
     p.add_argument("--label-mode", choices=("next_tick", "triple_barrier"), default="next_tick",
                    help="Direction labelling for the DL arms. next_tick = sign of the next-tick "
                         "mid change (legacy). triple_barrier = de Prado profit/stop/time barrier "
                         "on raw mid (denoised; recommended for Polymarket's wide spread).")
-    p.add_argument("--tb-horizon", type=int, default=32,
-                   help="Forward horizon in ticks for triple-barrier labelling.")
+    p.add_argument("--tb-horizon", type=int, default=32, help="Forward horizon in ticks for triple-barrier labelling.")
     p.add_argument("--baselines", default="world_model,deeplob,linear_ar",
                    help="Comma-separated subset of {world_model,deeplob,linear_ar}")
     p.add_argument("--epochs-deeplob", type=int, default=3)
@@ -183,9 +180,7 @@ def world_model_direction_probs(
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -231,9 +226,7 @@ def world_model_settlement_logloss(
     windows = np.stack([flat[s : s + L] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -281,9 +274,7 @@ def world_model_prediction_mse(
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -318,6 +309,12 @@ def world_model_prediction_nll(
     to prior_flat; only the decode and the likelihood differ. feature_indices restricts the NLL to a
     channel subset (price/scale or volume) so the same checkpoints answer both the volatility and the
     order-flow-magnitude question. Returning (sum_nll, count) lets a caller pool windows exactly.
+
+    A FeedObsVol checkpoint conditioned its router on the obs-midprice realized volatility during
+    training; the eval forward must hand the router the identical feature or the FiLM modulation
+    diverges from training and the gap is meaningless. The likelihood is computed in float32 outside
+    autocast so the Student-t lgamma/log terms keep full precision; bf16 would quantize the scale and
+    bias the per-regime NLL comparison.
     """
     assert wm.decoder_kind == "studentt", (
         "prediction_nll assumes a Student-t decoder returning (mean, log_scale); a Gaussian decoder "
@@ -334,9 +331,7 @@ def world_model_prediction_nll(
     obs = torch.from_numpy(windows).float().to(device)
     action = torch.zeros((obs.shape[0], L), dtype=torch.float32, device=device)
     # Match training autocast so the MIMO TileLang kernel uses its bf16 (not FP32) MMA path.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=wm.use_amp):
         embedding = wm.encoder(obs)
         post_logits = wm.dist_head.forward_post(embedding)
         sample = wm.straight_through_gradient(post_logits)
@@ -346,9 +341,7 @@ def world_model_prediction_nll(
             mask = get_subsequent_mask_with_batch_length(L, flattened_sample.device)
             dist_feat = wm.sequence_model(flattened_sample, action, mask)
         else:
-            # A FeedObsVol checkpoint conditioned its router on the obs-midprice realized volatility during
-            # training; the eval forward must hand the router the identical feature or the FiLM modulation
-            # diverges from training and the gap is meaningless.
+            # Hand a FeedObsVol router the identical realized-vol feature it was trained on (see docstring).
             regime_vol = None
             if wm.use_regime_film and wm.regime_film_feed_obs_vol:
                 from finmamba3.models.regime_modulation import realized_vol_conditioning_feature
@@ -359,8 +352,7 @@ def world_model_prediction_nll(
         prior_flat = wm.flatten_sample(prior_sample)
         mean, log_scale = wm.obs_decoder(prior_flat)
     target_next = obs[:, 1:].float()
-    # The likelihood is computed in float32 outside autocast so the Student-t lgamma/log terms keep
-    # full precision; bf16 would quantize the scale and bias the per-regime NLL comparison.
+    # Float32 outside autocast keeps the Student-t lgamma/log terms at full precision (see docstring).
     log_prob = wm.obs_decoder.log_prob(mean.float(), log_scale.float(), target_next)
     selected = log_prob.index_select(-1, feature_indices.to(log_prob.device))
     sum_nll = float((-selected).sum().item())
@@ -379,9 +371,7 @@ def _evaluate_world_model(args, threshold: float, val_seq, device: torch.device)
     if not wm.use_direction_head:
         logger.warning("World model has no direction head; world_model arm will be skipped.")
         return _nan_metrics()
-    probs, labels = world_model_direction_probs(
-        wm, val_seq, threshold, args.label_mode, args.tb_horizon, 10 * 8, device
-    )
+    probs, labels = world_model_direction_probs(wm, val_seq, threshold, args.label_mode, args.tb_horizon, 10 * 8, device)
     return classification_metrics(probs, labels)
 
 
@@ -417,9 +407,7 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
         for start in range(0, Xtr_t.shape[0], args.batch_deeplob):
             b = idx[start : start + args.batch_deeplob]
             logits = model(Xtr_t[b])
-            loss = F.cross_entropy(
-                logits[:, :-1].reshape(-1, 3), ytr_t[b, : L - 1].reshape(-1)
-            )
+            loss = F.cross_entropy(logits[:, :-1].reshape(-1, 3), ytr_t[b, : L - 1].reshape(-1))
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -433,7 +421,12 @@ def _train_eval_deeplob(args, threshold: float, train_seq, val_seq, device: torc
 
 
 def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float]:
-    """Fit LinearAR on train and evaluate direction labels on val."""
+    """Fit LinearAR on train and evaluate direction labels on val.
+
+    LinearAR is a closed-form floor with its own next-tick labelling, so it ignores
+    --label-mode. It emits hard labels, not probabilities; a deterministic one-hot is a
+    fair Brier proxy and lets accuracy / macro-F1 share the common metric path.
+    """
     from finmamba3.baselines.linear_ar import LinearAR, LinearARConfig
     flat_train = train_seq.to_flat().astype(np.float32)
     flat_val = val_seq.to_flat().astype(np.float32)
@@ -443,9 +436,6 @@ def _fit_eval_linear_ar(threshold: float, train_seq, val_seq) -> dict[str, float
     pred, actual = ar.direction_labels(flat_val)
     if pred.size == 0:
         return _nan_metrics()
-    # LinearAR is a closed-form floor with its own next-tick labelling, so it ignores
-    # --label-mode. It emits hard labels, not probabilities; a deterministic one-hot is a
-    # fair Brier proxy and lets accuracy / macro-F1 share the common metric path.
     return classification_metrics(np.eye(3)[pred], actual)
 
 
@@ -454,9 +444,7 @@ def _format_table(rows: list[dict]) -> str:
     head = "| method | threshold | accuracy | macro_f1 | brier |\n|---|---:|---:|---:|---:|"
     lines = [head]
     for r in rows:
-        lines.append(
-            f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['macro_f1']:.4f} | {r['brier']:.4f} |"
-        )
+        lines.append(f"| {r['method']} | {r['threshold']:.4f} | {r['accuracy']:.4f} | {r['macro_f1']:.4f} | {r['brier']:.4f} |")
     return "\n".join(lines)
 
 
@@ -476,8 +464,7 @@ def main() -> int:
     from finmamba3.sequence_builder import build_sequences
     norm_clip = cfg.BasicSettings.get("NormClip", 8.0)
     aggregate_only = cfg.Models.WorldModel.Encoder.get("AggregateOnly", False)
-    # The world model's encoder width is fixed by whether training appended the six binary-market
-    # tick features, so the eval sequences must use the same flag or the encoder linear mismatches.
+    # Eval sequences must reuse the training BinaryMarketFeatures flag or the encoder linear width mismatches.
     include_binary_features = cfg.Models.WorldModel.Encoder.get("BinaryMarketFeatures", False)
     train_seq, slug, _stats = build_sequences(
         args.data_train, args.market_slug, args.hours_train, args.norm_path,

@@ -24,10 +24,10 @@ from finmamba3.envs.lob_features import F_LEVEL, K_LEVELS
 
 
 class _ConvStack(nn.Module):
+
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
-        # Time-direction convolutions use kernel (3, 1) with padding (1, 0) so the time axis is preserved exactly.
-        # Original DeepLOB uses padding='same' which has the same effect.
+        # Time-direction convolutions use kernel (3, 1) with padding (1, 0) so the time axis is preserved exactly, matching the effect of original DeepLOB's padding='same'.
         self.body = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 2), stride=(1, 2)),
             nn.LeakyReLU(0.01),
@@ -36,17 +36,16 @@ class _ConvStack(nn.Module):
             nn.Conv2d(out_channels, out_channels, kernel_size=(3, 1), padding=(1, 0)),
             nn.LeakyReLU(0.01),
         )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.body(x)
 
 
 class _Inception(nn.Module):
+
     def __init__(self, in_channels: int, out_channels: int) -> None:
         super().__init__()
-        self.branch_1x1 = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
-            nn.LeakyReLU(0.01),
-        )
+        self.branch_1x1 = nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)), nn.LeakyReLU(0.01))
         self.branch_3 = nn.Sequential(
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
             nn.LeakyReLU(0.01),
@@ -64,11 +63,9 @@ class _Inception(nn.Module):
             nn.Conv2d(in_channels, out_channels, kernel_size=(1, 1)),
             nn.LeakyReLU(0.01),
         )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.cat(
-            [self.branch_1x1(x), self.branch_3(x), self.branch_5(x), self.branch_pool(x)],
-            dim=1,
-        )
+        return torch.cat([self.branch_1x1(x), self.branch_3(x), self.branch_5(x), self.branch_pool(x)], dim=1)
 
 
 class DeepLOB(nn.Module):
@@ -98,18 +95,15 @@ class DeepLOB(nn.Module):
         self.stack3 = _ConvStack(conv_channels, conv_channels)
         self.inception = _Inception(conv_channels, inception_channels)
         inception_out = inception_channels * 4
-        # Each conv stack halves the width via (1x2 stride 1x2), so after three stacks the width becomes input_width / 8.
-        # Inception preserves width.
+        # Each conv stack halves the width via (1x2 stride 1x2), so after three stacks the width becomes input_width / 8; inception preserves width.
         post_conv_width = max(1, self.input_width // (2 ** 3))
         self.lstm = nn.LSTM(inception_out * post_conv_width, lstm_hidden, batch_first=True)
         self.head = nn.Linear(lstm_hidden, num_classes)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, L, F = x.shape
         if F != self.input_width:
-            raise ValueError(
-                f"DeepLOB expects flat per-level features of width "
-                f"{self.input_width}; got {F}"
-            )
+            raise ValueError(f"DeepLOB expects flat per-level features of width {self.input_width}; got {F}")
         x = x.view(B, 1, L, F)
         x = self.stack1(x)
         x = self.stack2(x)

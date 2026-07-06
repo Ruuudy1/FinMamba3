@@ -16,9 +16,11 @@ def calc_lambda_return(rewards, values, termination, gamma, lam, dtype=torch.flo
     batch_size, batch_length = rewards.shape[:2]
     gamma_return = torch.zeros((batch_size, batch_length+1), dtype=dtype, device=rewards.device)
     gamma_return[:, -1] = values[:, -1]
-    for t in reversed(range(batch_length)):  # with last bootstrap
-        gamma_return[:, t] = \
-            rewards[:, t] + \
-            gamma * inv_termination[:, t] * (1-lam) * values[:, t] + \
+    # Bootstrap from the last value, then fold rewards backward.
+    for t in reversed(range(batch_length)):
+        gamma_return[:, t] = (
+            rewards[:, t] +
+            gamma * inv_termination[:, t] * (1-lam) * values[:, t] +
             gamma * inv_termination[:, t] * lam * gamma_return[:, t+1]
+        )
     return gamma_return[:, :-1]

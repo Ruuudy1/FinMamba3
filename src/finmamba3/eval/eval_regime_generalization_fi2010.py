@@ -66,18 +66,14 @@ from finmamba3.eval.regime_split import window_volatility_split
 from finmamba3.sequence_builder import build_kaggle_sequences
 # endregion
 logger = logging.getLogger(__name__)
-# The scoring path samples 64-event windows inside each segment, so a vol window shorter than
-# that yields no scorable windows. Fail fast rather than silently scoring an empty regime.
+# A vol window shorter than the 64-event scoring windows yields nothing scorable; fail fast, not silently.
 _MIN_WINDOW_LEN = 65
-# Each metric's scoring properties: whether it needs the Student-t decoder, whether higher is
-# better (so _degradation flips sign correctly), and which feature mask it restricts the NLL to.
-# Keeping this in one table makes a new metric a one-line addition instead of scattered branches.
+# One table of per-metric properties (Student-t need, degradation sign, NLL mask) keeps a new metric a one-line addition.
 _METRIC_SPEC = {
     "prediction_mse": {"needs_studentt": False, "higher_is_better": False, "mask": None},
     "studentt_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "price_scale"},
     "volume_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "volume"},
-    # The full-channel Student-t NLL is the schema-agnostic held-out reconstruction NLL (the G1
-    # secondary diagnostic); price_scale/volume are FI-2010-layout refinements kept for reproduction.
+    # `recon_nll` is the schema-agnostic G1 diagnostic; price_scale/volume are FI-2010 refinements kept for reproduction.
     "recon_nll": {"needs_studentt": True, "higher_is_better": False, "mask": "all"},
     "direction_macro_f1": {"needs_studentt": False, "higher_is_better": True, "mask": None},
 }
@@ -97,13 +93,11 @@ def parse_args() -> argparse.Namespace:
                    help="world_model_*.pth from the RegimeFiLM-off FI-2010 run")
     p.add_argument("--treatment-checkpoint", required=True, type=Path,
                    help="world_model_*.pth from the RegimeFiLM-on FI-2010 run")
-    p.add_argument("--data-val", required=True, type=Path,
-                   help="Directory holding the FI-2010 validation split text file.")
+    p.add_argument("--data-val", required=True, type=Path, help="Directory holding the FI-2010 validation split text file.")
     p.add_argument("--norm-path", type=Path,
                    default=Path("saved_models") / "lob" / "fi2010_norm.json",
                    help="Training-time FI-2010 normalization stats so eval uses the train scale.")
-    p.add_argument("--horizon", type=int, default=10,
-                   help="FI-2010 label horizon to load; one of 10, 20, 30, 50, 100.")
+    p.add_argument("--horizon", type=int, default=10, help="FI-2010 label horizon to load; one of 10, 20, 30, 50, 100.")
     p.add_argument("--max-events", type=int, default=None,
                    help="Cap events for a fast smoke run; default uses the full split.")
     p.add_argument("--window-len", type=int, default=512,
@@ -116,8 +110,7 @@ def parse_args() -> argparse.Namespace:
                    help="Direction labelling for the direction_macro_f1 metric (ignored by the others).")
     p.add_argument("--threshold", type=float, default=0.0,
                    help="Next-tick or triple-barrier threshold for the direction_macro_f1 metric.")
-    p.add_argument("--tb-horizon", type=int, default=32,
-                   help="Forward horizon in ticks for triple-barrier labelling.")
+    p.add_argument("--tb-horizon", type=int, default=32, help="Forward horizon in ticks for triple-barrier labelling.")
     p.add_argument("--is-mimo", action="store_true",
                    help="Rebuild both arms as MIMO to match an H100 MIMO A/B; default SISO.")
     p.add_argument("--n-layer", type=int, default=None,
@@ -182,9 +175,7 @@ def _regime_prediction_nll(wm, seqs: list, feature_indices: torch.Tensor,
     total_nll = 0.0
     total_count = 0
     for seq in seqs:
-        sum_nll, count = world_model_prediction_nll(
-            wm, seq, device, feature_indices, windows_per_market=windows_per_segment
-        )
+        sum_nll, count = world_model_prediction_nll(wm, seq, device, feature_indices, windows_per_market=windows_per_segment)
         total_nll += sum_nll
         total_count += count
     assert total_count > 0, "no windows scored for this regime; segments are shorter than the window length."
@@ -220,7 +211,8 @@ def _build_arms(config_path: Path, metric: str, baseline_ckpt: Path, treatment_c
     which is the definition of the A/B. load_world_model fails fast if a rebuilt architecture does
     not match its checkpoint keys. The metric pins the decoder/head precondition: the Student-t
     metrics require a studentt decoder, prediction_mse forbids it, and direction_macro_f1 needs the
-    direction head.
+    direction head. direction_macro_f1 reads only the direction head, so it is decoder-agnostic and
+    skips the decoder checks.
     """
     spec = _METRIC_SPEC[metric]
     arms = []
@@ -236,16 +228,12 @@ def _build_arms(config_path: Path, metric: str, baseline_ckpt: Path, treatment_c
                 f"studentt decoder. Train with configs/fi2010_studentt.yaml."
             )
         elif metric == "prediction_mse":
-            # Only the Gaussian-decode prediction_mse path reads obs_decoder as a single tensor; a
-            # studentt decoder returns (mean, log_scale) and would silently mis-decode. The direction
-            # metric reads the direction head, so it is decoder-agnostic and skips this check.
+            # A studentt decoder returns (mean, log_scale) and would silently mis-decode under the Gaussian path.
             assert wm.decoder_kind != "studentt", (
                 f"{arm_name} checkpoint uses a studentt decoder; metric {metric} assumes a Gaussian decoder."
             )
         if metric == "direction_macro_f1":
-            assert wm.use_direction_head, (
-                f"{arm_name} checkpoint has no direction head; cannot score direction macro-F1."
-            )
+            assert wm.use_direction_head, f"{arm_name} checkpoint has no direction head; cannot score direction macro-F1."
         arms.append((arm_name, wm))
     return arms
 
@@ -257,8 +245,7 @@ def _load_val_sequence(dataset_kind: str, base_cfg, args) -> LOBSequence:
     trainer used (the tail after HoursTrain) so the eval feature pipeline matches training with no skew.
     """
     if dataset_kind == "fi2010":
-        bundle = load_fi2010_split(args.data_val, split="validation", horizon=args.horizon,
-                                   max_events=args.max_events)
+        bundle = load_fi2010_split(args.data_val, split="validation", horizon=args.horizon, max_events=args.max_events)
         stats = load_normalization(args.norm_path)
         return apply_normalization(bundle.sequence, stats)
     if dataset_kind == "kaggle":
@@ -299,8 +286,7 @@ def main() -> int:
     )
     spec = _METRIC_SPEC[args.metric]
     device = _device_from_arg(args.device)
-    # Build both models before slicing the stream, matching eval_regime_generalization: the
-    # mamba_ssm import spikes host RAM and must land while memory is free.
+    # Build both models first; the mamba_ssm import RAM spike must land while host memory is free.
     arms = _build_arms(args.config, args.metric, args.baseline_checkpoint, args.treatment_checkpoint,
                        args.is_mimo, args.n_layer, device)
     base_cfg = _load_config(args.config, [])
@@ -350,8 +336,7 @@ def main() -> int:
     return 0
 
 
-def _score_regime(wm, seqs: list, args, spec: dict, feature_indices, level_width: int,
-                  device: torch.device) -> float:
+def _score_regime(wm, seqs: list, args, spec: dict, feature_indices, level_width: int, device: torch.device) -> float:
     """Per-regime scalar for the chosen metric, dispatched off the metric spec."""
     if args.metric == "direction_macro_f1":
         return _regime_macro_f1(wm, seqs, args.threshold, args.label_mode, args.tb_horizon,

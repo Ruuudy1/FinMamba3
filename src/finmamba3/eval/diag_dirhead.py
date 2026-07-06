@@ -1,9 +1,11 @@
+"""The macro-F1 came back bit-identical across four independent checkpoints, which can only happen if
+every direction head emits a near-constant class. This dumps the predicted-class histogram so the
+collapse is confirmed directly rather than inferred from the identical scores.
+"""
 # region imports
 from pathlib import Path
-
 import numpy as np
 import torch
-
 from finmamba3.envs.fi2010_loader import load_fi2010_split
 from finmamba3.envs.lob_features import apply_normalization, load_normalization
 from finmamba3.eval.compare_direction import load_world_model, world_model_direction_probs
@@ -11,9 +13,6 @@ from finmamba3.eval.eval_regime_generalization import _arch_overrides, _load_con
 # endregion
 
 
-# The macro-F1 came back bit-identical across four independent checkpoints, which can only happen if
-# every direction head emits a near-constant class. This dumps the predicted-class histogram so the
-# collapse is confirmed directly rather than inferred from the identical scores.
 def main() -> int:
     config_path = Path("configs/fi2010.yaml")
     checkpoint = Path("saved_models/lob/LOB/z7wi0tu2/ckpt/world_model_final.pth")

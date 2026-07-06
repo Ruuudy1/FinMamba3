@@ -37,9 +37,7 @@ class TripleBarrierConfig:
     horizon: int = 32
 
 
-def triple_barrier_labels_numpy(
-    mid: np.ndarray, config: TripleBarrierConfig
-) -> tuple[np.ndarray, np.ndarray]:
+def triple_barrier_labels_numpy(mid: np.ndarray, config: TripleBarrierConfig) -> tuple[np.ndarray, np.ndarray]:
     """Numpy reference implementation for triple-barrier labels.
 
     Parameters
@@ -91,9 +89,7 @@ def triple_barrier_labels_numpy(
     return labels, mask
 
 
-def triple_barrier_labels_torch(
-    mid: torch.Tensor, config: TripleBarrierConfig
-) -> tuple[torch.Tensor, torch.Tensor]:
+def triple_barrier_labels_torch(mid: torch.Tensor, config: TripleBarrierConfig) -> tuple[torch.Tensor, torch.Tensor]:
     """Vectorized torch implementation of triple-barrier labels.
 
     Parameters
@@ -139,9 +135,7 @@ def triple_barrier_labels_torch(
     return labels, valid
 
 
-def multi_threshold_direction_labels(
-    mid_diff: torch.Tensor, thresholds: Sequence[float]
-) -> torch.Tensor:
+def multi_threshold_direction_labels(mid_diff: torch.Tensor, thresholds: Sequence[float]) -> torch.Tensor:
     """Three-class direction labels at multiple thresholds.
 
     Parameters

@@ -12,8 +12,10 @@ from finmamba3.backtester.data_loader import _asset_from_slug
 # endregion
 
 
-def world_model_yes_prob_series(wm, seq, device: torch.device, window_len: int = 64, chunk: int = 512,
-                                sample_mode: str = "random_sample") -> dict:
+def world_model_yes_prob_series(
+    wm, seq, device: torch.device, window_len: int = 64, chunk: int = 512,
+    sample_mode: str = "random_sample",
+) -> dict:
     """Per-tick settlement YES probability for one market, keyed by tick second.
 
     For each tick with at least window_len preceding context, the settlement head reads the causal
@@ -52,8 +54,10 @@ def world_model_yes_prob_series(wm, seq, device: torch.device, window_len: int =
     return prob_by_ts
 
 
-def world_model_edge_ev_series(wm, seq, device: torch.device, window_len: int = 64, chunk: int = 512,
-                               sample_mode: str = "random_sample") -> dict:
+def world_model_edge_ev_series(
+    wm, seq, device: torch.device, window_len: int = 64, chunk: int = 512,
+    sample_mode: str = "random_sample",
+) -> dict:
     """Per-tick (ev_yes_hat, ev_no_hat) for one market, keyed by tick second.
 
     Mirrors world_model_yes_prob_series() exactly except the edge head replaces the settlement head.
@@ -140,8 +144,16 @@ def _gate_signals_by_slug_ts(bt, prob_by_slug_ts: dict, window: int) -> tuple:
     btc = np.fromiter((float(tick.chainlink_btc) for tick in bt.timeline), dtype=np.float64, count=num)
     eth = np.fromiter((float(tick.chainlink_eth) for tick in bt.timeline), dtype=np.float64, count=num)
     sol = np.fromiter((float(tick.chainlink_sol) for tick in bt.timeline), dtype=np.float64, count=num)
-    er_by_asset = {"BTC": _causal_er_series(btc, window), "ETH": _causal_er_series(eth, window), "SOL": _causal_er_series(sol, window)}
-    sign_by_asset = {"BTC": _causal_net_sign_series(btc, window), "ETH": _causal_net_sign_series(eth, window), "SOL": _causal_net_sign_series(sol, window)}
+    er_by_asset = {
+        "BTC": _causal_er_series(btc, window),
+        "ETH": _causal_er_series(eth, window),
+        "SOL": _causal_er_series(sol, window),
+    }
+    sign_by_asset = {
+        "BTC": _causal_net_sign_series(btc, window),
+        "ETH": _causal_net_sign_series(eth, window),
+        "SOL": _causal_net_sign_series(sol, window),
+    }
     gate_er_by_slug_ts = {}
     gate_dir_by_slug_ts = {}
     for slug, ts in prob_by_slug_ts.keys():

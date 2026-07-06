@@ -21,6 +21,7 @@ class DotDict(dict):
         for key, value in self.items():
             if isinstance(value, dict):
                 self[key] = DotDict(value)
+
     def __getattr__(self, item):
         if item not in self:
             raise AttributeError(f"'DotDict' object has no attribute '{item}'")
@@ -36,16 +37,10 @@ class DotDict(dict):
 def _dtype_mapper(dtype_value):
     if isinstance(dtype_value, torch.dtype):
         return dtype_value
-    dtype_map = {
-        "float32": torch.float32,
-        "float16": torch.float16,
-        "bfloat16": torch.bfloat16,
-    }
+    dtype_map = {"float32": torch.float32, "float16": torch.float16, "bfloat16": torch.bfloat16}
     key = str(dtype_value)
     if key not in dtype_map:
-        raise argparse.ArgumentTypeError(
-            f"Unknown torch dtype {dtype_value!r}; expected one of {sorted(dtype_map)}"
-        )
+        raise argparse.ArgumentTypeError(f"Unknown torch dtype {dtype_value!r}; expected one of {sorted(dtype_map)}")
     return dtype_map[key]
 
 
@@ -55,11 +50,7 @@ def _bool_mapper(value):
     return str(value).lower() in ["true", "1", "yes", "y", "on"]
 
 
-def parse_args_and_update_config(
-    config,
-    prefix: str = "",
-    argv: Sequence[str] | None = None,
-):
+def parse_args_and_update_config(config, prefix: str = "", argv: Sequence[str] | None = None):
     """Register dotted CLI overrides for every scalar config leaf."""
     parser = argparse.ArgumentParser(allow_abbrev=False)
     def add_arguments(node, current_prefix=""):
@@ -73,11 +64,7 @@ def parse_args_and_update_config(
                 default = _dtype_mapper(value)
                 parser.add_argument(arg_name, type=_dtype_mapper, default=default)
             elif isinstance(value, (list, dict)):
-                parser.add_argument(
-                    arg_name,
-                    type=lambda x: ast.literal_eval(x),
-                    default=value,
-                )
+                parser.add_argument(arg_name, type=lambda x: ast.literal_eval(x), default=value)
             else:
                 parser.add_argument(arg_name, type=type(value), default=value)
     def update_dict(d, keys, value):

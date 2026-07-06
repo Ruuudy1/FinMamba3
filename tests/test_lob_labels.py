@@ -43,9 +43,7 @@ def test_torch_implementation_matches_numpy():
     mid = 1.0 + np.cumsum(rng.normal(scale=0.005, size=64))
     cfg = TripleBarrierConfig(profit_threshold=0.005, stop_threshold=0.005, horizon=8)
     np_labels, _ = triple_barrier_labels_numpy(mid, cfg)
-    torch_labels, _ = triple_barrier_labels_torch(
-        torch.from_numpy(mid).unsqueeze(0), cfg
-    )
+    torch_labels, _ = triple_barrier_labels_torch(torch.from_numpy(mid).unsqueeze(0), cfg)
     assert torch_labels.shape == (1, mid.shape[0])
     assert torch_labels.dtype == torch.long
 

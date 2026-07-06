@@ -64,20 +64,15 @@ def imagine_rollout(
     obs = torch.from_numpy(ctx).float().to(device, non_blocking=True).unsqueeze(0)
     action = torch.zeros((1, context_len), dtype=torch.float32, device=device)
     decoded: list[np.ndarray] = []
-    # Match training/validation autocast: the MIMO TileLang kernel only codegens a
-    # bf16 MMA path, so an unwrapped FP32 sequence_model call fails nvcc compilation.
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
-    ):
+    # Match training/validation autocast: the MIMO TileLang kernel only codegens a bf16 MMA path, so an unwrapped FP32 sequence_model call fails nvcc compilation.
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp):
         ctx_latent = world_model.encode_obs(obs)
         prefix_latent = ctx_latent
         prefix_action = action
         for step in range(horizon):
             if world_model.model in ("Transformer", "TransformerModern"):
                 from finmamba3.models.attention import get_subsequent_mask_with_batch_length
-                temporal_mask = get_subsequent_mask_with_batch_length(
-                    prefix_latent.shape[1], prefix_latent.device
-                )
+                temporal_mask = get_subsequent_mask_with_batch_length(prefix_latent.shape[1], prefix_latent.device)
                 feat = world_model.sequence_model(prefix_latent, prefix_action, temporal_mask)
             else:
                 feat = world_model.sequence_model(prefix_latent, prefix_action)
@@ -85,8 +80,7 @@ def imagine_rollout(
             prior_logits = world_model.dist_head.forward_prior(feat)
             prior_sample = world_model.straight_through_gradient(prior_logits)
             prior_flat = world_model.flatten_sample(prior_sample)
-            # The studentt decoder returns (mean, log_scale); the rollout trajectory is the predicted
-            # mean, so take the first element. The Gaussian decoder returns the prediction directly.
+            # The studentt decoder returns (mean, log_scale); the rollout trajectory is the predicted mean, so take the first element, while the Gaussian decoder returns the prediction directly.
             decoder_out = world_model.obs_decoder(prior_flat)
             mean_out = decoder_out[0] if world_model.decoder_kind == "studentt" else decoder_out
             decoded.append(mean_out.float().cpu().numpy()[0, 0])
@@ -109,8 +103,7 @@ def _imagine_and_log(
     decoded = imagine_rollout(world_model, val_seq, context_len, horizon)
     if decoded is None:
         return
-    # midprice_index points at the start of the per-tick block; offsets 0/1/3 are
-    # mid / spread / imbalance under both the Polymarket and FI-2010 schemas.
+    # The midprice_index attribute points at the start of the per-tick block; offsets 0/1/3 are mid / spread / imbalance under both the Polymarket and FI-2010 schemas.
     level_flat = world_model.midprice_index
     mid_norm = decoded[:, level_flat + 0]
     spread_norm = decoded[:, level_flat + 1]
@@ -142,16 +135,12 @@ def _validation_metrics(
     windows = np.stack([flat[s : s + batch_length] for s in starts], axis=0)
     obs = torch.from_numpy(windows).float().to(device, non_blocking=True)
     action = torch.zeros((batch_size, batch_length), dtype=torch.float32, device=device)
-    with torch.no_grad(), torch.autocast(
-        device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
-    ):
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp):
         embedding = world_model.encoder(obs)
         post_logits = world_model.dist_head.forward_post(embedding)
         sample = world_model.straight_through_gradient(post_logits)
         flattened_sample = world_model.flatten_sample(sample)
-        # The studentt decoder returns (mean, log_scale) and its loss is the weighted NLL over both;
-        # the Gaussian decoder returns a single tensor scored by weighted MSE. Mirror update() so the
-        # studentt arm's Val/reconstruction_loss is the NLL that SaveBestOnly and early stopping read.
+        # The studentt decoder returns (mean, log_scale) scored by weighted NLL and the Gaussian decoder a single tensor scored by weighted MSE; mirror update() so the studentt arm's Val/reconstruction_loss is the NLL that SaveBestOnly and early stopping read.
         decoder_out = world_model.obs_decoder(flattened_sample)
         if world_model.decoder_kind == "studentt":
             recon_mean, recon_log_scale = decoder_out
@@ -163,17 +152,14 @@ def _validation_metrics(
             reconstruction_loss = world_model.reconstruction_loss_func(obs_hat, obs)
         if world_model.model in ("Transformer", "TransformerModern"):
             from finmamba3.models.attention import get_subsequent_mask_with_batch_length
-            temporal_mask = get_subsequent_mask_with_batch_length(
-                batch_length, flattened_sample.device
-            )
+            temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
             dist_feat = world_model.sequence_model(flattened_sample, action, temporal_mask)
         else:
             dist_feat = world_model.sequence_model(flattened_sample, action)
         prior_logits = world_model.dist_head.forward_prior(dist_feat[:, :-1])
         prior_sample = world_model.straight_through_gradient(prior_logits, sample_mode="probs")
         prior_flat = world_model.flatten_sample(prior_sample)
-        # The one-step prediction MSE diagnostic compares the predicted mean to the next tick, so take
-        # the studentt mean; the Gaussian decoder already returns that mean directly.
+        # The one-step prediction MSE diagnostic compares the predicted mean to the next tick, so take the studentt mean; the Gaussian decoder already returns that mean directly.
         prior_decode = world_model.obs_decoder(prior_flat)
         next_hat = prior_decode[0] if world_model.decoder_kind == "studentt" else prior_decode
     target_next = obs[:, 1:].detach().float()
@@ -194,15 +180,11 @@ def _validation_metrics(
     pred_delta = pred_raw[..., mid_idx] - prev_raw[..., mid_idx]
     nonzero = np.abs(true_delta) > 1e-7
     if nonzero.any():
-        mid_direction_accuracy = float(
-            (np.sign(true_delta[nonzero]) == np.sign(pred_delta[nonzero])).mean()
-        )
+        mid_direction_accuracy = float((np.sign(true_delta[nonzero]) == np.sign(pred_delta[nonzero])).mean())
     else:
         mid_direction_accuracy = float("nan")
     spread_mae = float(np.abs(pred_raw[..., spread_idx] - target_raw[..., spread_idx]).mean())
-    imbalance_mae = float(
-        np.abs(pred_raw[..., imbalance_idx] - target_raw[..., imbalance_idx]).mean()
-    )
+    imbalance_mae = float(np.abs(pred_raw[..., imbalance_idx] - target_raw[..., imbalance_idx]).mean())
     pred_yes = np.clip(pred_raw[..., mid_idx], 1e-6, 1.0 - 1e-6)
     outcome = val_seq.yes_outcome
     brier = float("nan")
@@ -229,8 +211,7 @@ def _validation_metrics(
         "Val/spread_mae": spread_mae,
         "Val/imbalance_mae": imbalance_mae,
     }
-    # Pick the feature-name tuple matching the active schema. Polymarket flat
-    # feature dim is 94; FI-2010 flat is 46. Anything else falls back to indices.
+    # Pick the feature-name tuple matching the active schema: Polymarket flat feature dim is 94, FI-2010 flat is 46, and anything else falls back to indices.
     name_table = FLAT_FEATURE_NAMES
     if flat.shape[1] == len(FLAT_FEATURE_NAMES_FI2010):
         name_table = FLAT_FEATURE_NAMES_FI2010
@@ -241,15 +222,12 @@ def _validation_metrics(
     return metrics, top_features
 
 
-# Public aliases for use by external eval scripts. The underscored names remain
-# the implementation; the public names mirror the API the eval CLIs import.
+# Public alias for external eval scripts: the underscored name remains the implementation; the public name mirrors the API the eval CLIs import.
 validate = _validation_metrics
 
 
 def _gpu_monitor(interval: int = 30, sample_every: float = 2.0) -> None:
-    # A single instantaneous nvidia-smi snapshot lands on an arbitrary instant of a
-    # multi-second step and badly under-reads util. Sample across the whole window and
-    # report mean + peak so the logged number reflects sustained occupancy.
+    # A single instantaneous nvidia-smi snapshot lands on an arbitrary instant of a multi-second step and badly under-reads util, so sample across the whole window and report mean + peak so the logged number reflects sustained occupancy.
     samples_per_window = max(1, int(interval / sample_every))
     while True:
         utils = []
@@ -271,9 +249,7 @@ def _gpu_monitor(interval: int = 30, sample_every: float = 2.0) -> None:
 
 def _upload_checkpoints_async(folder: str, repo_id: str, token: str, lock: threading.Lock,
                               path_in_repo: str = "checkpoints/lob") -> None:
-    # Fire-and-forget HF sync on a daemon thread so the upload never stalls the training
-    # loop. The non-blocking lock drops the sync if a previous one is still in flight, so a
-    # slow upload cannot pile up behind a faster save cadence.
+    # Fire-and-forget HF sync on a daemon thread so the upload never stalls the training loop; the non-blocking lock drops the sync if a previous one is still in flight, so a slow upload cannot pile up behind a faster save cadence.
     def _run():
         if not lock.acquire(blocking=False):
             return
@@ -300,10 +276,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=SRC_DIR.parent / "configs" / "lob.yaml")
-    pre_parser.add_argument("--data-train", type=Path,
-                            default=SRC_DIR.parent / "data" / "train")
-    pre_parser.add_argument("--data-val", type=Path,
-                            default=SRC_DIR.parent / "data" / "validation")
+    pre_parser.add_argument("--data-train", type=Path, default=SRC_DIR.parent / "data" / "train")
+    pre_parser.add_argument("--data-val", type=Path, default=SRC_DIR.parent / "data" / "validation")
     pre_parser.add_argument("--market-slug", default=None)
     pre_parser.add_argument(
         "--max-markets", type=int, default=None,
@@ -316,8 +290,7 @@ def main() -> None:
         "--intervals", default=None,
         help="Comma-separated list of market intervals to use (e.g., '5m' or '5m,15m'). Default: all.",
     )
-    pre_parser.add_argument("--norm-path", type=Path,
-                            default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
+    pre_parser.add_argument("--norm-path", type=Path, default=SRC_DIR.parent / "saved_models" / "lob" / "normalization.json")
     pre_parser.add_argument(
         "--dataset", choices=("polymarket", "fi2010", "kaggle"), default=None,
         help="Override Dataset.Kind from the config file.",
@@ -355,8 +328,7 @@ def main() -> None:
     device = torch.device(config.BasicSettings.Device)
     from finmamba3.training_utils import make_logger, seed_np_torch
     seed_np_torch(seed=config.BasicSettings.Seed)
-    # Pick the data pipeline. Polymarket reads SQLite + per-tick CSV books;
-    # FI-2010 reads a single space-separated text matrix per split.
+    # Pick the data pipeline: Polymarket reads SQLite + per-tick CSV books; FI-2010 reads a single space-separated text matrix per split.
     dataset_cfg = config.get("Dataset", None)
     config_dataset_kind = dataset_cfg.get("Kind", "polymarket") if dataset_cfg is not None else "polymarket"
     dataset_kind = pre_args.dataset or config_dataset_kind
@@ -365,21 +337,18 @@ def main() -> None:
     aggregate_only = config.Models.WorldModel.Encoder.get("AggregateOnly", False)
     # The multi-market knob defaults to the config; 1 keeps the single-market path.
     max_markets = pre_args.max_markets if pre_args.max_markets is not None else int(config.JointTrainAgent.get("MarketCount", 1))
-    # Parse intervals if provided
+    # Parse the optional comma-separated intervals filter before any pipeline branch needs it.
     intervals = None
     if pre_args.intervals:
         intervals = [i.strip() for i in pre_args.intervals.split(",")]
         logger.info(f"filtering markets to intervals: {intervals}")
     if dataset_kind == "polymarket":
         include_binary_features = config.Models.WorldModel.Encoder.BinaryMarketFeatures
-        # Phase 0.1/0.2/0.6: SpotFeatures appends the causal spot path, the time-to-expiry clock
-        # and the asset one-hot. Default off keeps the legacy 100-dim schema bit-identical.
+        # Phase 0.1/0.2/0.6: SpotFeatures appends the causal spot path, the time-to-expiry clock and the asset one-hot; default off keeps the legacy 100-dim schema bit-identical.
         include_spot_features = config.Models.WorldModel.Encoder.get('SpotFeatures', False)
-        # Phase 0.4: CrossIntervalContext appends the contemporaneous short-interval summary to hourly
-        # markets (zeros elsewhere). Default off; enabling it widens the schema by three channels.
+        # Phase 0.4: CrossIntervalContext appends the contemporaneous short-interval summary to hourly markets (zeros elsewhere); default off, and enabling it widens the schema by three channels.
         include_cross_interval = config.Models.WorldModel.Encoder.get('CrossIntervalContext', False)
-        # Per-asset training: restrict the market pool to these asset symbols (e.g. ['ETH']) so the model
-        # learns one asset's dynamics; default None keeps the top markets across all assets (BTC-dominated).
+        # Per-asset training: restrict the market pool to these asset symbols (e.g. ['ETH']) so the model learns one asset's dynamics; default None keeps the top markets across all assets (BTC-dominated).
         train_assets = config.Models.WorldModel.Encoder.get('Assets', None)
         logger.info(f"building train features from {pre_args.data_train} (max_markets={max_markets}, assets={train_assets})")
         if max_markets > 1:
@@ -398,9 +367,7 @@ def main() -> None:
                 include_cross_interval=include_cross_interval,
                 assets=train_assets,
             )
-            # The training-loop val metric reads one sequence; the longest val market
-            # is a stable, boundary-safe representative. Cross-market generalization is
-            # measured post-hoc by eval/regime_split.py + eval/compare_direction.py.
+            # The training-loop val metric reads one sequence and the longest val market is a stable, boundary-safe representative; cross-market generalization is measured post-hoc by eval/regime_split.py + eval/compare_direction.py.
             logger.info(f"building val features from {pre_args.data_val} (longest market)")
             val_seq, _, _ = build_sequences(
                 pre_args.data_val,
@@ -499,17 +466,13 @@ def main() -> None:
     for split_name, seq in diag_targets:
         diag = normalized_feature_diagnostics(seq, stats.clip_value)
         top = ", ".join(f"{name}={value:.3f}" for name, value in diag["top_features"])
-        logger.info(
-            f"{split_name} normalized max_abs={diag['max_abs']:.3f}, "
-            f"finite={diag['finite']}, top=[{top}]"
-        )
+        logger.info(f"{split_name} normalized max_abs={diag['max_abs']:.3f}, finite={diag['finite']}, top=[{top}]")
         if not diag["within_clip"]:
             raise RuntimeError(
                 f"{split_name} normalized features exceed clip "
                 f"{diag['clip_value']}: max_abs={diag['max_abs']}"
             )
-    # The config-driven assertion handles both Polymarket (94-dim) and FI-2010 (46-dim).
-    # The legacy FEATURE_DIM_FLAT constant only applies to the Polymarket schema.
+    # The config-driven assertion handles both Polymarket (94-dim) and FI-2010 (46-dim); the legacy FEATURE_DIM_FLAT constant only applies to the Polymarket schema.
     assert train_seqs[0].to_flat().shape[1] == config.BasicSettings.FeatureDim, (
         f"Feature dim mismatch: computed {train_seqs[0].to_flat().shape[1]} "
         f"vs config {config.BasicSettings.FeatureDim}"
@@ -530,44 +493,28 @@ def main() -> None:
             f"{ckpt.get('step', '?')}, best_val_loss={resume_best_val_loss:.4f}. "
             f"LR schedule and step counter reset for the new run."
         )
-    # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows
-    # up before a 6-hour training run instead of after.
+    # Probe the autocast/dtype path on a tiny batch so a misconfiguration shows up before a 6-hour training run instead of after.
     try:
         with torch.no_grad():
-            probe_obs = torch.zeros(
-                (1, 4, config.BasicSettings.FeatureDim), device=device, dtype=torch.float32
-            )
+            probe_obs = torch.zeros((1, 4, config.BasicSettings.FeatureDim), device=device, dtype=torch.float32)
             probe_action = torch.zeros((1, 4), device=device, dtype=torch.float32)
-            with torch.autocast(
-                device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp
-            ):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=world_model.use_amp):
                 emb = world_model.encoder(probe_obs)
-                probe_latent = torch.zeros(
-                    (1, 4, world_model.stoch_flattened_dim), device=device, dtype=emb.dtype
-                )
+                probe_latent = torch.zeros((1, 4, world_model.stoch_flattened_dim), device=device, dtype=emb.dtype)
                 if world_model.model in ("Transformer", "TransformerModern"):
                     from finmamba3.models.attention import get_subsequent_mask_with_batch_length
                     probe_mask = get_subsequent_mask_with_batch_length(4, device)
                     seq = world_model.sequence_model(probe_latent, probe_action, probe_mask)
                 else:
                     seq = world_model.sequence_model(probe_latent, probe_action)
-            logger.info(
-                f"dtype probe: encoder->{emb.dtype}, sequence_model->{seq.dtype} "
-                f"(use_amp={world_model.use_amp})"
-            )
+            logger.info(f"dtype probe: encoder->{emb.dtype}, sequence_model->{seq.dtype} (use_amp={world_model.use_amp})")
     except Exception as exc:
         logger.warning(f"dtype probe failed: {exc}")
-    # Compile the encoder and decoder only. Mamba3 has its own Triton/TileLang
-    # kernels; torch.compile would fight them and risks recompilations every
-    # call. The transformer encoder and MLP decoder are pure PyTorch and benefit.
+    # Compile the encoder and decoder only: Mamba3 has its own Triton/TileLang kernels that torch.compile would fight with recompilation risk every call, while the transformer encoder and MLP decoder are pure PyTorch and benefit.
     if config.BasicSettings.get("Compile", False):
         try:
-            world_model.encoder = torch.compile(
-                world_model.encoder, mode="reduce-overhead", dynamic=False
-            )
-            world_model.obs_decoder = torch.compile(
-                world_model.obs_decoder, mode="reduce-overhead", dynamic=False
-            )
+            world_model.encoder = torch.compile(world_model.encoder, mode="reduce-overhead", dynamic=False)
+            world_model.obs_decoder = torch.compile(world_model.obs_decoder, mode="reduce-overhead", dynamic=False)
             logger.info("torch.compile enabled for encoder + obs_decoder")
         except Exception as exc:
             logger.warning(f"torch.compile unavailable, running eager: {exc}")
@@ -576,11 +523,7 @@ def main() -> None:
         populate_buffer_multi(replay_buffer, train_seqs)
     else:
         populate_buffer(replay_buffer, train_seqs[0])
-    wlogger = make_logger(
-        config=config,
-        project=config.Wandb.Init.Project,
-        mode=config.Wandb.Init.Mode,
-    )
+    wlogger = make_logger(config=config, project=config.Wandb.Init.Project, mode=config.Wandb.Init.Mode)
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{wlogger.run.id}"
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
     threading.Thread(target=_gpu_monitor, args=(30,), daemon=True).start()
@@ -595,11 +538,11 @@ def main() -> None:
     save_every = config.JointTrainAgent.SaveEverySteps
     val_every = max(save_every // 2, 500)
     imagine_every = save_every
-    # Early stopping config
+    # Early-stopping knobs default off so legacy configs keep the fixed-step behavior.
     early_stopping_patience = config.JointTrainAgent.get('EarlyStoppingPatience', 0)
     early_stop_metric = config.JointTrainAgent.get('EarlyStopMetric', 'Val/reconstruction_loss')
     save_best_only = config.JointTrainAgent.get('SaveBestOnly', False)
-    # Tracking variables
+    # The best_val_loss tracker seeds from the resumed checkpoint so a warm restart only saves on genuine improvement.
     best_val_loss = resume_best_val_loss
     patience_counter = 0
     best_step = 0
@@ -629,13 +572,8 @@ def main() -> None:
                 safe_name = name.replace(".", "/")
                 wlogger.log(f"Val/feature_mse/{safe_name}", value, global_step=step)
             if top_mse:
-                logger.info(
-                    "validation top feature MSE: "
-                    + ", ".join(f"{name}={value:.4g}" for name, value in top_mse)
-                )
-            # Echo the decision metrics to stdout so the offline log captures the
-            # thesis-relevant signal, not just the reconstruction ELBO the run
-            # early-stops on. NaN settlement metrics print as nan without breaking.
+                logger.info("validation top feature MSE: " + ", ".join(f"{name}={value:.4g}" for name, value in top_mse))
+            # Echo the decision metrics to stdout so the offline log captures the thesis-relevant signal, not just the reconstruction ELBO the run early-stops on; NaN settlement metrics print as nan without breaking.
             logger.info(
                 f"[val] step={step} "
                 f"recon={val_metrics.get('Val/reconstruction_loss', float('nan')):.4f} "
@@ -643,13 +581,10 @@ def main() -> None:
                 f"yes_log_loss={val_metrics.get('Val/yes_log_loss', float('nan')):.4f} "
                 f"yes_brier={val_metrics.get('Val/yes_brier', float('nan')):.4f}"
             )
-
-            # --- Early stopping & best checkpoint logic ---
             current_val_loss = val_metrics.get(early_stop_metric, float('inf'))
             if not np.isfinite(current_val_loss):
                 # When the selected metric is NaN this validation, fall through without comparing.
                 current_val_loss = float('inf')
-
             if current_val_loss < best_val_loss:
                 best_val_loss = current_val_loss
                 best_step = step
@@ -666,11 +601,9 @@ def main() -> None:
                 patience_counter += 1
                 if early_stopping_patience > 0:
                     logger.info(f"no improvement for {patience_counter}/{early_stopping_patience} validations")
-
             dir_acc = val_metrics.get("Val/mid_direction_accuracy", float("nan"))
             pbar.set_postfix(val_loss=f"{current_val_loss:.4f}", best=f"{best_val_loss:.4f}", dir_acc=f"{dir_acc:.3f}")
-
-            # Early stopping check
+            # Stop once the patience budget is exhausted with no improvement.
             if early_stopping_patience > 0 and patience_counter >= early_stopping_patience:
                 logger.info(f"early stopping triggered at step {step}, best was {best_val_loss:.4f} at step {best_step}")
                 break
@@ -683,9 +616,7 @@ def main() -> None:
                 f"{logdir}/ckpt/world_model.pth",
             )
         if upload_every > 0 and step > 0 and step % upload_every == 0:
-            # Snapshot the latest weights, then push the whole checkpoint dir to HF so an
-            # interrupted run still leaves a recent model on the Hub. The save runs inline
-            # (it must finish before the async upload reads the file); the upload is detached.
+            # Snapshot the latest weights, then push the whole checkpoint dir to HF so an interrupted run still leaves a recent model on the Hub; the save runs inline (it must finish before the async upload reads the file) while the upload is detached.
             torch.save(
                 {"step": step, "world_model": world_model.state_dict(),
                  "optimizer": world_model.optimizer.state_dict()},
@@ -693,7 +624,7 @@ def main() -> None:
             )
             _upload_checkpoints_async(ckpt_root, pre_args.ckpt_repo, pre_args.hf_token, upload_lock,
                                       pre_args.ckpt_path_in_repo)
-    # Save final checkpoint
+    # Save the final checkpoint unconditionally so the run's endpoint weights always survive.
     torch.save(
         {"step": step, "world_model": world_model.state_dict(),
          "optimizer": world_model.optimizer.state_dict()},

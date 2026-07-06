@@ -8,6 +8,11 @@ to produce (no train/serve skew). A thin WorldModelStrategy turns a divergence f
 probability into an order, which the engine matches T+1 and settles for the headline PnL / Sharpe per
 spot-volatility regime. This is the settlement-accurate, order-matching evaluation path that produces
 the paper's economic tables; ``finmamba3.eval.backtest`` is the lighter gym-env sketch alternative.
+
+The per-regime report labels a reference regime (where the model has the most reason to profit:
+predictable / low-vol) and a shifted, harder one. degradation = pnl(reference) - pnl(shifted), so a
+positive degradation means edge lost under the shift, and the FiLM gap subtracts the two arms'
+degradations.
 """
 # region imports
 from __future__ import annotations
@@ -33,24 +38,22 @@ from finmamba3.eval.compare_direction import load_world_model
 from finmamba3.eval.predictability import predictability_from_timeline
 from finmamba3.eval.regime_split import spot_realized_vol_from_timeline, volatility_split
 from finmamba3.sequence_builder import _append_cross_interval, _settlement_yes_outcome, _spot_feature_kwargs
-# The strategy, signal, and survivability helpers were split into their own modules; the names
-# below are imported back here because the orchestrator uses them and so finmamba3.eval.pnl_backtest
-# stays the public surface its callers (the tests and simple_baseline) import from.
+# Split-out helpers are re-imported so this module stays the public surface its callers (tests, simple_baseline) import from.
 from finmamba3.eval.survivability import (
     _sharpe_from_snapshots, bootstrap_survivability, bootstrap_survivability_by_market,
     per_trade_pnls, per_trade_pnls_by_market,
 )
-from finmamba3.eval.signals import (
-    _gate_signals_by_slug_ts, world_model_edge_ev_series, world_model_yes_prob_series,
-)
+from finmamba3.eval.signals import _gate_signals_by_slug_ts, world_model_edge_ev_series, world_model_yes_prob_series
 from finmamba3.eval.strategies import NaiveLagStrategy, WorldModelStrategy
 # endregion
 logger = logging.getLogger(__name__)
 
 
 def _usable_tick_count_by_slug(bt) -> dict:
-    # Count the ticks whose YES book has both sides, matching extract_features' usability test, so the
-    # caller can drop markets that would raise "no usable ticks" or yield no scoreable window.
+    """Count the ticks whose YES book has both sides, matching extract_features' usability test.
+
+    Lets the caller drop markets that would raise "no usable ticks" or yield no scoreable window.
+    """
     count_by_slug = {}
     for tick in bt.timeline:
         for slug, stored in tick.order_books.items():
@@ -60,8 +63,10 @@ def _usable_tick_count_by_slug(bt) -> dict:
 
 
 def _eval_sequence(bt, slug, stats, include_binary: bool, include_spot: bool, include_cross: bool):
-    # Build one held-out market's normalized sequence through the exact training pipeline, reusing the
-    # train stats so the model is served the scale it learned on.
+    """Build one held-out market's normalized sequence through the exact training pipeline.
+
+    Reuses the train stats so the model is served the scale it learned on.
+    """
     lifecycle_by_slug = {lc.market_slug: lc for lc in bt.lifecycles}
     settlement = bt.settlements.get(slug)
     yes_outcome = _settlement_yes_outcome(settlement)
@@ -76,10 +81,13 @@ def _eval_sequence(bt, slug, stats, include_binary: bool, include_spot: bool, in
 
 
 def _data_for_slugs(bt, slugs: list[str]) -> BacktestData:
-    # The engine only tracks, trades and settles the lifecycles it is handed, so restricting them to
-    # one regime's slugs scopes the run to that regime while the shared timeline carries every book.
-    # The vendored engine consumes this repo's timeline dataclasses directly, so there is no per-tick
-    # translation: the shared bt.timeline is reused as-is and only the lifecycles/settlements are scoped.
+    """Scope the engine data to one regime's slugs while the shared timeline carries every book.
+
+    The engine only tracks, trades and settles the lifecycles it is handed, so restricting them to
+    one regime's slugs scopes the run to that regime. The vendored engine consumes this repo's
+    timeline dataclasses directly, so there is no per-tick translation: the shared bt.timeline is
+    reused as-is and only the lifecycles/settlements are scoped.
+    """
     wanted = {slug: True for slug in slugs}
     lifecycles = [
         MarketLifecycle(lc.market_slug, lc.interval, lc.start_ts, lc.end_ts)
@@ -116,14 +124,12 @@ def _load_config(config_path: Path, overrides: list[str]) -> DotDict:
 
 
 def _cpp_params(strategy_kwargs: dict, ev_by_slug_ts: dict | None) -> dict:
-    # Flatten the strategy kwargs into the flat params dict the native engine and its fail-fast guard
-    # read; the guard rejects any key whose logic is not yet ported, so the cpp run cannot diverge.
+    # Flatten the strategy kwargs into the flat params dict the native engine and its fail-fast guard read; the guard rejects any key whose logic is not yet ported, so the cpp run cannot diverge.
     return {**strategy_kwargs, "ev_by_slug_ts": ev_by_slug_ts}
 
 
 def _naive_cpp_params(order_size: float, max_tte_frac: float, cusum_threshold: float) -> dict:
-    # The ungated naive baseline as the native engine reads it: fixed size on a CUSUM event, none of the
-    # not-yet-ported gates engaged, so it passes the guard on the v1 native path.
+    # The ungated naive baseline as the native engine reads it: fixed size on a CUSUM event, none of the not-yet-ported gates engaged, so it passes the guard on the v1 native path.
     return {
         "edge_threshold": 0.0, "order_size": order_size, "max_tte_frac": max_tte_frac, "min_tte_frac": 0.0,
         "use_cusum": True, "cusum_threshold": cusum_threshold, "sizing": "fixed",
@@ -148,9 +154,8 @@ def _run_engine_arm(
 
 
 def _sweep_aligned(engine: str, cache: dict, marshalled, strategy_kind: int, params: dict, window: int):
-    # Memoise the cpp sweep's cell-aligned signals per (window, arm): the gate ER / direction depend only
-    # on the gate window, not the swept threshold, so a constant-window sweep aligns once and reuses across
-    # values. The Python engine needs no alignment, so this is a no-op for it.
+    # Memoise the cpp sweep's cell-aligned signals per (window, arm): the gate ER / direction depend only on the gate window, not the swept threshold, so a constant-window sweep aligns once and reuses across values.
+    # The Python engine needs no alignment, so this is a no-op for it.
     if engine != "cpp":
         return None
     key = (window, strategy_kind)
@@ -160,8 +165,8 @@ def _sweep_aligned(engine: str, cache: dict, marshalled, strategy_kind: int, par
 
 
 def _engine_workers(engine: str, engine_threads: int) -> int:
-    # The cpp engine releases the GIL inside its tick loop, so independent backtests run on real cores;
-    # the python reference engine holds the GIL throughout, so it always stays serial. 0 = auto.
+    # The cpp engine releases the GIL inside its tick loop, so independent backtests run on real cores; the python reference engine holds the GIL throughout, so it always stays serial.
+    # 0 = auto.
     if engine != "cpp":
         return 1
     if engine_threads > 0:
@@ -170,10 +175,9 @@ def _engine_workers(engine: str, engine_threads: int) -> int:
 
 
 def _run_concurrent(tasks: list, max_workers: int) -> list:
-    # Run independent zero-arg backtest tasks, preserving input order so the result equals the serial path
-    # exactly. A single task or max_workers <= 1 stays on the calling thread (the python engine, and the
-    # --engine-threads 1 parity escape hatch). The marshalled timeline and aligned signals each task reads
-    # are immutable, and each backtest allocates its own engine state, so the runs do not interfere.
+    # Run independent zero-arg backtest tasks, preserving input order so the result equals the serial path exactly.
+    # A single task or max_workers <= 1 stays on the calling thread (the python engine, and the --engine-threads 1 parity escape hatch).
+    # The marshalled timeline and aligned signals each task reads are immutable, and each backtest allocates its own engine state, so the runs do not interfere.
     if max_workers <= 1 or len(tasks) <= 1:
         return [task() for task in tasks]
     with ThreadPoolExecutor(max_workers=min(max_workers, len(tasks))) as pool:
@@ -202,7 +206,7 @@ def run_pnl_backtest(
         if prob_source == "edge":
             for ts, ev_pair in world_model_edge_ev_series(wm, seq, device).items():
                 ev_by_slug_ts[(slug, ts)] = ev_pair
-                # prob_by_slug_ts is not used in edge mode but must be non-empty for strategy init
+                # `prob_by_slug_ts` is not used in edge mode but must be non-empty for strategy init.
                 prob_by_slug_ts[(slug, ts)] = 0.5
         else:
             for ts, prob in world_model_yes_prob_series(wm, seq, device).items():
@@ -279,8 +283,8 @@ def settlement_calibration(prob_by_slug_ts: dict, bt, num_bins: int = 10) -> dic
                 "mean_prob": float(prob_array[mask].mean()),
                 "realized_yes": float(outcome_array[mask].mean()),
             })
-    # Fit a temperature T minimizing the NLL of sigmoid(logit(p)/T) against the outcome, the standard
-    # post-hoc calibration; T > 1 softens an over-confident head. A grid is enough at this resolution.
+    # Fit a temperature T minimizing the NLL of sigmoid(logit(p)/T) against the outcome, the standard post-hoc calibration; T > 1 softens an over-confident head.
+    # A grid is enough at this resolution.
     clipped = np.clip(prob_array, 1e-6, 1.0 - 1e-6)
     logit = np.log(clipped / (1.0 - clipped))
     best_temperature, best_nll = 1.0, float("inf")
@@ -330,9 +334,8 @@ def run_threshold_sweep(
         seq = _eval_sequence(bt, slug, stats, include_binary, include_spot, include_cross)
         for ts, prob in world_model_yes_prob_series(wm, seq, device, sample_mode=sample_mode).items():
             prob_by_slug_ts[(slug, ts)] = prob
-    # The signal-delay stress test stales only the model probability; the gate is re-derived on the
-    # delayed trade ticks below so it still reads the genuine causal ER at trade time. The native engine
-    # marshals probs ahead of the loop, so delay is restricted to the python reference engine.
+    # The signal-delay stress test stales only the model probability; the gate is re-derived on the delayed trade ticks below so it still reads the genuine causal ER at trade time.
+    # The native engine marshals probs ahead of the loop, so delay is restricted to the python reference engine.
     assert signal_delay_secs <= 0 or engine == "python", "signal_delay_secs requires --engine python"
     traded_probs = delay_prob_series(prob_by_slug_ts, signal_delay_secs)
     engine_data = _data_for_slugs(bt, slugs)
@@ -341,8 +344,7 @@ def run_threshold_sweep(
     gate_signals_by_window: dict = {}
     aligned_by_window_arm: dict = {}
     def _row_task(value, strategy, model_params, model_signals, naive_strategy, naive_sweep_params, naive_signals):
-        # Bind one sweep value's prepared inputs into a zero-arg closure so _run_concurrent can fan the
-        # values across cores; the bootstrap is folded in so each task builds its whole row off-thread.
+        # Bind one sweep value's prepared inputs into a zero-arg closure so _run_concurrent can fan the values across cores; the bootstrap is folded in so each task builds its whole row off-thread.
         def _task():
             model_result = _run_engine_arm(engine, engine_data, strategy, marshalled, STRATEGY_WORLD_MODEL, model_params, cash, model_signals)
             naive_result = _run_engine_arm(engine, engine_data, naive_strategy, marshalled, STRATEGY_NAIVE_LAG, naive_sweep_params, cash, naive_signals)
@@ -377,15 +379,13 @@ def run_threshold_sweep(
         else:
             kwargs["predictability_threshold"] = value
         window = int(kwargs["predictability_window"])
-        # The gate signals depend only on the window, so memoise them here (serially, before the parallel
-        # fan-out below): a threshold or edge sweep computes them once and the cpp arms align them once too.
+        # The gate signals depend only on the window, so memoise them here (serially, before the parallel fan-out below): a threshold or edge sweep computes them once and the cpp arms align them once too.
         if window not in gate_signals_by_window:
             gate_signals_by_window[window] = _gate_signals_by_slug_ts(bt, traded_probs, window)
         gate_er, gate_dir = gate_signals_by_window[window]
         strategy = WorldModelStrategy(traded_probs, bankroll=cash, gate_er_by_slug_ts=gate_er, **kwargs)
         model_params = {**_cpp_params(kwargs, None), "gate_er_by_slug_ts": gate_er}
-        # Fair baseline: the identical asset-correct predictability gate, buying the observable spot-trend
-        # direction with no model, so the model must beat trend-following over the same selective gate.
+        # Fair baseline: the identical asset-correct predictability gate, buying the observable spot-trend direction with no model, so the model must beat trend-following over the same selective gate.
         naive_pred_threshold = value if sweep_param == "predictability" else base_kwargs["predictability_threshold"]
         naive_strategy = NaiveLagStrategy(
             cusum_threshold=base_kwargs["cusum_threshold"], order_size=base_kwargs["order_size"],
@@ -421,51 +421,79 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hours-val", type=float, default=6.0)
     p.add_argument("--assets", default="BTC", help="Comma-separated asset filter; the engine references are BTC-only.")
     p.add_argument("--intervals", default=None, help="Comma-separated interval filter (e.g. '15m'); newgoal-2 validates 15m before 5m.")
-    p.add_argument("--regime-axis", choices=("predictability", "spot_vol"), default="predictability",
-                   help="predictability = Efficiency-Ratio split (newgoal-2 primary axis); spot_vol = Phase 0.5 split.")
+    p.add_argument(
+        "--regime-axis", choices=("predictability", "spot_vol"), default="predictability",
+        help="predictability = Efficiency-Ratio split (newgoal-2 primary axis); spot_vol = Phase 0.5 split.",
+    )
     p.add_argument("--volatility-quantile", type=float, default=0.5)
     p.add_argument("--edge-threshold", type=float, default=0.05)
     p.add_argument("--order-size", type=float, default=50.0)
     p.add_argument("--max-tte-frac", type=float, default=1.0)
-    p.add_argument("--min-tte-frac", type=float, default=0.0,
-                   help="Skip near-expiry trades below this time-remaining fraction (the edge is early-market; near-expiry reverses).")
+    p.add_argument(
+        "--min-tte-frac", type=float, default=0.0,
+        help="Skip near-expiry trades below this time-remaining fraction (the edge is early-market; near-expiry reverses).",
+    )
     p.add_argument("--use-cusum", action="store_true", help="Gate trades on a CUSUM spot-move event (newgoal-2 1b).")
     p.add_argument("--cusum-threshold", type=float, default=0.003, help="CUSUM spot-return threshold; tune on train.")
     p.add_argument("--sizing", choices=("fixed", "kelly"), default="fixed", help="kelly = quarter-Kelly convex sizing (1c).")
     p.add_argument("--kelly-fraction", type=float, default=0.25)
     p.add_argument("--kelly-cap", type=float, default=0.05)
-    p.add_argument("--predictability-gate", action="store_true",
-                   help="Trade only when the causal rolling spot efficiency ratio is above threshold (selective participation).")
+    p.add_argument(
+        "--predictability-gate", action="store_true",
+        help="Trade only when the causal rolling spot efficiency ratio is above threshold (selective participation).",
+    )
     p.add_argument("--predictability-threshold", type=float, default=0.3, help="Causal-ER gate threshold; tune on train.")
     p.add_argument("--predictability-window", type=int, default=120, help="Ticks of recent spot for the causal ER gate.")
-    p.add_argument("--sweep-thresholds", default=None,
-                   help="Comma-separated predictability-gate thresholds to sweep on the full market set (train-tuning); "
-                        "precomputes probs once and reports per-threshold deployable PnL + survivability.")
-    p.add_argument("--slippage-per-share", type=float, default=0.0,
-                   help="Per-share execution cost subtracted from each fill in the sweep's bootstrap (deployability stress test).")
-    p.add_argument("--signal-delay-secs", type=int, default=0,
-                   help="Stale the model signal by N seconds before trading (latency stress test); the gate stays at trade time. python engine only.")
-    p.add_argument("--calibration-temperature", type=float, default=1.0,
-                   help="Post-hoc temperature on the settlement prob (fit on train); >1 softens the over-confident head for Kelly.")
-    p.add_argument("--sweep-param", choices=("predictability", "edge", "window"), default="predictability",
-                   help="Which hyperparameter --sweep-thresholds varies: the gate ER (default), the model-vs-book edge, or the gate window.")
-    p.add_argument("--min-book-depth", type=float, default=0.0,
-                   help="Book-depth gate: trade only when two-sided depth clears this floor (tests asset-identity vs depth).")
-    p.add_argument("--max-book-depth", type=float, default=0.0,
-                   help="Book-depth ceiling (0 = none): skip the most-liquid/efficient books, trading the liquidity band.")
-    p.add_argument("--prob-source", choices=("settlement", "edge"), default="settlement",
-                   help="settlement: trade from settlement probability (existing path); edge: trade from predicted EV (BookRelativeEdgeHead).")
-    p.add_argument("--deterministic-latent", action="store_true",
-                   help="Use the deterministic latent ('probs') in the prob precompute so the sweep PnL is reproducible.")
+    p.add_argument(
+        "--sweep-thresholds", default=None,
+        help="Comma-separated predictability-gate thresholds to sweep on the full market set (train-tuning); "
+        "precomputes probs once and reports per-threshold deployable PnL + survivability.",
+    )
+    p.add_argument(
+        "--slippage-per-share", type=float, default=0.0,
+        help="Per-share execution cost subtracted from each fill in the sweep's bootstrap (deployability stress test).",
+    )
+    p.add_argument(
+        "--signal-delay-secs", type=int, default=0,
+        help="Stale the model signal by N seconds before trading (latency stress test); the gate stays at trade time. python engine only.",
+    )
+    p.add_argument(
+        "--calibration-temperature", type=float, default=1.0,
+        help="Post-hoc temperature on the settlement prob (fit on train); >1 softens the over-confident head for Kelly.",
+    )
+    p.add_argument(
+        "--sweep-param", choices=("predictability", "edge", "window"), default="predictability",
+        help="Which hyperparameter --sweep-thresholds varies: the gate ER (default), the model-vs-book edge, or the gate window.",
+    )
+    p.add_argument(
+        "--min-book-depth", type=float, default=0.0,
+        help="Book-depth gate: trade only when two-sided depth clears this floor (tests asset-identity vs depth).",
+    )
+    p.add_argument(
+        "--max-book-depth", type=float, default=0.0,
+        help="Book-depth ceiling (0 = none): skip the most-liquid/efficient books, trading the liquidity band.",
+    )
+    p.add_argument(
+        "--prob-source", choices=("settlement", "edge"), default="settlement",
+        help="settlement: trade from settlement probability (existing path); edge: trade from predicted EV (BookRelativeEdgeHead).",
+    )
+    p.add_argument(
+        "--deterministic-latent", action="store_true",
+        help="Use the deterministic latent ('probs') in the prob precompute so the sweep PnL is reproducible.",
+    )
     p.add_argument("--cash", type=float, default=10_000.0)
     p.add_argument("--out", type=Path, default=Path("reports/pnl_backtest.json"))
     p.add_argument("--device", default=None)
-    p.add_argument("--engine", choices=("python", "cpp"), default="python",
-                   help="python = pure-Python reference engine (default); cpp = native engine (build with "
-                        "`python -m finmamba3.backtester.engine_cpp.build`). Parity-checked; amortises across a sweep.")
-    p.add_argument("--engine-threads", type=int, default=0,
-                   help="Threads for independent cpp backtests (sweep values, both arms); 0 = auto (os.cpu_count()), "
-                        "1 = serial. The cpp engine releases the GIL so these run on real cores; the python engine ignores it.")
+    p.add_argument(
+        "--engine", choices=("python", "cpp"), default="python",
+        help="python = pure-Python reference engine (default); cpp = native engine (build with "
+        "`python -m finmamba3.backtester.engine_cpp.build`). Parity-checked; amortises across a sweep.",
+    )
+    p.add_argument(
+        "--engine-threads", type=int, default=0,
+        help="Threads for independent cpp backtests (sweep values, both arms); 0 = auto (os.cpu_count()), "
+        "1 = serial. The cpp engine releases the GIL so these run on real cores; the python engine ignores it.",
+    )
     return p.parse_args()
 
 
@@ -486,13 +514,11 @@ def main() -> int:
     intervals = [s.strip() for s in args.intervals.split(",")] if args.intervals else None
     bt = build_timeline(data_dir=args.data_val, hours=args.hours_val, assets=assets, intervals=intervals)
     stats = load_normalization(args.norm_path)
-    # Only markets with at least one scoreable window can be traded, so the split is taken over those;
-    # this also avoids extract_features raising on a market whose YES book never has both sides.
+    # Only markets with at least one scoreable window can be traded, so the split is taken over those; this also avoids extract_features raising on a market whose YES book never has both sides.
     count_by_slug = _usable_tick_count_by_slug(bt)
     tradeable = [lc for lc in bt.lifecycles if count_by_slug.get(lc.market_slug, 0) >= 64]
-    # The reference regime is where the model has the most reason to profit (predictable / low-vol);
-    # the shifted regime is the harder one. degradation = pnl(reference) - pnl(shifted), so a positive
-    # degradation means edge lost under the shift, and the FiLM gap subtracts the two arms' degradations.
+    # The reference regime is where the model has the most reason to profit (predictable / low-vol); the shifted regime is the harder one.
+    # Degradation = pnl(reference) - pnl(shifted), so a positive degradation means edge lost under the shift, and the FiLM gap subtracts the two arms' degradations.
     if args.regime_axis == "predictability":
         score_by_slug = predictability_from_timeline(bt.timeline, tradeable, metric="efficiency_ratio")
         split = volatility_split(tradeable, realized_vol=score_by_slug, quantile=args.volatility_quantile)

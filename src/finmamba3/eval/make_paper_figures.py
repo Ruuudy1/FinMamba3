@@ -32,20 +32,32 @@ def reliability_figure(calib_json: Path, out_path: Path) -> None:
     mean_prob = np.array([b["mean_prob"] for b in bins])
     realized = np.array([b["realized_yes"] for b in bins])
     counts = np.array([b["n"] for b in bins], dtype=np.float64)
-    sizes = 40.0 + 360.0 * (np.log10(counts) - np.log10(counts.min())) / max(np.log10(counts.max()) - np.log10(counts.min()), 1e-9)
+    sizes = (
+        40.0 + 360.0 * (np.log10(counts) - np.log10(counts.min())) /
+        max(np.log10(counts.max()) - np.log10(counts.min()), 1e-9)
+    )
     fig, ax = plt.subplots(figsize=(4.2, 4.0))
     ax.plot([0, 1], [0, 1], color="0.6", lw=1.0, ls="--", label="perfect calibration", zorder=1)
     ax.axhline(0.5, color="0.85", lw=0.8, zorder=0)
-    scatter = ax.scatter(mean_prob, realized, s=sizes, c=mean_prob, cmap="coolwarm", vmin=0, vmax=1, edgecolors="k", linewidths=0.6, zorder=3)
+    scatter = ax.scatter(
+        mean_prob, realized, s=sizes, c=mean_prob, cmap="coolwarm", vmin=0, vmax=1,
+        edgecolors="k", linewidths=0.6, zorder=3,
+    )
     for b in bins:
-        ax.annotate(f"{b['n']/1000:.0f}k", (b["mean_prob"], b["realized_yes"]), textcoords="offset points", xytext=(5, -7), fontsize=6, color="0.3")
+        ax.annotate(
+            f"{b['n']/1000:.0f}k", (b["mean_prob"], b["realized_yes"]), textcoords="offset points",
+            xytext=(5, -7), fontsize=6, color="0.3",
+        )
     ax.set_xlabel("mean predicted P(YES)")
     ax.set_ylabel("realized YES frequency")
     ax.set_xlim(-0.02, 1.02)
     ax.set_ylim(-0.02, 1.02)
     ax.set_title(f"Settlement-head reliability (Brier {calib['brier']:.3f})", fontsize=9)
     ax.legend(loc="upper left", fontsize=7, frameon=False)
-    ax.text(0.97, 0.06, "below diagonal =\nover-confident", ha="right", va="bottom", fontsize=6.5, color="0.3", transform=ax.transAxes)
+    ax.text(
+        0.97, 0.06, "below diagonal =\nover-confident", ha="right", va="bottom",
+        fontsize=6.5, color="0.3", transform=ax.transAxes,
+    )
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
@@ -70,13 +82,16 @@ def film_inertness_figure(out_path: Path) -> None:
     ax.axhline(0.150, color="#c44e52", lw=1.2, ls="--", label="forced-active init (0.150)")
     ax.axhline(0.250, color="#8172b3", lw=1.2, ls=":", label="strongest-null escalation init (0.250)")
     ax.set_xticks(positions)
-    ax.set_xticklabels(settings, rotation=30, ha="right", fontsize=7.5)
+    ax.set_xticklabels(settings, rotation=30, ha="right", fontsize=8.5)
     ax.set_ylabel(r"$\mathrm{film}_g = \mathrm{mean}\,|\gamma-1|$", fontsize=9)
-    ax.set_ylim(0, 0.28)
+    ax.set_ylim(0, 0.30)
     ax.set_title("RegimeFiLM is inert across every setting (router entropy at $\\log R$ throughout)", fontsize=9)
-    ax.legend(loc="upper right", fontsize=7, frameon=False)
+    ax.legend(loc="upper right", fontsize=8, frameon=True, framealpha=0.9, edgecolor="0.8")
     for pos, value in zip(positions, film_g):
-        ax.annotate(f"{value:.3f}", (pos, value), textcoords="offset points", xytext=(0, 3), ha="center", fontsize=6.5, color="0.25")
+        ax.annotate(
+            f"{value:.3f}", (pos, value), textcoords="offset points", xytext=(0, 3),
+            ha="center", fontsize=8, color="0.25",
+        )
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
@@ -104,8 +119,11 @@ def equity_figure(baseline_json: Path, out_path: Path) -> None:
         total = arm.get("total", arm)
         block = total["bootstrap_market"]
         labels.append(f"{name}\n({block['n_markets']} mkts)")
-        ax.errorbar(total["pnl"], index, xerr=[[total["pnl"] - block["ci_low"]], [block["ci_high"] - total["pnl"]]],
-                    fmt="o", color="#4c72b0", capsize=4, ms=7, zorder=3)
+        ax.errorbar(
+            total["pnl"], index,
+            xerr=[[total["pnl"] - block["ci_low"]], [block["ci_high"] - total["pnl"]]],
+            fmt="o", color="#4c72b0", capsize=4, ms=7, zorder=3,
+        )
         ax.scatter(total["naive_pnl"], index, marker="|", s=160, color="0.5", zorder=3)
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels, fontsize=8)
@@ -134,7 +152,5 @@ def main() -> int:
     equity_figure(args.baseline_json, args.figdir / "simple_baseline_pnl.pdf")
     print(f"figures written to {args.figdir}")
     return 0
-
-
 if __name__ == "__main__":
     raise SystemExit(main())

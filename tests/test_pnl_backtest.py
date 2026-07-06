@@ -85,7 +85,7 @@ def test_position_limit_blocks_at_cap_and_clips_below_it():
 
 def test_max_tte_frac_gate_skips_early_ticks():
     strat = WorldModelStrategy({(_SLUG, 100): 0.90}, edge_threshold=0.05, max_tte_frac=0.3)
-    # time_remaining_frac 0.5 > 0.3, so the near-expiry gate skips this early, low-edge tick.
+    # With time_remaining_frac 0.5 > 0.3, the near-expiry gate skips this early, low-edge tick.
     assert strat.on_tick(_state(0.40)) == []
 
 
@@ -98,8 +98,7 @@ def _repo_stored(yes_mid):
 
 
 def test_engine_settles_a_winning_yes_trade():
-    # A tiny repo timeline drives the vendored engine directly (no converter): a YES contract that
-    # settles YES, with the model forced 0.9 vs a 0.40 book, must fill cheap YES and book a positive PnL.
+    # A tiny repo timeline drives the vendored engine directly (no converter): a YES contract that settles YES, with the model forced 0.9 vs a 0.40 book, must fill cheap YES and book a positive PnL.
     timeline = []
     for ts in range(7):
         tick = TickData(ts_sec=ts, btc_mid=50_000.0, chainlink_btc=50_000.0)
@@ -227,7 +226,7 @@ def test_per_trade_pnls_by_market_groups_fills_by_slug():
     result = BacktestEngine(_data_for_slugs(bt, [_SLUG, other]), strat, starting_cash=10_000.0, snapshot_interval=1).run()
     by_market = per_trade_pnls_by_market(result)
     # Both markets traded; the winning-YES market's fills are positive, the NO-settling market's negative.
-    assert set(by_market.keys()) == {_SLUG, other}
+    assert sorted(by_market.keys()) == sorted([_SLUG, other])
     assert all(pnl > 0.0 for pnl in by_market[_SLUG])
     assert all(pnl < 0.0 for pnl in by_market[other])
     # The flattened by-market PnLs match the ungrouped per-trade list.
@@ -235,8 +234,7 @@ def test_per_trade_pnls_by_market_groups_fills_by_slug():
 
 
 def test_market_block_bootstrap_counts_independent_markets_not_trades():
-    # Ten trades inside ONE market are one independent bet: a losing market is never profitable, however
-    # many correlated trades it holds, where the iid bootstrap would see ten "independent" losers.
+    # Ten trades inside ONE market are one independent bet: a losing market is never profitable, however many correlated trades it holds, where the iid bootstrap would see ten "independent" losers.
     pnls_by_market = {"m0": [-3.0] * 10}
     block = bootstrap_survivability_by_market(pnls_by_market, bankroll=10_000.0, n_paths=500, seed=0)
     assert block["n_markets"] == 1
@@ -308,10 +306,9 @@ def test_calibration_temperature_softens_overconfident_probability():
     assert calibrated.on_tick(_state(0.40)) == []
 
 
-# ---- Edge mode (--prob-source edge) tests ----
-
+# Edge mode (--prob-source edge) tests.
 def test_edge_mode_buys_yes_when_ev_yes_clears_threshold_and_dominates():
-    # ev_yes_hat=0.10 > threshold=0.05 AND ev_yes > ev_no → BUY_YES.
+    # With ev_yes_hat=0.10 > threshold=0.05 AND ev_yes > ev_no → BUY_YES.
     ev = {(_SLUG, 100): (0.10, -0.05)}
     strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
     orders = strat.on_tick(_state(0.40))
@@ -322,7 +319,7 @@ def test_edge_mode_buys_yes_when_ev_yes_clears_threshold_and_dominates():
 
 
 def test_edge_mode_buys_no_when_ev_no_clears_threshold_and_dominates():
-    # ev_no_hat=0.10 > threshold=0.05 AND ev_no > ev_yes → BUY_NO.
+    # With ev_no_hat=0.10 > threshold=0.05 AND ev_no > ev_yes → BUY_NO.
     ev = {(_SLUG, 100): (-0.05, 0.10)}
     strat = WorldModelStrategy({}, edge_threshold=0.05, order_size=50.0, ev_by_slug_ts=ev)
     orders = strat.on_tick(_state(0.40))
