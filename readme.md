@@ -16,7 +16,7 @@ outcomes (full write-up in `finmamba3-paper.tex` and `RESULTS.md`):
    folds losslessly into the block's own projections, so the optimizer returns
    it to identity.
 2. **A spot-conditioned pipeline plus a selective-participation strategy is a
-   genuine, survivable economic edge** on held-out Polymarket BTC — but it is
+   genuine, survivable economic edge** on held-out Polymarket BTC, but it is
    *architecture-independent*: a logistic regression on the same features
    reproduces and exceeds it, so the pipeline and framing, not the sequence
    model, carry the result.
