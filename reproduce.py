@@ -9,12 +9,12 @@ import importlib.util
 import json
 import os
 import re
+import torch
 import numpy as np
 # endregion
 ROOT = os.path.dirname(os.path.abspath(__file__))
 STEP_RE = re.compile(r"step=(\d+)")
 FILM_G_RE = re.compile(r"film_g=([0-9.]+)")
-
 
 # Load a paper script by file path so the verifier reuses the exact experiment code, in-repo or in the standalone bundle.
 def load_module(relpath, name):
@@ -22,7 +22,6 @@ def load_module(relpath, name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
 
 # Return the (steps, film_g) arrays parsed from a committed escalation log, keeping only the positive values.
 def film_g_series(relpath):
@@ -37,11 +36,9 @@ def film_g_series(relpath):
     keep = values > 0.0
     return steps[keep], values[keep]
 
-
 # Refit a*exp(-t/tau)+c to a committed escalation log and return its decay constant tau.
 def tau_of(relpath, fit_one):
     return fit_one(*film_g_series(relpath), -0.05)["tau"]
-
 
 # Parse a "| name | params | recon_nll | ... |" markdown table into a backbone-name to (params, recon_nll) mapping.
 def metric_nll_by_backbone(relpath):
@@ -52,17 +49,14 @@ def metric_nll_by_backbone(relpath):
             nll_by_backbone[cells[0]] = (int(cells[1].replace(",", "")), float(cells[2]))
     return nll_by_backbone
 
-
 # Return the gated total PnL of a backtest record as the sum of its high- and low-predictability arm PnLs.
 def settlement_total(record):
     return record["high_pred"]["model"]["pnl"] + record["low_pred"]["model"]["pnl"]
-
 
 def main():
     print("Reproducing every number in the paper from committed artifacts (CPU, ~1 min)...")
     toy = load_module("experiments/inkernel/inkernel_boundary.py", "inkernel_boundary")
     fit_one = load_module("experiments/altdata/decay_fit_full.py", "decay_fit_full").fit_one
-    import torch
     # Tier A: rerun the reference-scan gauge folding live, once per placement, on CPU.
     generator = torch.Generator().manual_seed(toy.SEED)
     inputs, targets = toy.make_filter_task(64, 24, 8, generator)
@@ -166,7 +160,6 @@ def main():
     for section, label, paper, reproduced in fails:
         print(f"  FAIL {section} / {label}: paper={paper} repro={reproduced}")
     return 0 if not fails else 1
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
