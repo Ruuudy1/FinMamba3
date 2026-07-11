@@ -11,7 +11,7 @@ outcomes (full write-up in `finmamba3-paper.tex` and `RESULTS.md`):
 
 1. **Regime conditioning is a decisive null.** Our central mechanism,
    RegimeFiLM, collapses to identity under joint training across every objective
-   we test — on FI-2010, Polymarket, and the Kaggle crypto spot book — and we
+   we test, on FI-2010, Polymarket, and the Kaggle crypto spot book, and we
    explain it mechanistically: an input-side affine is a *gauge* direction that
    folds losslessly into the block's own projections, so the optimizer returns
    it to identity.
@@ -523,9 +523,8 @@ variant or by calling them from a custom data-loading script.
 
 ## Reward Function Variants
 
-The advisor flagged that "a novel reward function is novel enough" and the
-literature confirms it: most LOB RL papers copy a Cartea/Jaimungal market-
-making reward or retrofit Sharpe-on-PnL. The env exposes three reward kinds
+Most LOB RL papers copy a Cartea/Jaimungal market-making reward or 
+retrofit Sharpe-on-PnL. The env exposes three reward kinds
 selectable via `PolymarketLOBEnv(reward_kind=...)`:
 
 - `default` - Atari-style `tanh(delta_log/vol_scale)` minus turnover,
@@ -635,12 +634,3 @@ after the cutoff, or `--regime-split volatility:<quantile>` to evaluate on
 the high-volatility tail. Reuse the same checkpoint with
 `lob_em.yaml` (episodic memory enabled) to produce the
 non-stationarity A/B numbers.
-
-### Diagnose hyperparameter levers
-
-`configs/lob_diagnose.yaml` exposes three constants the
-plain config previously hardcoded: `RepresentationLossWeight` (was 0.1),
-`FreeBits` (was 1.0), and `Decoder.SizeWeight` (was 2.0). These are the
-levers for the prior-collapse hypothesis sweep. Default values in
-`lob.yaml` are preserved when the keys are absent, so existing
-configs remain backward compatible.
