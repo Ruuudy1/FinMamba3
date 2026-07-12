@@ -11,12 +11,12 @@ outcomes (full write-up in `finmamba3-paper.tex` and `RESULTS.md`):
 
 1. **Regime conditioning is a decisive null.** Our central mechanism,
    RegimeFiLM, collapses to identity under joint training across every objective
-   we test — on FI-2010, Polymarket, and the Kaggle crypto spot book — and we
+   we test, on FI-2010, Polymarket, and the Kaggle crypto spot book, and we
    explain it mechanistically: an input-side affine is a *gauge* direction that
    folds losslessly into the block's own projections, so the optimizer returns
    it to identity.
 2. **A spot-conditioned pipeline plus a selective-participation strategy is a
-   genuine, survivable economic edge** on held-out Polymarket BTC — but it is
+   genuine, survivable economic edge** on held-out Polymarket BTC, but it is
    *architecture-independent*: a logistic regression on the same features
    reproduces and exceeds it, so the pipeline and framing, not the sequence
    model, carry the result.
@@ -523,9 +523,8 @@ variant or by calling them from a custom data-loading script.
 
 ## Reward Function Variants
 
-The advisor flagged that "a novel reward function is novel enough" and the
-literature confirms it: most LOB RL papers copy a Cartea/Jaimungal market-
-making reward or retrofit Sharpe-on-PnL. The env exposes three reward kinds
+Most LOB RL papers copy a Cartea/Jaimungal market-making reward or 
+retrofit Sharpe-on-PnL. The env exposes three reward kinds
 selectable via `PolymarketLOBEnv(reward_kind=...)`:
 
 - `default` - Atari-style `tanh(delta_log/vol_scale)` minus turnover,
@@ -635,53 +634,3 @@ after the cutoff, or `--regime-split volatility:<quantile>` to evaluate on
 the high-volatility tail. Reuse the same checkpoint with
 `lob_em.yaml` (episodic memory enabled) to produce the
 non-stationarity A/B numbers.
-
-### Diagnose hyperparameter levers
-
-`configs/lob_diagnose.yaml` exposes three constants the
-plain config previously hardcoded: `RepresentationLossWeight` (was 0.1),
-`FreeBits` (was 1.0), and `Decoder.SizeWeight` (was 2.0). These are the
-levers for the prior-collapse hypothesis sweep. Default values in
-`lob.yaml` are preserved when the keys are absent, so existing
-configs remain backward compatible.
-
-## Notes
-
-- `train.py` no longer imports `gym` or the removed Atari path.
-- Dataset switching is driven by the `--dataset` CLI flag or the top-level
-  `Dataset.Kind` config key. Both `Polymarket` and `FI-2010` paths return
-  the same `LOBSequence` dataclass, so the rest of the training loop is
-  schema-agnostic. The `LOBReconstructionLoss` accepts custom
-  `LevelSizeIndices` and `TickSizeIndices` so the weighted-MSE term respects
-  whichever schema is active.
-- Normalized LOB features are clipped and checked before training. The FI-2010
-  loader fits z-score stats on the training split and reuses them for
-  validation, identical to the Polymarket flow.
-- `Backbone: Mamba3` is the default. Full-sequence Phase A pretraining is the
-  supported path; Phase B imagination uses full-prefix recomputation rather
-  than Mamba3 step/inference-cache kernels.
-- If a local run fails while importing `mamba_ssm.modules.mamba3`, the
-  upstream source install is missing or was built against a different
-  PyTorch CUDA wheel.
-- Action input is enabled by default for backwards compatibility, but
-  `Models.WorldModel.UseActionInput: False` removes the dead one-hot
-  pathway during Phase A pretraining.
-
-## Project Conventions
-
-Style rules enforced across first-party `src/` and `tests/` (the vendored
-`backtester/engine/` subpackage is exempt: it keeps the upstream DATAHACKS2026
-style to preserve a clean diff and protect the parity oracle):
-
-- Comments are full sentences, capitalized, ending with a period. No em
-  dashes, no emojis.
-- Two blank lines above each class or top-level function. One blank line
-  between a class signature and its first method. Zero blank lines anywhere
-  else, including between consecutive methods inside a class and inside
-  method bodies.
-- No Python sets. Use lists with `append` and `remove`, or a dict-as-keyset
-  (`{key: True for key in iterable}`) when O(1) membership is needed.
-- Dictionaries are named `value_by_key` (for example `last_books_by_slug`).
-- List comprehensions are used only when the result is assigned to a name
-  or passed directly to a constructor that consumes it. Use a for-loop or
-  generator expression otherwise.
