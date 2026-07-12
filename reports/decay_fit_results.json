@@ -148,5 +148,62 @@
       "r2": 0.9999059518006851,
       "c_pinned_at_bound": false
     }
+  },
+  {
+    "name": "FI-2010 escalation tau, pooled seeds 0-2 (input-side)",
+    "logs": [
+      "reports/fi2010_escalation_s0.log",
+      "reports/fi2010_escalation_s1.log",
+      "reports/fi2010_escalation_s2.log"
+    ],
+    "metric": "film_g",
+    "n_seeds": 3,
+    "seed_taus": [
+      7191.648257514499,
+      8434.011821383354,
+      5266.170539174505
+    ],
+    "mean_tau": 6963.943539357453,
+    "se_tau": 921.5370631576872
+  },
+  {
+    "name": "Kaggle BTC escalation tau, pooled seeds 0-2 (input-side)",
+    "logs": [
+      "reports/kaggle_escalation_s0.log",
+      "reports/kaggle_escalation_s1.log",
+      "reports/kaggle_escalation_s2.log"
+    ],
+    "metric": "film_g",
+    "n_seeds": 3,
+    "seed_taus": [
+      6685.4386843333805,
+      6955.7813604245985,
+      5478.013950463409
+    ],
+    "mean_tau": 6373.07799840713,
+    "se_tau": 454.28552991486504
+  },
+  {
+    "name": "Dataset-invariant escalation tau, pooled seeds 0-2 both datasets (input-side)",
+    "logs": [
+      "reports/fi2010_escalation_s0.log",
+      "reports/fi2010_escalation_s1.log",
+      "reports/fi2010_escalation_s2.log",
+      "reports/kaggle_escalation_s0.log",
+      "reports/kaggle_escalation_s1.log",
+      "reports/kaggle_escalation_s2.log"
+    ],
+    "metric": "film_g",
+    "n_seeds": 6,
+    "seed_taus": [
+      7191.648257514499,
+      8434.011821383354,
+      5266.170539174505,
+      6685.4386843333805,
+      6955.7813604245985,
+      5478.013950463409
+    ],
+    "mean_tau": 6668.510768882291,
+    "se_tau": 478.0975681456567
   }
 ]

@@ -1,6 +1,6 @@
 """Persisted, audit-grade refit of the escalation film_g (and post-scan film_b) decays.
 
-Two jobs the bare decay_fit.py does not do:
+Three jobs the bare decay_fit.py does not do:
   1. Refit a*exp(-t/tau)+c with the asymptote lower bound RELAXED (c in [-1, 0.3]) alongside the original
      c>=-0.05 floor, so the reported asymptote is the true unconstrained estimate rather than a value
      pinned at the bound. This settles whether "converges to identity within horizon" is an observation
@@ -8,6 +8,9 @@ Two jobs the bare decay_fit.py does not do:
   2. Compute and PERSIST the post-scan (output-side) tau fits, which the original driver never stored
      (it crashed on a missing scipy before reaching the fit). Output is written to a JSON artifact so the
      papers cite a reproducible number.
+  3. Pool the seeds-0-2 input-side tau per dataset (and across both datasets) into the same JSON, so the
+     paper's n=6 dataset-invariant tau claim has a committed artifact instead of only reproduce.py's live
+     recompute.
 """
 # region imports
 import json
@@ -60,6 +63,22 @@ def fit_trajectory(name, path, key):
     }
 
 
+def tau_of(path, key="film_g", c_lower=-0.05):
+    steps, values = parse(path, key)
+    keep = values > 0.0
+    return fit_one(steps[keep], values[keep], c_lower)["tau"]
+
+
+def pooled_tau_fit(name, paths):
+    taus = [tau_of(path) for path in paths]
+    return {
+        "name": name, "logs": paths, "metric": "film_g", "n_seeds": len(taus),
+        "seed_taus": taus,
+        "mean_tau": float(np.mean(taus)),
+        "se_tau": float(np.std(taus, ddof=1) / np.sqrt(len(taus))),
+    }
+
+
 def main():
     trajectories = [
         ("Kaggle BTC escalation (input-side)", "reports/kaggle_escalation_s0.log", "film_g"),
@@ -77,6 +96,18 @@ def main():
         print(f"  endpoints: {record['value_first']:.4f} -> {record['value_last']:.4f}   linear slope = {record['linear_slope_per_step']:.2e}/step")
         print(f"  c-floor=-0.05 : a={floor['a']:.4f} tau={floor['tau']:.0f} c={floor['c']:.4f} R2={floor['r2']:.4f} pinned={floor['c_pinned_at_bound']}")
         print(f"  c-relaxed     : a={relaxed['a']:.4f} tau={relaxed['tau']:.0f} c={relaxed['c']:.4f} R2={relaxed['r2']:.4f} pinned={relaxed['c_pinned_at_bound']}")
+    fi_paths = [f"reports/fi2010_escalation_s{seed}.log" for seed in (0, 1, 2)]
+    kg_paths = [f"reports/kaggle_escalation_s{seed}.log" for seed in (0, 1, 2)]
+    pooled = [
+        pooled_tau_fit("FI-2010 escalation tau, pooled seeds 0-2 (input-side)", fi_paths),
+        pooled_tau_fit("Kaggle BTC escalation tau, pooled seeds 0-2 (input-side)", kg_paths),
+        pooled_tau_fit("Dataset-invariant escalation tau, pooled seeds 0-2 both datasets (input-side)", fi_paths + kg_paths),
+    ]
+    for record in pooled:
+        taus = ", ".join(f"{tau:.0f}" for tau in record["seed_taus"])
+        print(f"=== {record['name']} (n={record['n_seeds']}) ===")
+        print(f"  seed taus: [{taus}]   mean={record['mean_tau']:.0f}  SE={record['se_tau']:.0f}")
+    records = records + pooled
     output = "reports/decay_fit_results.json"
     with open(output, "w") as handle:
         json.dump(records, handle, indent=2)
