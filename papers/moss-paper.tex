@@ -169,8 +169,8 @@ identity) and the router entropy $\mathrm{reg}_H$ (uniform maximum $\log R$).
 
 \paragraph{Joint training drives FiLM inert.}
 Across five objectives spanning two datasets (Table~\ref{tab:film_null}), FiLM
-collapses to identity. $\mathrm{film}_g$ decays toward zero and $\mathrm{reg}_H$ sits at its
-uniform maximum (Table~\ref{tab:film_null}). Where a generalization gap reads
+collapses to identity: $\mathrm{film}_g$ decays toward zero and $\mathrm{reg}_H$ sits at its
+uniform maximum. Where a generalization gap reads
 positive (direction $+0.008$, settlement $+0.18$), FiLM is provably inert, and the
 treatment is \emph{absolutely worse} in both regimes. The gap is a distributional
 artifact whose sign flips with head calibration, which is why the diagnostics are
@@ -193,7 +193,7 @@ the axis this escalation directly supervises, agreement is only weak
 information.
 
 \paragraph{Why identity is a free direction.}
-This instances a general \emph{absorbability criterion}. A channel-wise affine on
+This instantiates a general \emph{absorbability criterion}. A channel-wise affine on
 an activation immediately consumed by a learned linear map $A$ has its scale
 absorbed into $A$, $A(\gamma\odot\hat x)=(A\diag(\gamma))\hat x$, with or without a
 bias. Its shift is absorbed only when $A$ carries a trainable bias and no
@@ -218,9 +218,9 @@ This time we raise the initialization further, to $\mathrm{film}_g=0.250$, and r
 on two datasets with the load-balance term disabled. The modulation
 monotonically decays on \emph{both} (from $0.250$ to $0.144$ on Kaggle, from
 $0.250$ to $0.147$ on FI-2010), with $\mathrm{reg}_H\approx\log 4$ throughout. An exponential fit
-$a\,e^{-t/\tau}+c$ matches both at $R^2>0.999$ (seed~0; the in-kernel toy below
-adds seeds 0--3), with near-identical parameters ($a\approx0.30$,
-$\tau\approx7000$ steps). The decay is monotone to the last logged step, with the
+$a\,e^{-t/\tau}+c$ matches every run at $R^2>0.99$ (seeds 0--2, $n{=}6$; toy below
+adds seeds 0--3), with a dataset-invariant $\tau=6668\pm478$ steps (FI-2010
+$6964\pm922$, Kaggle $6373\pm454$; $a\approx0.30$, $c\le0$). The decay is monotone to the last logged step, with the
 endpoint still falling at $\approx0.15$ and identity as the extrapolated limit.
 The fitted asymptote also lies at or below identity ($c\lesssim-0.05$, only more
 negative when the lower bound on $c$ is relaxed), so the trajectory extrapolates
@@ -239,8 +239,8 @@ not an undecodable supervised axis.
 modulation active ($\mathrm{film}_g=0.250$ at step~0) and supervising the router
 directly on the efficiency-ratio bucket still decays $\mathrm{film}_g$
 monotonically toward identity on both datasets (top, solid = input-side), with
-$\mathrm{reg}_H$ pinned at $\log 4$ (bottom). The fit gives $R^2>0.999$ with a
-dataset-invariant $\tau\approx7000$ and a negative fitted asymptote. The post-scan
+$\mathrm{reg}_H$ pinned at $\log 4$ (bottom). The fit gives $R^2>0.99$ (seeds 0--2, $n{=}6$) with a dataset-invariant
+$\tau=6668\pm478$ and a negative fitted asymptote. The post-scan
 (output-side) gate (top, dotted) decays along the same trajectory, because its
 scale folds into the bias-free output projection just as the input-side scale
 folds into $W_\Delta/W_B/W_C$. The null is therefore invariant to where the affine
@@ -284,8 +284,12 @@ regime (router accuracy $\ge0.9$; $0.91$ at the last logged step), $\mathrm{film
 rises from $0.11$ to $0.52$ instead. Gauge absorption always removes the \emph{constant} component. The
 input-dependent component survives only when the regime is decodable enough to be
 worth encoding, so the collapse is specifically the fate of \emph{weakly-decodable},
-drop-in conditioning. (Single-seed toy control; the qualitative link between a
-decodable router and persistence is clear, but the plateau value is not
+drop-in conditioning. \textbf{Decodability is necessary, not sufficient}: the
+modulation must also lower the training loss. Even the best-decoded LOB axis
+(FI-2010 volatility, $0.92$ agreement) decays, since it is redundant with what the
+backbone already computes from the input; code-vs-prose is not redundant this way,
+since it changes next-character statistics. (Single-seed toy control; the qualitative link
+between a decodable router and persistence is clear, but the plateau value is not
 load-bearing.)
 
 \section{The Substrate Is Not the Subject}\label{sec:substrate}
@@ -352,7 +356,7 @@ whether it decays, before spending GPU-months on a conditioning mechanism a
 matched scan will silently undo.
 
 \section*{Use of Large Language Models}
-In keeping with the COLM 2026 policy on disclosure of LLM use, we report that a large language model was used while preparing this paper. It assisted in drafting and editing the prose, including the phrasing of the reference list, and was used to assist with evaluation.
+In keeping with the COLM 2026 policy on disclosure of LLM use, we report that a large language model was used while preparing this paper. It assisted in drafting and editing the prose, including the phrasing of the reference list, and in checking the internal consistency of drafts.
 
 \appendix
 \section{Diagnostic tables}\label{app:tables}
@@ -469,7 +473,10 @@ The input-side shift decomposes along the block's four consumption paths. The
 $\Delta$-path ends in a lone trainable $dt$ bias inside the softplus (suppressed
 in the simplified Eq.~\eqref{eq:selection}), so the $\Delta$-component of a
 constant shift folds into it exactly; this is the only host parameter that can
-absorb any part of the shift. The $\mathbf{B}/\mathbf{C}$ components are blocked
+absorb any part of the shift. Measured directly, all four blocks' $dt$-bias norms
+drift smoothly and near-identically by ${\sim}26\%$ over the 3{,}000-step
+escalation, so this fold is visible in training, not only in the algebra. The
+$\mathbf{B}/\mathbf{C}$ components are blocked
 by per-state norms interposed between the projections and the kernel (a post-norm
 bias cannot absorb a pre-norm offset), and the gate and scan-input paths carry no
 bias at all. The shift as a whole therefore cannot fold into the host, and it
@@ -491,7 +498,8 @@ is being used.}}
 All toy experiments use the pure-PyTorch reference scan that \texttt{mamba\_ssm}
 ships (the slow path the fused-kernel hardware limit does not touch), in seconds on
 the same single 4080. \textbf{Folding.} The recovered projections satisfy
-$W_\bullet^{\text{fit}}\approx W_\bullet^{\text{base}}\diag(\gamma)$ to round-off
+$W_\bullet^{\text{fit}}\approx W_\bullet^{\text{base}}\diag(\gamma)$ (for
+$\bullet\in\{\Delta,B,C\}$) to round-off
 (input-affine residual $1.2\times10^{-6}$). The in-kernel placement, by contrast,
 leaves a residual $1.3\times10^{-2}$, because a per-channel scale on the
 post-softplus $\Delta$ cannot be matched by any linear reparameterization of the
@@ -524,8 +532,7 @@ consumer GPU.
 
 \paragraph{Limitations.}
 The \emph{null} is multi-setting and multi-seed; the \emph{constructive} claims
-that bound it are smaller. The optimizer attribution rests on a $\tau$ matched
-across two datasets, plus the within-model weight-decay ablation. The full-model
+that bound it are smaller. The full-model
 weight-decay-off ablation and the LM control are single-seed, though the in-kernel
 toy adds seeds 0--3. The in-kernel ``survives'' result is at toy reference-scan
 scale, since the MIMO placement is outside the 4080 envelope. The substrate is

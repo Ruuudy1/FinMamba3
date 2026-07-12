@@ -15,11 +15,13 @@ Build (run twice for refs + line numbers):
     pdflatex -interaction=nonstopmode moss-paper.tex
     pdflatex -interaction=nonstopmode moss-paper.tex
 
-Verified: 7 pp total, **main body §1–§7 within 4 pages** (appendix A starts on p.5,
-refs on p.6), 0 errors / 0 undefined refs / 0 overfull hboxes; page 1 anonymized.
+Verified: 8 pp total, **main body §1–§7 within 4 pages** (appendix starts on p.5),
+0 errors / 0 undefined refs / 0 overfull hboxes; page 1 anonymized.
 (2026-06-30 clarity pass: split dense sentences, added a non-finance LOB primer,
 and glossed Brier/PnL, which fills page 4 fully rather than leaving headroom, but
-the main body still ends exactly at the 4-page boundary.)
+the main body still ends exactly at the 4-page boundary. 2026-07-02 review fixes
+grew the appendix to 8 pp total; 2026-07-04 edits, tau CIs/dt_bias/decodability
+sentence/nits, held the body at exactly 4 pp again after a compression pass.)
 
 CFP: https://sites.google.com/view/moss-colm-2026/call-for-papers ·
 OpenReview group `colmweb.org/COLM/2026/Workshop/MOSS` · 4 pp body + unlimited
